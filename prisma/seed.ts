@@ -2,14 +2,14 @@
  * Demo data seed. Run with: npm run db:seed
  * Creates a demo login: demo@nexuscrm.dev / demo-password-123
  */
+import "dotenv/config";
 import bcrypt from "bcryptjs";
 import { PrismaClient } from "../src/generated/prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { createDbAdapter } from "../src/lib/db-adapter";
 
-const adapter = new PrismaBetterSqlite3({
-  url: process.env.DATABASE_URL ?? "file:./dev.db",
-});
-const prisma = new PrismaClient({ adapter });
+// Uses Turso when TURSO_DATABASE_URL is set, the local SQLite file otherwise —
+// so the same command can seed either environment.
+const prisma = new PrismaClient({ adapter: createDbAdapter() });
 
 function daysAgo(n: number) {
   return new Date(Date.now() - n * 86400_000);

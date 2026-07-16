@@ -86,9 +86,26 @@ as such in the UI.
   optimistic cookie checks; real validation happens next to the data.
 - **AI provider abstraction** (`src/lib/ai/provider.ts`): one `generateText()`
   entry point; swapping providers is an env var, not a refactor.
-- **SQLite by design** — zero-dependency local dev. For multi-instance
-  deployment, swap the Prisma datasource to Postgres (e.g. Neon/Supabase free
-  tier) and replace the in-memory rate limiter with a durable store.
+- **SQLite by design** — zero-dependency local dev; the same schema runs on
+  Turso (libSQL) in production via a driver-adapter switch in
+  `src/lib/db-adapter.ts`. For heavy multi-instance use, also move the
+  in-memory rate limiter to a durable store.
+
+## Deploying to Vercel (free)
+
+Vercel's serverless filesystem can't host the SQLite file, so production uses
+[Turso](https://turso.tech) — SQLite-compatible, free tier, zero schema changes:
+
+1. Create a Turso database and copy its URL + auth token.
+2. Locally, put `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in `.env`, then:
+   ```bash
+   npm run db:push:turso   # apply the schema
+   npm run db:seed         # optional demo data
+   ```
+3. In Vercel → Project → Settings → Environment Variables, add the same two
+   variables (plus `GEMINI_API_KEY` or `GROQ_API_KEY` if you want live AI).
+4. Push to GitHub — Vercel builds and deploys. The `postinstall` script runs
+   `prisma generate`, and the app picks Turso automatically when its URL is set.
 
 ## Roadmap ideas
 

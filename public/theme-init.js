@@ -6,5 +6,7 @@
       t === "dark" ||
       (!t && matchMedia("(prefers-color-scheme: dark)").matches);
     document.documentElement.classList.toggle("dark", d);
-  } catch (e) {}
+  } catch {
+    /* pre-hydration; never fatal */
+  }
 })();
