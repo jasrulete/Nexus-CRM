@@ -1,36 +1,98 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nexus CRM
 
-## Getting Started
+An AI-powered CRM built with Next.js — pipeline management, contacts, companies,
+activity tracking and AI insights, self-hosted and **100% free to run**.
 
-First, run the development server:
+> **Demo login** (after seeding): `demo@nexuscrm.dev` / `demo-password-123`
+
+## Features
+
+**CRM core**
+- 📇 Contacts & companies with search, status filters and rich detail pages
+- 📊 Dashboard: open pipeline, win rate, revenue-won trend, pipeline by stage
+- 🗂️ Drag-and-drop deal kanban across six stages with live column totals
+- 📝 Activity timeline (notes, calls, emails, meetings) on every record
+- ✅ Tasks with due dates, overdue highlighting and quick-add everywhere
+
+**AI layer** (pluggable, free providers)
+- 🎯 Lead scoring (0–100) with a human-readable explanation, saved to the record
+- 🧠 One-click relationship summaries for account handoffs
+- ✉️ Context-aware follow-up email drafts (references the open deal)
+- 🔌 Works with **Google Gemini** or **Groq** free tiers — or falls back to
+  honest, clearly-labeled rule-based heuristics with **no API key at all**
+- 🛡️ CRM record data is fenced in `<record>` tags and treated as data, not
+  instructions (prompt-injection mitigation); AI calls are rate-limited per user
+
+**Security** (see [SECURITY.md](SECURITY.md))
+- bcrypt-hashed passwords, server-side sessions stored as SHA-256 hashes
+- httpOnly / SameSite cookies, login rate limiting, timing-safe login flow
+- zod validation + server-side authorization on every mutation
+- Role-based access (admin/member), full audit log, strict security headers
+
+## Stack
+
+| Layer | Choice | Cost |
+|---|---|---|
+| Framework | Next.js 16 (App Router, Server Actions) | free |
+| Database | SQLite via Prisma 7 (driver adapters) | free |
+| Styling | Tailwind CSS v4, Radix UI primitives, lucide icons | free |
+| Charts | Recharts with a CVD-validated palette | free |
+| Drag & drop | dnd-kit | free |
+| AI | Gemini / Groq free tier, heuristic fallback | free |
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npx prisma migrate dev   # creates dev.db
+npm run db:seed          # demo workspace + login
+npm run dev              # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Sign in with the demo account above, or register — the **first account becomes
+the workspace admin**.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Enabling real AI (optional, still free)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Copy `.env.example` to `.env` and add **one** key:
 
-## Learn More
+```bash
+GEMINI_API_KEY=...   # https://aistudio.google.com/apikey
+# or
+GROQ_API_KEY=...     # https://console.groq.com/keys
+```
 
-To learn more about Next.js, take a look at the following resources:
+Restart the dev server. The Settings page shows which provider is active.
+Without a key, AI features run in deterministic rule-based mode and are labeled
+as such in the UI.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Scripts
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the dev server |
+| `npm run build` / `start` | Production build / serve |
+| `npm run db:migrate` | Apply schema migrations |
+| `npm run db:seed` | Seed the demo workspace (idempotent) |
+| `npm run typecheck` | TypeScript check |
+| `npm run lint` | ESLint |
 
-## Deploy on Vercel
+## Architecture notes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **Server Actions everywhere** — no hand-rolled API routes; every mutation is
+  validated with zod, authorized against the session, and audited.
+- **Auth is hand-built on purpose** (portfolio project): DB-backed sessions
+  with hashed tokens and sliding expiry. The proxy (`src/proxy.ts`) does
+  optimistic cookie checks; real validation happens next to the data.
+- **AI provider abstraction** (`src/lib/ai/provider.ts`): one `generateText()`
+  entry point; swapping providers is an env var, not a refactor.
+- **SQLite by design** — zero-dependency local dev. For multi-instance
+  deployment, swap the Prisma datasource to Postgres (e.g. Neon/Supabase free
+  tier) and replace the in-memory rate limiter with a durable store.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Roadmap ideas
+
+- Password reset + email verification (needs an email provider)
+- Team invitations & per-record sharing controls
+- Import/export (CSV), webhooks, public API
+- Retrieval-augmented "ask your CRM" search over notes and activities
