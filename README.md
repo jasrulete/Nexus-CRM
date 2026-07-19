@@ -3,7 +3,13 @@
 An AI-powered CRM built with Next.js — pipeline management, contacts, companies,
 activity tracking and AI insights, self-hosted and **100% free to run**.
 
+**🔗 Live demo: [nexus-crm-jer2x.vercel.app](https://nexus-crm-jer2x.vercel.app/)** —
+click **"Try the demo"** on the sign-in page for a one-click seeded workspace.
+
 > **Demo login** (after seeding): `demo@nexuscrm.dev` / `demo-password-123`
+
+Also by the same author: **[NVT Ops Suite](https://jasrulete.github.io/nvt-ops-suite/)** —
+five zero-dependency concept apps for offshore staffing / EOR operations.
 
 ## Features
 
