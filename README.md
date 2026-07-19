@@ -8,7 +8,15 @@ activity tracking and AI insights, self-hosted and **100% free to run**.
 **🔗 Live demo: [nexus-crm-jer2x.vercel.app](https://nexus-crm-jer2x.vercel.app/)** —
 click **"Try the demo"** on the sign-in page for a one-click seeded workspace.
 
-> **Demo login** (after seeding): `demo@nexuscrm.dev` / `demo-password-123`
+**Demo accounts** (after seeding):
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin (also the one-click **Try the demo** button) | `demo@nexuscrm.dev` | `demo-password-123` |
+| Member (reduced permissions) | `member@nexuscrm.dev` | `member-password-123` |
+
+The admin account is created by `npm run db:seed`. Add the member account with
+`npm run db:add-member` (both respect `TURSO_*` env for the hosted database).
 
 Also by the same author: **[NVT Ops Suite](https://jasrulete.github.io/nvt-ops-suite/)** —
 five zero-dependency concept apps for offshore staffing / EOR operations.
