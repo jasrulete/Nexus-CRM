@@ -26,7 +26,9 @@ export async function generateText(prompt: string): Promise<AiResult | null> {
 }
 
 async function gemini(prompt: string): Promise<AiResult | null> {
-  const model = process.env.AI_MODEL || "gemini-2.5-flash";
+  // "-latest" is Google's rolling alias for the newest stable Flash model —
+  // pinned snapshots (e.g. gemini-2.5-flash) get gated for new API keys.
+  const model = process.env.AI_MODEL || "gemini-flash-latest";
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {

@@ -67,7 +67,7 @@ export function AiPanel({
 
   const providerLabel =
     result?.provider === "heuristic"
-      ? "rule-based fallback (no API key set)"
+      ? "rule-based fallback (AI provider unavailable)"
       : result?.provider;
 
   return (
