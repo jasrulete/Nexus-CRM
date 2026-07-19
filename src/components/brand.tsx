@@ -1,5 +1,25 @@
-import { Hexagon } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// The "nexus" mark: a hub node connected to satellites — a network of
+// relationships, which is what the CRM manages. Uses currentColor so it
+// inherits text-on-accent from the wrapper.
+function NexusGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" fill="none" className={className} aria-hidden="true">
+      <g stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+        <path d="M16 16 16 8" />
+        <path d="M16 16 9 21.5" />
+        <path d="M16 16 23 21.5" />
+      </g>
+      <g fill="currentColor">
+        <circle cx="16" cy="16" r="3.2" />
+        <circle cx="16" cy="8" r="2.4" />
+        <circle cx="9" cy="21.5" r="2.4" />
+        <circle cx="23" cy="21.5" r="2.4" />
+      </g>
+    </svg>
+  );
+}
 
 export function BrandMark({ className }: { className?: string }) {
   return (
@@ -9,7 +29,7 @@ export function BrandMark({ className }: { className?: string }) {
         className,
       )}
     >
-      <Hexagon className="h-4.5 w-4.5" strokeWidth={2.2} />
+      <NexusGlyph className="h-5 w-5" />
     </span>
   );
 }
