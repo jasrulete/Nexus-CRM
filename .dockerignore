@@ -1,0 +1,24 @@
+# VCS / CI
+.git
+.github
+
+# build output & deps (rebuilt inside the image)
+.next
+node_modules
+coverage
+src/generated
+tsconfig.tsbuildinfo
+next-env.d.ts
+.vercel
+
+# local databases & secrets — never in the image
+*.db
+*.db-journal
+.env
+.env.*
+!.env.example
+
+# docker files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore

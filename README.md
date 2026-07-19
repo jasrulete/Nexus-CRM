@@ -1,5 +1,7 @@
 # Nexus CRM
 
+[![CI](https://github.com/jasrulete/Nexus-CRM/actions/workflows/ci.yml/badge.svg)](https://github.com/jasrulete/Nexus-CRM/actions/workflows/ci.yml)
+
 An AI-powered CRM built with Next.js — pipeline management, contacts, companies,
 activity tracking and AI insights, self-hosted and **100% free to run**.
 
@@ -81,6 +83,7 @@ as such in the UI.
 | `npm run db:migrate` | Apply schema migrations |
 | `npm run db:seed` | Seed the demo workspace (idempotent) |
 | `npm run typecheck` | TypeScript check |
+| `npm test` | Unit tests (vitest) — scoring heuristics, validation, rate limiting |
 | `npm run lint` | ESLint |
 
 ## Architecture notes
@@ -96,6 +99,31 @@ as such in the UI.
   Turso (libSQL) in production via a driver-adapter switch in
   `src/lib/db-adapter.ts`. For heavy multi-instance use, also move the
   in-memory rate limiter to a durable store.
+
+## 🐳 Self-host with Docker
+
+The whole app — server, SQLite database, demo data — runs from one command:
+
+```bash
+docker compose up -d --build   # → http://localhost:3000
+```
+
+On first boot the container applies the schema migrations and seeds the demo
+workspace (both idempotent), so you can sign in straight away with the demo
+account above.
+
+- **Data** lives in the `nexus-data` named volume, mounted at `/data` inside
+  the container (`DATABASE_URL=file:/data/nexus.db`). It survives rebuilds
+  and restarts; `docker compose down -v` deletes it.
+- **Seeding** is controlled by `SEED_DEMO_DATA: "true"` in
+  `docker-compose.yml`. Remove that line to start with an empty CRM — the
+  first account you register becomes the workspace admin.
+- **Env vars**: add `GEMINI_API_KEY` or `GROQ_API_KEY` under `environment:`
+  for live AI (optional — see `.env.example`). Your local `.env` is never
+  copied into the image.
+
+The image is a multi-stage build on `node:22-alpine` that ships only the
+Next.js standalone output and runs as the unprivileged `node` user.
 
 ## Deploying to Vercel (free)
 

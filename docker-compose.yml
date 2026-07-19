@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # Seeds the demo workspace (demo@nexuscrm.dev / demo-password-123) on
+      # first boot. Remove for an empty CRM — the first registered account
+      # becomes the workspace admin.
+      SEED_DEMO_DATA: "true"
+      # Optional free AI provider — set ONE (see .env.example). Without a key,
+      # AI features run in the clearly-labeled rule-based mode.
+      # GEMINI_API_KEY: ""
+      # GROQ_API_KEY: ""
+    volumes:
+      - nexus-data:/data
+    restart: unless-stopped
+
+volumes:
+  nexus-data:

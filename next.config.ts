@@ -25,6 +25,8 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  // Self-contained server bundle for the Docker image; ignored by Vercel.
+  output: "standalone",
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
