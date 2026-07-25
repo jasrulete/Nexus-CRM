@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # Dummy SQLite path — no page queries the DB at build time, but the
       # Prisma config and driver adapter expect a URL to be present.
@@ -24,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint
+        run: npm run lint
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -32,3 +43,22 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # e2e signs in as the seeded demo user, so CI needs a real database.
+      - name: Prepare e2e database
+        run: |
+          npx prisma migrate deploy
+          npm run db:seed
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

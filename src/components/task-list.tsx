@@ -1,6 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Check, Trash2 } from "lucide-react";
 import { deleteTask, toggleTask } from "@/server/actions/tasks";
@@ -16,10 +16,28 @@ export type TaskItem = {
 
 export function TaskList({ tasks }: { tasks: TaskItem[] }) {
   const [, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  // Tasks belong to their assignee, so these can legitimately be refused.
+  const run = (action: () => Promise<void>) =>
+    startTransition(async () => {
+      setError(null);
+      try {
+        await action();
+      } catch {
+        setError("Couldn't update that task — it may be assigned to someone else.");
+      }
+    });
 
   if (tasks.length === 0) return null;
 
   return (
+    <>
+    {error ? (
+      <p className="px-5 pt-2 text-[12px] text-danger" role="status">
+        {error}
+      </p>
+    ) : null}
     <ul className="divide-y divide-edge/60">
       {tasks.map((task) => {
         const overdue =
@@ -28,7 +46,7 @@ export function TaskList({ tasks }: { tasks: TaskItem[] }) {
           <li key={task.id} className="group flex items-center gap-3 px-5 py-2.5">
             <button
               aria-label={task.done ? "Mark as open" : "Mark as done"}
-              onClick={() => startTransition(() => void toggleTask(task.id))}
+              onClick={() => run(() => toggleTask(task.id))}
               className={cn(
                 "flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border transition-colors cursor-pointer",
                 task.done
@@ -68,7 +86,7 @@ export function TaskList({ tasks }: { tasks: TaskItem[] }) {
             ) : null}
             <button
               aria-label="Delete task"
-              onClick={() => startTransition(() => void deleteTask(task.id))}
+              onClick={() => run(() => deleteTask(task.id))}
               className="shrink-0 rounded-md p-1 text-ink-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100 cursor-pointer"
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -77,5 +95,6 @@ export function TaskList({ tasks }: { tasks: TaskItem[] }) {
         );
       })}
     </ul>
+    </>
   );
 }

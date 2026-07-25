@@ -18,7 +18,10 @@ export function UserMenu({
 }) {
   return (
     <Menu>
-      <MenuTrigger className="cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+      <MenuTrigger
+        aria-label="Account menu"
+        className="cursor-pointer rounded-full focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
         <Avatar name={user.name} />
       </MenuTrigger>
       <MenuContent>

@@ -15,8 +15,10 @@ click **"Try the demo"** on the sign-in page for a one-click seeded workspace.
 | Admin (also the one-click **Try the demo** button) | `demo@nexuscrm.dev` | `demo-password-123` |
 | Member (reduced permissions) | `member@nexuscrm.dev` | `member-password-123` |
 
-The admin account is created by `npm run db:seed`. Add the member account with
-`npm run db:add-member` (both respect `TURSO_*` env for the hosted database).
+The admin account is created by `npm run db:seed`, which always targets the
+**local** database — seeding the hosted one requires `SEED_REMOTE=true`, so a
+routine local seed can't write demo data into production. Add the member account
+with `npm run db:add-member`.
 
 Also by the same author: **[NVT Ops Suite](https://jasrulete.github.io/nvt-ops-suite/)** —
 five zero-dependency concept apps for offshore staffing / EOR operations.
@@ -92,6 +94,7 @@ as such in the UI.
 | `npm run db:seed` | Seed the demo workspace (idempotent) |
 | `npm run typecheck` | TypeScript check |
 | `npm test` | Unit tests (vitest) — scoring heuristics, validation, rate limiting |
+| `npm run test:e2e` | End-to-end tests (Playwright) — auth, CRM flows, health |
 | `npm run lint` | ESLint |
 
 ## Architecture notes
@@ -141,9 +144,11 @@ Vercel's serverless filesystem can't host the SQLite file, so production uses
 1. Create a Turso database and copy its URL + auth token.
 2. Locally, put `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in `.env`, then:
    ```bash
-   npm run db:push:turso   # apply the schema
-   npm run db:seed         # optional demo data
+   npm run db:push:turso            # apply pending migrations (tracked in _turso_migrations)
+   SEED_REMOTE=true npm run db:seed # optional demo data
    ```
+   Re-run `db:push:turso` after every new migration — it applies only what the
+   remote database is missing.
 3. In Vercel → Project → Settings → Environment Variables, add the same two
    variables (plus `GEMINI_API_KEY` or `GROQ_API_KEY` if you want live AI).
 4. Push to GitHub — Vercel builds and deploys. The `postinstall` script runs

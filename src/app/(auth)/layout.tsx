@@ -44,7 +44,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <ul className="space-y-5">
             {highlights.map((h) => (
               <li key={h.title} className="flex gap-3.5">
-                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-indigo-300">
+                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/10 text-violet-300">
                   <h.icon className="h-4 w-4" />
                 </span>
                 <div>

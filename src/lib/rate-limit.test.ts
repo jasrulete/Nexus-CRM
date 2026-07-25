@@ -59,6 +59,43 @@ describe("rateLimit", () => {
   });
 });
 
+describe("peekLimit", () => {
+  it("does not consume budget", async () => {
+    const { peekLimit, rateLimit } = await freshLimiter();
+    const opts = { limit: 2, windowMs: 60_000 };
+
+    for (let i = 0; i < 10; i++) {
+      expect(peekLimit("login:account:a@b.c", { limit: 2 }).ok).toBe(true);
+    }
+    // The two real attempts are still available after all that peeking.
+    expect(rateLimit("login:account:a@b.c", opts).ok).toBe(true);
+    expect(rateLimit("login:account:a@b.c", opts).ok).toBe(true);
+    expect(rateLimit("login:account:a@b.c", opts).ok).toBe(false);
+  });
+
+  it("reports blocked once the key is exhausted", async () => {
+    const { peekLimit, rateLimit } = await freshLimiter();
+    const opts = { limit: 2, windowMs: 60_000 };
+    rateLimit("k", opts);
+    expect(peekLimit("k", { limit: 2 }).ok).toBe(true);
+
+    rateLimit("k", opts);
+    const blocked = peekLimit("k", { limit: 2 });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.retryAfterSec).toBe(60);
+  });
+
+  it("clears once the window expires", async () => {
+    const { peekLimit, rateLimit } = await freshLimiter();
+    const opts = { limit: 1, windowMs: 1_000 };
+    rateLimit("k", opts);
+    expect(peekLimit("k", { limit: 1 }).ok).toBe(false);
+
+    vi.advanceTimersByTime(1_001);
+    expect(peekLimit("k", { limit: 1 }).ok).toBe(true);
+  });
+});
+
 describe("sweepExpiredBuckets", () => {
   it("keeps live buckets intact when the periodic sweep runs", async () => {
     const { rateLimit, sweepExpiredBuckets } = await freshLimiter();

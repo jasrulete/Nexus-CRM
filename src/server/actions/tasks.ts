@@ -54,6 +54,9 @@ export async function toggleTask(taskId: string): Promise<void> {
 
   const task = await prisma.task.findUnique({ where: { id } });
   if (!task) return;
+  if (task.assigneeId !== user.id && user.role !== "ADMIN") {
+    throw new Error("FORBIDDEN: only the assignee or an admin can update");
+  }
 
   await prisma.task.update({ where: { id }, data: { done: !task.done } });
   await audit({

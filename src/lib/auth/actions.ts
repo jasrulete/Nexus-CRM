@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { audit } from "@/lib/audit";
 import { prisma } from "@/lib/db";
-import { rateLimit, sweepExpiredBuckets } from "@/lib/rate-limit";
+import { peekLimit, rateLimit, sweepExpiredBuckets } from "@/lib/rate-limit";
 import { fieldErrors, loginSchema, registerSchema } from "@/lib/validation";
 import { hashPassword, verifyPassword } from "./password";
 import { createSession, destroySession, getCurrentUser } from "./session";
@@ -19,9 +19,17 @@ export type AuthFormState = {
 const DUMMY_HASH =
   "$2b$12$C6UzMDM.H6dfI/f/IKcEeO7ZBpUS8QSkDf0MFyzHhEBRE5l0S7y2u";
 
+// Failed logins allowed per 15 minutes, per source IP and per account.
+const IP_FAILURE_LIMIT = 10;
+const ACCOUNT_FAILURE_LIMIT = 20;
+
+// Only platform-set headers are trustworthy; a direct client can send any
+// x-forwarded-for it likes, so that one is a last-resort dev/self-host fallback.
 async function clientIp() {
-  const fwd = (await headers()).get("x-forwarded-for");
-  return fwd?.split(",")[0]?.trim() || "local";
+  const h = await headers();
+  const trusted = h.get("x-vercel-forwarded-for") ?? h.get("x-real-ip");
+  if (trusted) return trusted.trim();
+  return h.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
 }
 
 export async function register(
@@ -85,18 +93,34 @@ export async function login(
 
   const { email, password } = parsed.data;
 
-  const limited = rateLimit(`login:${ip}:${email}`, {
-    limit: 10,
-    windowMs: 15 * 60_000,
-  });
+  // Both buckets count *failed* attempts only — a successful sign-in is not
+  // abuse, and charging it would let the shared demo account lock out its own
+  // visitors. The IP bucket stops one source guessing many passwords; the
+  // account bucket survives forwarded-for spoofing, which the IP one cannot.
+  const ipKey = `login:${ip}:${email}`;
+  const accountKey = `login:account:${email}`;
+
+  const limited = peekLimit(ipKey, { limit: IP_FAILURE_LIMIT });
   if (!limited.ok) {
     return { message: `Too many attempts. Try again in ${limited.retryAfterSec}s.` };
+  }
+
+  const accountLimited = peekLimit(accountKey, { limit: ACCOUNT_FAILURE_LIMIT });
+  if (!accountLimited.ok) {
+    return {
+      message: `Too many attempts. Try again in ${accountLimited.retryAfterSec}s.`,
+    };
   }
 
   const user = await prisma.user.findUnique({ where: { email } });
   const valid = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
 
   if (!user || !valid) {
+    rateLimit(ipKey, { limit: IP_FAILURE_LIMIT, windowMs: 15 * 60_000 });
+    rateLimit(accountKey, {
+      limit: ACCOUNT_FAILURE_LIMIT,
+      windowMs: 15 * 60_000,
+    });
     await audit({
       action: "auth.login_failed",
       entityType: "user",

@@ -118,6 +118,8 @@ model Deal {
 
   @@index([ownerId])
   @@index([stage])
+  @@index([contactId])
+  @@index([companyId])
 }
 
 model Activity {
@@ -155,6 +157,8 @@ model Task {
   createdAt  DateTime @default(now())
 
   @@index([assigneeId, done])
+  @@index([contactId])
+  @@index([dealId])
 }
 
 model AuditLog {

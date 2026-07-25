@@ -10,6 +10,10 @@ const PUBLIC_PATHS = new Set(["/login", "/register"]);
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // The liveness probe must answer monitors whether signed in or not.
+  if (pathname === "/api/health") return NextResponse.next();
+
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE);
 
   if (PUBLIC_PATHS.has(pathname)) {

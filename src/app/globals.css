@@ -18,9 +18,9 @@
   --ink-faint: #8e8e98;
 
   /* brand */
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
+  --accent: #7c3aed;
+  --accent-hover: #6d28d9;
+  --accent-soft: #f5f3ff;
   --on-accent: #ffffff;
 
   /* semantic */
@@ -54,10 +54,13 @@
   --ink-muted: #a1a1aa;
   --ink-faint: #6f6f78;
 
-  --accent: #6366f1;
-  --accent-hover: #818cf8;
-  --accent-soft: #1e1b4b;
-  --on-accent: #ffffff;
+  /* Light purple with dark text: the same token serves link text on dark
+     surfaces (6.5:1) and button fills (5.9:1). A mid purple with white text
+     failed both at ~4.2:1. */
+  --accent: #a78bfa;
+  --accent-hover: #c4b5fd;
+  --accent-soft: #2e1065;
+  --on-accent: #1e1b4b;
 
   --danger: #ef4444;
   --danger-soft: #2a1414;
@@ -99,7 +102,8 @@
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);
 
-  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-sans: var(--font-dm-sans), system-ui, sans-serif;
+  --font-display: var(--font-space-grotesk), var(--font-dm-sans), sans-serif;
   --font-mono: var(--font-geist-mono), monospace;
 }
 
@@ -107,6 +111,13 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
 }
 
 /* Recessive scrollbars that fit both themes */

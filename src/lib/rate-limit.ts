@@ -27,6 +27,25 @@ export function rateLimit(
   return { ok: true, retryAfterSec: 0 };
 }
 
+/**
+ * Reads a key's current standing without consuming budget, so callers can
+ * charge only the outcomes they care about (e.g. failed logins, not successful
+ * ones — otherwise a shared demo account throttles its own visitors).
+ */
+export function peekLimit(
+  key: string,
+  { limit }: { limit: number },
+): { ok: boolean; retryAfterSec: number } {
+  const now = Date.now();
+  const bucket = buckets.get(key);
+
+  if (!bucket || bucket.resetAt <= now) return { ok: true, retryAfterSec: 0 };
+  if (bucket.count >= limit) {
+    return { ok: false, retryAfterSec: Math.ceil((bucket.resetAt - now) / 1000) };
+  }
+  return { ok: true, retryAfterSec: 0 };
+}
+
 // Opportunistic cleanup so the map doesn't grow unbounded.
 const CLEANUP_EVERY = 5 * 60_000;
 let lastCleanup = Date.now();

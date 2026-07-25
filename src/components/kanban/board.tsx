@@ -53,6 +53,7 @@ export function KanbanBoard({
   const [activeDeal, setActiveDeal] = useState<BoardDeal | null>(null);
   const [editing, setEditing] = useState<DealFormValues | null>(null);
   const [creating, setCreating] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
 
   // Re-sync when the server revalidates ("adjust state during render" pattern
   // from the React docs — avoids an extra effect pass).
@@ -119,31 +120,45 @@ export function KanbanBoard({
     const stage = findStage(String(over.id)) ?? dealIndex.get(String(active.id));
     if (!stage) return;
 
-    setColumns((prev) => {
-      const column = prev[stage];
-      const fromIndex = column.findIndex((d) => d.id === active.id);
-      if (fromIndex < 0) return prev;
+    const column = columns[stage];
+    const fromIndex = column.findIndex((d) => d.id === active.id);
+    if (fromIndex < 0) return;
 
-      let toIndex =
-        String(over.id) === stage
-          ? column.length - 1
-          : column.findIndex((d) => d.id === over.id);
-      if (toIndex < 0) toIndex = column.length - 1;
+    let toIndex =
+      String(over.id) === stage
+        ? column.length - 1
+        : column.findIndex((d) => d.id === over.id);
+    if (toIndex < 0) toIndex = column.length - 1;
 
-      const reordered = [...column];
-      const [moved] = reordered.splice(fromIndex, 1);
-      reordered.splice(toIndex, 0, moved!);
+    const reordered = [...column];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved!);
 
-      // Persist; server revalidation will confirm (or correct) this state.
-      void moveDeal({ dealId: String(active.id), stage, position: toIndex });
+    // Optimistic; if the server refuses, put the board back where it was.
+    const snapshot = columns;
+    setColumns({ ...columns, [stage]: reordered });
+    setMoveError(null);
 
-      return { ...prev, [stage]: reordered };
-    });
+    void moveDeal({ dealId: String(active.id), stage, position: toIndex })
+      .then((result) => {
+        if (!result?.ok) throw new Error("move rejected");
+      })
+      .catch(() => {
+        setColumns(snapshot);
+        setMoveError("Couldn't move that deal — it's been put back.");
+      });
   }
 
   return (
     <>
-      <div className="mb-4 flex items-center justify-end">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        {moveError ? (
+          <p className="text-[13px] text-danger" role="status">
+            {moveError}
+          </p>
+        ) : (
+          <span />
+        )}
         <Button onClick={() => setCreating(true)}>
           <Plus className="h-4 w-4" /> New deal
         </Button>

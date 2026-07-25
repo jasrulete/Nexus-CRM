@@ -7,8 +7,19 @@ import bcrypt from "bcryptjs";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createDbAdapter } from "../src/lib/db-adapter";
 
-// Uses Turso when TURSO_DATABASE_URL is set, the local SQLite file otherwise —
-// so the same command can seed either environment.
+// createDbAdapter() prefers TURSO_DATABASE_URL, and .env is loaded above — so
+// a plain `npm run db:seed` on a dev machine would write demo data (including a
+// publicly-documented ADMIN login) straight into production. Seeding a remote
+// database has to be asked for explicitly.
+if (process.env.SEED_REMOTE === "true") {
+  console.log("SEED_REMOTE=true — seeding the remote database.");
+} else if (process.env.TURSO_DATABASE_URL) {
+  console.log(
+    "Seeding the local database (TURSO_DATABASE_URL ignored — use SEED_REMOTE=true to target the remote one).",
+  );
+  delete process.env.TURSO_DATABASE_URL;
+}
+
 const prisma = new PrismaClient({ adapter: createDbAdapter() });
 
 function daysAgo(n: number) {
