@@ -9,6 +9,12 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: process.env.CI ? "github" : "list",
+  // Dev compiles each route on its first request, so a cold run overruns both
+  // the 5s assertion and 30s per-test defaults — a test that signs in and then
+  // visits two uncompiled routes spends most of its budget waiting on webpack.
+  // CI serves a prebuilt app, so it keeps the defaults.
+  expect: { timeout: process.env.CI ? 5_000 : 20_000 },
+  timeout: process.env.CI ? 30_000 : 90_000,
   use: {
     baseURL,
     trace: "on-first-retry",
