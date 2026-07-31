@@ -5,6 +5,7 @@ import type { ActionState } from "@/lib/action-state";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { activitySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 export async function createActivity(
@@ -53,6 +54,7 @@ export async function createActivity(
 
 export async function deleteActivity(activityId: string): Promise<void> {
   const user = await requireUser();
+  assertNotLockedDemoAccount(user);
   const id = idSchema.parse(activityId);
 
   const activity = await prisma.activity.findUnique({ where: { id } });

@@ -6,6 +6,7 @@ import type { ActionState } from "@/lib/action-state";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { contactSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -94,6 +95,7 @@ export async function updateContact(
 
 export async function deleteContact(contactId: string): Promise<void> {
   const user = await requireUser();
+  assertNotLockedDemoAccount(user);
   const id = idSchema.parse(contactId);
 
   const contact = await prisma.contact.findUnique({ where: { id } });

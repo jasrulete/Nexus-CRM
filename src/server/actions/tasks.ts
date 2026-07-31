@@ -5,6 +5,7 @@ import type { ActionState } from "@/lib/action-state";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
@@ -70,6 +71,7 @@ export async function toggleTask(taskId: string): Promise<void> {
 
 export async function deleteTask(taskId: string): Promise<void> {
   const user = await requireUser();
+  assertNotLockedDemoAccount(user);
   const id = idSchema.parse(taskId);
 
   const task = await prisma.task.findUnique({ where: { id } });

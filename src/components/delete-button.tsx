@@ -9,10 +9,13 @@ export function DeleteButton({
   label,
   description,
   onConfirm,
+  disabledReason,
 }: {
   label: string;
   description: string;
   onConfirm: () => Promise<void>;
+  /** When set, the dialog explains why instead of letting the delete run. */
+  disabledReason?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -26,6 +29,11 @@ export function DeleteButton({
         </Button>
       </DialogTrigger>
       <DialogContent title="Are you sure?" description={description}>
+        {disabledReason ? (
+          <p className="mb-3 rounded-lg border border-edge bg-surface-2 px-3 py-2 text-[13px] text-ink-muted">
+            {disabledReason}
+          </p>
+        ) : null}
         {error ? (
           <p className="mb-3 rounded-lg border border-danger/30 bg-danger-soft px-3 py-2 text-[13px] text-danger">
             {error}
@@ -37,7 +45,7 @@ export function DeleteButton({
           </Button>
           <Button
             variant="danger"
-            disabled={pending}
+            disabled={pending || Boolean(disabledReason)}
             onClick={() =>
               startTransition(async () => {
                 try {

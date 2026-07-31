@@ -9,7 +9,9 @@ import {
   Pencil,
   Users,
 } from "lucide-react";
+import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { formatCurrency, fullName, timeAgo } from "@/lib/utils";
 import { deleteCompany } from "@/server/actions/companies";
 import { Avatar } from "@/components/ui/avatar";
@@ -30,6 +32,7 @@ export default async function CompanyDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const demoLocked = isLockedDemoAccount((await getCurrentUser()) ?? { email: "" });
 
   const company = await prisma.company.findUnique({
     where: { id },
@@ -110,6 +113,11 @@ export default async function CompanyDetailPage({
             label="Delete"
             description={`This permanently removes ${company.name}. Contacts stay but lose the company link.`}
             onConfirm={deleteCompany.bind(null, company.id)}
+            disabledReason={
+              demoLocked
+                ? "Deleting is turned off in the shared demo, so the data stays intact for everyone."
+                : undefined
+            }
           />
         </div>
       </div>

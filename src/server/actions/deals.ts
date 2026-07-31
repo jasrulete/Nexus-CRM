@@ -5,6 +5,7 @@ import type { ActionState } from "@/lib/action-state";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { dealMoveSchema, dealSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 const CLOSED_STAGES = new Set(["WON", "LOST"]);
@@ -172,6 +173,7 @@ export async function moveDeal(input: {
 
 export async function deleteDeal(dealId: string): Promise<void> {
   const user = await requireUser();
+  assertNotLockedDemoAccount(user);
   const id = idSchema.parse(dealId);
 
   const deal = await prisma.deal.findUnique({ where: { id } });
