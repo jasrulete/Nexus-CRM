@@ -13,6 +13,8 @@ import { createDbAdapter } from "../src/lib/db-adapter";
 // database has to be asked for explicitly.
 if (process.env.SEED_REMOTE === "true") {
   console.log("SEED_REMOTE=true — seeding the remote database.");
+  // createDbAdapter() ignores Turso outside Vercel unless told otherwise.
+  process.env.ALLOW_REMOTE_DB = "true";
 } else if (process.env.TURSO_DATABASE_URL) {
   console.log(
     "Seeding the local database (TURSO_DATABASE_URL ignored — use SEED_REMOTE=true to target the remote one).",
