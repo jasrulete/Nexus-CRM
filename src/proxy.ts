@@ -1,7 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE } from "@/lib/auth/session-constants";
 
-const PUBLIC_PATHS = new Set(["/login", "/register"]);
+// "/" is the marketing page; signed-in visitors get bounced to /dashboard
+// below, which is what the old redirect in app/page.tsx used to do.
+const PUBLIC_PATHS = new Set(["/", "/login", "/register"]);
 
 /**
  * Optimistic auth gate: checks only cookie *presence* for fast redirects.
@@ -33,6 +35,8 @@ export function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     // Everything except Next internals, static assets and favicon.
-    "/((?!_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)",
+    // theme-init.js is listed explicitly: it is a public asset, and redirecting
+    // it to /login left signed-out visitors stuck in light mode.
+    "/((?!_next/static|_next/image|favicon\\.ico|theme-init\\.js|.*\\.(?:svg|png|jpg|jpeg|webp|ico)$).*)",
   ],
 };
