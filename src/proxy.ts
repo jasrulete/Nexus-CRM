@@ -16,6 +16,11 @@ export function proxy(request: NextRequest) {
   // The liveness probe must answer monitors whether signed in or not.
   if (pathname === "/api/health") return NextResponse.next();
 
+  // Sentry's browser tunnel (tunnelRoute in next.config.ts). It carries error
+  // reports for signed-in and signed-out visitors alike, so it cannot go in
+  // PUBLIC_PATHS — that branch redirects authenticated users to /dashboard.
+  if (pathname === "/monitoring") return NextResponse.next();
+
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE);
 
   if (PUBLIC_PATHS.has(pathname)) {
