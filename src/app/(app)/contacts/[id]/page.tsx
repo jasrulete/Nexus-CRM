@@ -11,7 +11,9 @@ import {
   Phone,
   Tag,
 } from "lucide-react";
+import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { formatCurrency, formatDate, fullName, timeAgo } from "@/lib/utils";
 import { deleteContact } from "@/server/actions/contacts";
 import { Avatar } from "@/components/ui/avatar";
@@ -35,6 +37,7 @@ export default async function ContactDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const demoLocked = isLockedDemoAccount((await getCurrentUser()) ?? { email: "" });
 
   const [contact, companies] = await Promise.all([
     prisma.contact.findUnique({
@@ -158,6 +161,7 @@ export default async function ContactDetailPage({
             label="Delete"
             description={`This permanently removes ${name}, plus their activities and tasks.`}
             onConfirm={deleteContact.bind(null, contact.id)}
+            disabledReason={demoLocked ? "Deleting is turned off in the shared demo, so the data stays intact for everyone." : undefined}
           />
         </div>
       </div>
