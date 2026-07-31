@@ -1,3 +1,4 @@
+import { withSentryConfig } from "@sentry/nextjs";
 import type { NextConfig } from "next";
 
 const isProd = process.env.NODE_ENV === "production";
@@ -32,4 +33,20 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// Browser events are posted to this app's own origin and forwarded server-side,
+// so the CSP above can keep `connect-src 'self'` instead of allow-listing a
+// Sentry ingest domain. proxy.ts must let the route through unauthenticated.
+export const SENTRY_TUNNEL_ROUTE = "/monitoring";
+
+export default withSentryConfig(nextConfig, {
+  tunnelRoute: SENTRY_TUNNEL_ROUTE,
+
+  // Source maps are uploaded only when CI supplies a token; a plain
+  // `npm run build` (or a fork's build) must not fail for lack of one.
+  silent: true,
+  sourcemaps: { disable: !process.env.SENTRY_AUTH_TOKEN },
+
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+});
