@@ -4,11 +4,11 @@ First audit: 2026-07-25 — six parallel audits (security/auth, authorization,
 input & secrets, data, frontend, infra/CI/observability), then fixes applied and
 verified.
 
-Second pass: 2026-08-01 — shipped the landing page and error tracking, and fixed
-three bugs found along the way (§2).
+Second pass: 2026-08-01 — shipped the landing page, error tracking, demo
+protection and the nightly reset, and fixed three bugs found along the way (§2).
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **67 unit tests, 12 e2e tests**.
+e2e tests, and a production build. Current suite: **72 unit tests, 14 e2e tests**.
 
 ---
 
@@ -141,7 +141,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 
 | Gap | Why it's acceptable now | What "real SaaS" needs |
 |---|---|---|
-| **Visitors can still create junk** in the shared demo (deleting is blocked, see §2) | Only deliberate additions accumulate, and a scoped cleanup script clears them | A nightly reset job, which would also undo edits |
+| **Visitor-created records live until the next nightly reset** — up to ~24 hours of clutter (deleting is already blocked, §2) | The reset clears everything each night, so the worst case is one day of stray records on a demo | A shorter reset interval, which GitHub Actions supports well below daily, or per-visitor sandboxing so nobody sees anyone else's edits |
 | **Open registration into one shared workspace** — anyone can self-register and see all CRM data | It's a single-tenant showcase, not customer data | Invite-only registration, or real multi-tenancy (below) |
 | **In-memory rate limiter** resets per deploy and is per-instance | Free-tier single instance | Redis/Upstash-backed limiter |
 | **No backups configured** | Turso has its own snapshots | Documented restore procedure, tested |
