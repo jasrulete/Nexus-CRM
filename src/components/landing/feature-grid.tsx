@@ -1,5 +1,6 @@
-import Image from "next/image";
 import { KanbanSquare, Sparkles, ShieldCheck } from "lucide-react";
+
+import { ProductShot } from "./product-shot";
 
 // Same three pillars the sign-in panel leads with, so the product tells one
 // story either way a visitor arrives.
@@ -44,13 +45,10 @@ export function FeatureGrid() {
       </div>
 
       <div className="mt-12 overflow-hidden rounded-xl border border-edge bg-surface shadow-lg">
-        <Image
-          src="/marketing/pipeline-dark.png"
+        <ProductShot
+          light="/marketing/pipeline-light.png"
+          dark="/marketing/pipeline-dark.png"
           alt="The deals board: cards grouped into Lead, Qualified, Proposal, Negotiation and Won columns, each showing value, contact, company and close date."
-          width={2880}
-          height={1800}
-          sizes="(min-width: 1024px) 1024px, 100vw"
-          className="h-auto w-full"
         />
       </div>
     </section>
