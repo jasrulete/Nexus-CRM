@@ -66,6 +66,11 @@ e2e tests, and a production build. Current suite: **67 unit tests, 12 e2e tests*
   anyone opening the deployed URL hit an auth wall. Now a single-scroll
   marketing page with real product screenshots, captured by
   `npm run capture:shots` and committed. `/` still prerenders as static.
+  Screenshots exist in both themes and are swapped with the `dark:` class
+  variant, not `prefers-color-scheme` — the app's source of truth is the
+  `.dark` class `theme-init.js` sets from localStorage, which can disagree with
+  the OS. The hidden variant is lazy and never fetched (~70 KB of images per
+  page load either way).
 - **Error tracking (Sentry).** Wired to the Next 16 instrumentation hooks, so
   server component / route handler / server action errors are reported instead
   of vanishing into `console.error`. Browser events tunnel through `/monitoring`
@@ -158,7 +163,5 @@ Not blocking anything, listed so they aren't forgotten.
   the delete guard does not cover.
 - **The Docker image is untested.** `next start` warns it does not work with
   `output: "standalone"`, and the `.next/standalone/server.js` the image actually
-  ships is never exercised by a test.
-- **Hero screenshots are dark-only**, so they read as product shots on the light
-  landing page rather than blending in. A light capture pass plus a `<picture>`
-  swap would fix it.
+  ships is never exercised by a test. This is the only remaining item here with
+  a correctness risk rather than a cosmetic one.
