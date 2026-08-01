@@ -1,8 +1,8 @@
-import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
 import { REPO_URL } from "./links";
+import { ProductShot } from "./product-shot";
 
 export function Hero() {
   return (
@@ -59,14 +59,11 @@ export function Hero() {
 
         <div className="relative mt-14 sm:mt-16">
           <div className="overflow-hidden rounded-xl border border-edge bg-surface shadow-2xl ring-1 ring-black/5">
-            <Image
-              src="/marketing/dashboard-dark.png"
+            <ProductShot
+              light="/marketing/dashboard-light.png"
+              dark="/marketing/dashboard-dark.png"
               alt="The Nexus CRM dashboard: pipeline totals, win rate, a pipeline-by-stage chart, revenue won over time, open tasks and recent activity."
-              width={2880}
-              height={1800}
               priority
-              sizes="(min-width: 1024px) 1024px, 100vw"
-              className="h-auto w-full"
             />
           </div>
         </div>

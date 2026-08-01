@@ -15,26 +15,28 @@ import path from "node:path";
 const baseURL = process.env.CAPTURE_BASE_URL ?? "http://localhost:3000";
 const outDir = path.join(process.cwd(), "public", "marketing");
 
-const shots = [
-  { route: "/dashboard", file: "dashboard-dark.png" },
-  { route: "/deals", file: "pipeline-dark.png" },
+const routes = [
+  { route: "/dashboard", name: "dashboard" },
+  { route: "/deals", name: "pipeline" },
 ];
 
-async function main() {
-  await mkdir(outDir, { recursive: true });
+const themes = ["light", "dark"] as const;
 
-  const browser = await chromium.launch();
+async function captureTheme(
+  browser: Awaited<ReturnType<typeof chromium.launch>>,
+  theme: (typeof themes)[number],
+) {
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 2,
-    colorScheme: "dark",
+    colorScheme: theme,
   });
 
-  // theme-init.js reads this before hydration, so the app renders dark from
-  // the first paint rather than flashing light.
-  await context.addInitScript(() => {
-    localStorage.setItem("theme", "dark");
-  });
+  // theme-init.js reads this before hydration, so the app renders in the right
+  // theme from the first paint rather than flashing the other one.
+  await context.addInitScript((t) => {
+    localStorage.setItem("theme", t);
+  }, theme);
 
   // Dev compiles each route on its first request, which overruns Playwright's
   // 30s navigation default on a cold server.
@@ -47,15 +49,26 @@ async function main() {
   await page.getByRole("button", { name: "Try the demo" }).click();
   await page.waitForURL(/\/dashboard$/);
 
-  for (const shot of shots) {
-    await page.goto(`${baseURL}${shot.route}`);
+  for (const { route, name } of routes) {
+    await page.goto(`${baseURL}${route}`);
     await page.waitForLoadState("networkidle");
     // Recharts and the kanban settle after mount; capture once they have.
     await page.waitForTimeout(1_500);
-    await page.screenshot({ path: path.join(outDir, shot.file) });
-    console.log(`captured ${shot.file}`);
+    const file = `${name}-${theme}.png`;
+    await page.screenshot({ path: path.join(outDir, file) });
+    console.log(`captured ${file}`);
   }
 
+  await context.close();
+}
+
+async function main() {
+  await mkdir(outDir, { recursive: true });
+
+  const browser = await chromium.launch();
+  for (const theme of themes) {
+    await captureTheme(browser, theme);
+  }
   await browser.close();
 }
 
