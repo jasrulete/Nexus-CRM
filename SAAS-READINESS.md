@@ -1,13 +1,18 @@
 # Nexus CRM — SaaS readiness report
 
-Audit date: 2026-07-25. Six parallel audits (security/auth, authorization,
+First audit: 2026-07-25 — six parallel audits (security/auth, authorization,
 input & secrets, data, frontend, infra/CI/observability), then fixes applied and
-verified. Everything below marked "fixed" was verified by typecheck, lint, 56
-unit tests, 9 Playwright e2e tests, and a production build.
+verified.
+
+Second pass: 2026-08-01 — shipped the landing page and error tracking, and fixed
+three bugs found along the way (§2).
+
+Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
+e2e tests, and a production build. Current suite: **67 unit tests, 12 e2e tests**.
 
 ---
 
-## 1. Fixed in this pass
+## 1. Fixed in the 2026-07-25 pass
 
 ### Security
 | Issue | Severity | Fix |
@@ -54,23 +59,64 @@ unit tests, 9 Playwright e2e tests, and a production build.
 
 ---
 
-## 2. Required before your next deploy
+## 2. Fixed in the 2026-08-01 pass
 
-```bash
-npm run db:push:turso
-```
-The new index migration must reach production. The script baselines your
-existing database automatically, then applies only the new migration.
+### Shipped
+- **Public landing page at `/`.** It used to redirect straight to `/login`, so
+  anyone opening the deployed URL hit an auth wall. Now a single-scroll
+  marketing page with real product screenshots, captured by
+  `npm run capture:shots` and committed. `/` still prerenders as static.
+- **Error tracking (Sentry).** Wired to the Next 16 instrumentation hooks, so
+  server component / route handler / server action errors are reported instead
+  of vanishing into `console.error`. Browser events tunnel through `/monitoring`
+  on this app's own origin, which keeps the CSP at `connect-src 'self'` rather
+  than allow-listing a third-party domain — and it handles Sentry's regional
+  ingest hosts automatically. `sendDefaultPii` is off and Session Replay is
+  deliberately absent: this app renders real contact records.
+
+### Bugs found while building the above
+| Issue | Severity | Fix |
+|---|---|---|
+| **Local development wrote to the production database.** `.env` carried a populated `TURSO_DATABASE_URL` and no `DATABASE_URL`, and `createDbAdapter()` preferred Turso unconditionally — so `next dev`, `next start` and the whole e2e suite connected to production. It had already deposited 9 `Playwright E2E…` contacts there, a third of the contact list | High | Turso is ignored outside Vercel unless `ALLOW_REMOTE_DB=true`. The `db:seed` guard existed but was never extended to the app itself. Docker is unaffected (local file volume). The junk contacts were deleted |
+| **Dark mode never applied to signed-out visitors.** The proxy matcher excluded image extensions but not `.js`, so `/theme-init.js` was auth-gated and answered `307 → /login`. A dark-mode visitor got a light landing and login page, then a dark app after signing in | Medium | `theme-init.js` excluded from the matcher explicitly |
+| **The e2e suite failed locally on every run** while passing in CI, because dev compiles routes on first request and overran Playwright's 5s assertion and 30s per-test defaults | Low | Headroom for local runs only; CI keeps the defaults |
+
+### Demo protection
+`DEMO_MODE=true` blocks the shared demo account from deleting records. This
+became necessary the moment `/` started publicly inviting visitors to the demo —
+the account is a full ADMIN, so one visitor could have wiped it for everyone
+after them. Creating and editing stay allowed so the demo still feels live.
 
 ---
 
-## 3. Known gaps — accepted, with reasoning
+## 3. Deploy checklist
+
+Both of these are inert without their environment variable, by design — a clone
+or self-hosted instance is unaffected.
+
+| Variable | Where | Effect |
+|---|---|---|
+| `DEMO_MODE=true` | Vercel (Production) | Demo account cannot delete records |
+| `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
+
+`NEXT_PUBLIC_*` values are inlined at **build** time, so a redeploy that reuses
+the build cache will not pick up a changed DSN.
+
+Optional: `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` upload source maps
+so stack traces name real files. Builds succeed without them.
+
+Database migrations reach production with `npm run db:push:turso` — the script
+baselines an existing database, then applies only what is missing.
+
+---
+
+## 4. Known gaps — accepted, with reasoning
 
 These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 
 | Gap | Why it's acceptable now | What "real SaaS" needs |
 |---|---|---|
-| **Public demo account is a full ADMIN** and can permanently delete all demo data | Credentials are intentionally published; damage is limited to demo data | A demo guard (block destructive actions) or a nightly reset job |
+| **Visitors can still create junk** in the shared demo (deleting is blocked, see §2) | Only deliberate additions accumulate, and a scoped cleanup script clears them | A nightly reset job, which would also undo edits |
 | **Open registration into one shared workspace** — anyone can self-register and see all CRM data | It's a single-tenant showcase, not customer data | Invite-only registration, or real multi-tenancy (below) |
 | **In-memory rate limiter** resets per deploy and is per-instance | Free-tier single instance | Redis/Upstash-backed limiter |
 | **No backups configured** | Turso has its own snapshots | Documented restore procedure, tested |
@@ -80,7 +126,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 
 ---
 
-## 4. What's still missing to be a commercial SaaS
+## 5. What's still missing to be a commercial SaaS
 
 Ranked by what would actually block charging money. None of these are bugs —
 they're unbuilt product surface.
@@ -93,13 +139,26 @@ they're unbuilt product surface.
    workspace + plan gating. Meaningless without #1.
 3. **Transactional email** (~1–2 days). Password reset, invites, verification.
    Resend/Postmark. Password reset is the most-missed feature in any demo.
-4. **Error tracking** (~2 hours). Sentry via `instrumentation.ts`. Right now a
-   production error is a `console.error` nobody reads. Cheapest real win here.
-5. **Onboarding + landing page** (~2–3 days). `/` redirects straight to login;
-   there is no marketing page. For a portfolio this is the highest-visibility
-   item — it's what a recruiter sees first.
-6. **Legal pages** (~2 hours). Terms + privacy policy, required before taking
+4. **Legal pages** (~2 hours). Terms + privacy policy, required before taking
    payment or personal data.
 
-**Recommendation:** for a portfolio, do 4 and 5 and stop — they carry almost all
-the perceived-quality value. Only start 1–3 when a real user has asked to pay.
+~~Error tracking~~ and ~~onboarding + landing page~~ — the two items this report
+recommended doing first — shipped on 2026-08-01 (§2).
+
+**Recommendation:** the portfolio-value work is done. Only start 1–3 when a real
+user has asked to pay; 4 only matters once you handle real personal data.
+
+---
+
+## 6. Smaller follow-ups
+
+Not blocking anything, listed so they aren't forgotten.
+
+- **Nightly reset job.** Would clear visitor-created junk and undo edits, which
+  the delete guard does not cover.
+- **The Docker image is untested.** `next start` warns it does not work with
+  `output: "standalone"`, and the `.next/standalone/server.js` the image actually
+  ships is never exercised by a test.
+- **Hero screenshots are dark-only**, so they read as product shots on the light
+  landing page rather than blending in. A light capture pass plus a `<picture>`
+  swap would fix it.
