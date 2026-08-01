@@ -1,0 +1,58 @@
+name: Reset demo data
+
+# The landing page invites anyone to try the live demo, so visitors accumulate
+# records and edits. DEMO_MODE blocks deletion but not creation; this rebuilds
+# the workspace nightly.
+#
+# Deliberately a scheduled workflow rather than a Vercel cron hitting a
+# protected route: that would mean publishing a URL whose job is to erase the
+# database. Here there is no endpoint at all — see
+# docs/superpowers/specs/2026-08-01-demo-reset-design.md.
+
+on:
+  schedule:
+    # 19:00 UTC = 03:00 in Manila. GitHub may delay scheduled runs under load;
+    # for a nightly tidy-up that is fine.
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reset-demo
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+      TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+      # Confirms the destructive run is intentional; the script refuses a
+      # remote target without it.
+      ALLOW_REMOTE_DB: "true"
+      # postinstall runs `prisma generate`, which wants a URL present. The
+      # reset targets Turso, so this file is never created.
+      DATABASE_URL: "file:./unused.db"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fail fast if the database secrets are missing
+        run: |
+          if [ -z "${TURSO_DATABASE_URL}" ]; then
+            echo "TURSO_DATABASE_URL secret is not set — nothing to reset."
+            exit 1
+          fi
+
+      - name: Reset the demo workspace
+        run: npm run demo:reset
