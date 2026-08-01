@@ -13,10 +13,10 @@ export function StatCard({
   icon: LucideIcon;
 }) {
   return (
-    <Card className="p-5">
+    <Card interactive className="p-5">
       <div className="flex items-center justify-between">
         <p className="text-[13px] font-medium text-ink-muted">{label}</p>
-        <span className="rounded-lg bg-accent-soft p-1.5 text-accent">
+        <span className="rounded-lg bg-accent-soft p-1.5 text-accent transition-colors duration-200 group-hover:bg-accent group-hover:text-on-accent">
           <Icon className="h-4 w-4" />
         </span>
       </div>

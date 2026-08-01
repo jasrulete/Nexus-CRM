@@ -43,6 +43,13 @@ test("contact detail opens from the list", async ({ page }) => {
   await expect(page.getByText("AI insights")).toBeVisible();
 });
 
+test("the sidebar brand returns to the dashboard", async ({ page }) => {
+  await page.goto("/contacts");
+  await page.getByRole("link", { name: "Nexus CRM home" }).first().click();
+
+  await expect(page).toHaveURL(/\/dashboard$/);
+});
+
 test("the pipeline board renders its stage columns", async ({ page }) => {
   await page.goto("/deals");
   for (const stage of ["Lead", "Qualified", "Proposal"]) {

@@ -1,5 +1,6 @@
 import { KanbanSquare, Sparkles, ShieldCheck } from "lucide-react";
 
+import { Card } from "@/components/ui/card";
 import { ProductShot } from "./product-shot";
 
 // Same three pillars the sign-in panel leads with, so the product tells one
@@ -27,11 +28,8 @@ export function FeatureGrid() {
     <section className="mx-auto max-w-6xl px-6 py-16 sm:py-20">
       <div className="grid gap-6 sm:grid-cols-3">
         {features.map((feature) => (
-          <div
-            key={feature.title}
-            className="rounded-xl border border-edge bg-surface p-6 shadow-sm"
-          >
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent">
+          <Card interactive key={feature.title} className="p-6">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-accent-soft text-accent transition-colors duration-200 group-hover:bg-accent group-hover:text-on-accent">
               <feature.icon className="h-4.5 w-4.5" />
             </span>
             <h2 className="mt-4 text-base font-semibold tracking-tight text-ink">
@@ -40,7 +38,7 @@ export function FeatureGrid() {
             <p className="mt-2 text-sm leading-6 text-ink-muted">
               {feature.text}
             </p>
-          </div>
+          </Card>
         ))}
       </div>
 

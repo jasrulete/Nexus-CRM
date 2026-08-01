@@ -7,7 +7,7 @@ export function LandingNav() {
   return (
     <header className="border-b border-edge/70">
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-        <BrandLockup />
+        <BrandLockup href="/" />
 
         <div className="flex items-center gap-1.5 sm:gap-3">
           <a

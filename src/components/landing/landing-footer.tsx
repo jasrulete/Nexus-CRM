@@ -6,7 +6,7 @@ export function LandingFooter() {
     <footer className="mx-auto max-w-6xl px-6 py-12">
       <div className="flex flex-col gap-6 border-t border-edge/70 pt-8 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <BrandLockup />
+          <BrandLockup href="/" />
           <p className="mt-3 max-w-md text-sm leading-6 text-ink-muted">
             A portfolio project built by{" "}
             <span className="font-medium text-ink">Jeric Rulete</span> to

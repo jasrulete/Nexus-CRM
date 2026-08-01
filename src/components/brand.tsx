@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { cn } from "@/lib/utils";
 
 // The "nexus" mark: a hub node connected to satellites — a network of
@@ -34,13 +36,43 @@ export function BrandMark({ className }: { className?: string }) {
   );
 }
 
-export function BrandLockup({ className }: { className?: string }) {
-  return (
-    <span className={cn("inline-flex items-center gap-2.5", className)}>
+/**
+ * Pass `href` to make the lockup a home link. Each place it renders already
+ * knows the visitor's state — the sidebar only exists behind auth, and the
+ * proxy keeps signed-in users off `/` and `/login` — so the destination is
+ * decided at the call site rather than by checking the session again here.
+ */
+export function BrandLockup({
+  className,
+  href,
+}: {
+  className?: string;
+  href?: string;
+}) {
+  const content = (
+    <>
       <BrandMark />
       <span className="text-[15px] font-semibold tracking-tight text-ink">
         Nexus CRM
       </span>
-    </span>
+    </>
+  );
+
+  const classes = cn("inline-flex items-center gap-2.5", className);
+
+  if (!href) return <span className={classes}>{content}</span>;
+
+  return (
+    <Link
+      href={href}
+      aria-label="Nexus CRM home"
+      className={cn(
+        classes,
+        "rounded-lg transition-opacity hover:opacity-80",
+        "focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent",
+      )}
+    >
+      {content}
+    </Link>
   );
 }
