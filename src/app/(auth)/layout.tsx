@@ -33,7 +33,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           }}
         />
         <div className="relative">
-          <BrandLockup className="[&_span:last-child]:text-white" />
+          <BrandLockup href="/" className="[&_span:last-child]:text-white" />
         </div>
         <div className="relative space-y-7">
           <h1 className="max-w-md text-3xl font-semibold leading-tight tracking-tight text-white">
@@ -66,7 +66,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
       <main className="flex flex-1 items-center justify-center bg-canvas px-6 py-12">
         <div className="w-full max-w-sm">
           <div className="mb-8 lg:hidden">
-            <BrandLockup />
+            <BrandLockup href="/" />
           </div>
           {children}
         </div>

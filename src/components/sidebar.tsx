@@ -27,10 +27,10 @@ export function Sidebar() {
     <aside className="sticky top-0 flex h-dvh w-16 shrink-0 flex-col border-r border-edge bg-surface md:w-56">
       <div className="flex h-14 items-center border-b border-edge px-3 md:px-5">
         <span className="hidden md:block">
-          <BrandLockup />
+          <BrandLockup href="/dashboard" />
         </span>
         <span className="md:hidden">
-          <BrandLockup className="[&>span:last-child]:hidden" />
+          <BrandLockup href="/dashboard" className="[&>span:last-child]:hidden" />
         </span>
       </div>
       <nav className="flex-1 space-y-1 p-2 md:p-3">

@@ -12,6 +12,14 @@ test("the landing page is public and shows the product", async ({ page }) => {
   ).toBeVisible();
 });
 
+test("the brand lockup links home for signed-out visitors", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(
+    page.getByRole("link", { name: "Nexus CRM home" }).first(),
+  ).toHaveAttribute("href", "/");
+});
+
 test("the hero call to action reaches sign-in", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Try the live demo" }).click();
