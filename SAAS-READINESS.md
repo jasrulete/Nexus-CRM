@@ -94,6 +94,18 @@ e2e tests, and a production build. Current suite: **67 unit tests, 12 e2e tests*
 | **Dark mode never applied to signed-out visitors.** The proxy matcher excluded image extensions but not `.js`, so `/theme-init.js` was auth-gated and answered `307 → /login`. A dark-mode visitor got a light landing and login page, then a dark app after signing in | Medium | `theme-init.js` excluded from the matcher explicitly |
 | **The e2e suite failed locally on every run** while passing in CI, because dev compiles routes on first request and overran Playwright's 5s assertion and 30s per-test defaults | Low | Headroom for local runs only; CI keeps the defaults |
 
+### Nightly demo reset
+A scheduled GitHub Actions workflow rebuilds the demo workspace each night:
+every CRM row is deleted and re-seeded, while the `User` table is left alone so
+real logins survive. `DEMO_MODE` blocks deletion but not creation or edits, so
+without this the demo drifts from the state a recruiter should see.
+
+Deliberately a scheduled workflow rather than a Vercel cron hitting a protected
+route — that would mean publishing a URL whose job is to erase the database.
+Needs `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` as repository secrets. Run it
+on demand from the Actions tab, or locally with `npm run demo:reset` (which
+targets the local database unless `ALLOW_REMOTE_DB=true`).
+
 ### Demo protection
 `DEMO_MODE=true` blocks the shared demo account from deleting records. This
 became necessary the moment `/` started publicly inviting visitors to the demo —
@@ -167,8 +179,8 @@ user has asked to pay; 4 only matters once you handle real personal data.
 
 Not blocking anything, listed so they aren't forgotten.
 
-- **Nightly reset job.** Would clear visitor-created junk and undo edits, which
-  the delete guard does not cover. The only item left here.
+- **Nothing outstanding.** The nightly reset shipped (see §2); the Docker
+  artifact is covered by the e2e suite.
 
 Worth knowing if you touch `playwright.config.ts`: the webServer readiness URL
 differs by mode on purpose. CI waits on `/api/health` so the first DB-backed
