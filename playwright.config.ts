@@ -21,9 +21,16 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    // CI exercises the production build; locally reuse whatever dev server is up.
-    command: process.env.CI ? "npm run start" : "npm run dev",
-    url: baseURL,
+    // CI serves .next/standalone/server.js — the same artifact the Docker image
+    // ships — so the suite covers what actually gets deployed. Locally, reuse
+    // whatever dev server is up.
+    command: process.env.CI ? "npm run start:standalone" : "npm run dev",
+    // Readiness differs by mode because a different thing is slow in each.
+    // CI serves a prebuilt app, so nothing compiles but the first DB-backed
+    // request is cold — /api/health runs SELECT 1 and warms Prisma and the
+    // SQLite driver before sign-in. Dev has the database ready but compiles
+    // routes on demand, so waiting on "/" gets the app shell built instead.
+    url: process.env.CI ? `${baseURL}/api/health` : baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },
