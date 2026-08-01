@@ -5,7 +5,7 @@ input & secrets, data, frontend, infra/CI/observability), then fixes applied and
 verified.
 
 Second pass: 2026-08-01 — shipped the landing page, error tracking, demo
-protection and the nightly reset, and fixed three bugs found along the way (§2).
+protection and the nightly reset, and fixed four bugs found along the way (§2).
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
 e2e tests, and a production build. Current suite: **72 unit tests, 14 e2e tests**.
@@ -93,6 +93,7 @@ e2e tests, and a production build. Current suite: **72 unit tests, 14 e2e tests*
 | **Local development wrote to the production database.** `.env` carried a populated `TURSO_DATABASE_URL` and no `DATABASE_URL`, and `createDbAdapter()` preferred Turso unconditionally — so `next dev`, `next start` and the whole e2e suite connected to production. It had already deposited 9 `Playwright E2E…` contacts there, a third of the contact list | High | Turso is ignored outside Vercel unless `ALLOW_REMOTE_DB=true`. The `db:seed` guard existed but was never extended to the app itself. Docker is unaffected (local file volume). The junk contacts were deleted |
 | **Dark mode never applied to signed-out visitors.** The proxy matcher excluded image extensions but not `.js`, so `/theme-init.js` was auth-gated and answered `307 → /login`. A dark-mode visitor got a light landing and login page, then a dark app after signing in | Medium | `theme-init.js` excluded from the matcher explicitly |
 | **The e2e suite failed locally on every run** while passing in CI, because dev compiles routes on first request and overran Playwright's 5s assertion and 30s per-test defaults | Low | Headroom for local runs only; CI keeps the defaults |
+| **The demo account would silently lose its ADMIN role on any re-seed.** `seed.ts` assigned `ADMIN` only when it created the very first user (`userCount === 0 ? "ADMIN" : "MEMBER"`), so re-seeding alongside the member and personal accounts would have brought the published demo back as a `MEMBER` — quietly changing what it can do, with nothing failing to signal it. Latent until the nightly reset made re-seeding routine | Medium | `ensureDemoUser()` pins the role instead of inferring it from user count |
 
 ### Nightly demo reset
 A scheduled GitHub Actions workflow rebuilds the demo workspace each night:
