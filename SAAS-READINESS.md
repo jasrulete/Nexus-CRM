@@ -71,6 +71,14 @@ e2e tests, and a production build. Current suite: **67 unit tests, 12 e2e tests*
   `.dark` class `theme-init.js` sets from localStorage, which can disagree with
   the OS. The hidden variant is lazy and never fetched (~70 KB of images per
   page load either way).
+- **The e2e suite now runs against the Docker artifact.** CI used to serve
+  `next start`, which Next warns does not work with `output: "standalone"`, so
+  the `.next/standalone/server.js` the image actually ships was never executed
+  by a test. `npm run start:standalone` assembles the bundle the way the
+  Dockerfile's runner stage does — `next build` leaves out `.next/static` and
+  `public/` — and Playwright serves that in CI. It also pins a relative `file:`
+  `DATABASE_URL` to an absolute path first, because `server.js` chdirs into its
+  own directory and would otherwise open a different, empty database.
 - **Error tracking (Sentry).** Wired to the Next 16 instrumentation hooks, so
   server component / route handler / server action errors are reported instead
   of vanishing into `console.error`. Browser events tunnel through `/monitoring`
@@ -160,8 +168,9 @@ user has asked to pay; 4 only matters once you handle real personal data.
 Not blocking anything, listed so they aren't forgotten.
 
 - **Nightly reset job.** Would clear visitor-created junk and undo edits, which
-  the delete guard does not cover.
-- **The Docker image is untested.** `next start` warns it does not work with
-  `output: "standalone"`, and the `.next/standalone/server.js` the image actually
-  ships is never exercised by a test. This is the only remaining item here with
-  a correctness risk rather than a cosmetic one.
+  the delete guard does not cover. The only item left here.
+
+Worth knowing if you touch `playwright.config.ts`: the webServer readiness URL
+differs by mode on purpose. CI waits on `/api/health` so the first DB-backed
+request is warm before sign-in; dev waits on `/` so the app shell is compiled.
+Using one for both makes the first test in that mode flaky.
