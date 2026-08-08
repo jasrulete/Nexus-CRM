@@ -92,6 +92,46 @@ test("extra context can be added before drafting", async ({ page }) => {
   await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
 });
 
+test("a file can be attached as context for the draft", async ({ page }) => {
+  await page.goto("/contacts");
+  await page.locator('a[href^="/contacts/"]').first().click();
+  await page.waitForURL(/\/contacts\/.+/);
+
+  await page.getByRole("button", { name: /Add context for the draft/i }).click();
+  await page.getByLabel("Attach a PDF or text file").setInputFiles({
+    name: "renewal-notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("Renewal is due in March. Budget approved at 42000 USD."),
+  });
+
+  // The chip proves the server parsed it — the count comes from extracted text.
+  await expect(page.getByText(/renewal-notes\.txt/)).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText(/chars/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Draft a follow-up email" }).click();
+  await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
+
+  await page.getByRole("button", { name: "Remove attached file" }).click();
+  await expect(page.getByText(/renewal-notes\.txt/)).toBeHidden();
+});
+
+test("an unsupported file is rejected with a reason", async ({ page }) => {
+  await page.goto("/contacts");
+  await page.locator('a[href^="/contacts/"]').first().click();
+  await page.waitForURL(/\/contacts\/.+/);
+
+  await page.getByRole("button", { name: /Add context for the draft/i }).click();
+  await page.getByLabel("Attach a PDF or text file").setInputFiles({
+    name: "payload.exe",
+    mimeType: "application/x-msdownload",
+    buffer: Buffer.from("MZ binary"),
+  });
+
+  await expect(page.getByText(/Only PDF, \.txt and \.md/i)).toBeVisible({
+    timeout: 20_000,
+  });
+});
+
 test("the pipeline board renders its stage columns", async ({ page }) => {
   await page.goto("/deals");
   for (const stage of ["Lead", "Qualified", "Proposal"]) {
