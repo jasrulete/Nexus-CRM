@@ -7,8 +7,11 @@ verified.
 Second pass: 2026-08-01 — shipped the landing page, error tracking, demo
 protection and the nightly reset, and fixed four bugs found along the way (§2).
 
+Third pass: 2026-08-08 — the AI panel gained sending, typed context and file
+attachments (§3).
+
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **72 unit tests, 14 e2e tests**.
+e2e tests, and a production build. Current suite: **89 unit tests, 18 e2e tests**.
 
 ---
 
@@ -115,18 +118,85 @@ after them. Creating and editing stay allowed so the demo still feels live.
 
 ---
 
-## 3. Deploy checklist
+## 3. Added in the 2026-08-08 pass
 
-Both of these are inert without their environment variable, by design — a clone
-or self-hosted instance is unaffected.
+The AI panel could draft a follow-up but not act on it, and the model only ever
+saw stored records.
+
+### Sending — the recipient is you, never the contact
+
+The demo is publicly linked with published credentials, so a send-to-anyone
+button would make it a spam relay: burned sending domain, or a terminated
+provider account. Forcing the recipient to the signed-in account's own address
+means the worst a visitor can do is mail the demo account. The button says
+**"Send to yourself"** — "Send" would imply the contact receives it.
+
+| Condition | Behaviour |
+|---|---|
+| Key configured, real account | Delivers to the signed-in user's address |
+| `DEMO_MODE` + the demo account | Skipped, reported as simulated |
+| No `RESEND_API_KEY` | Skipped, reported as not configured |
+
+An `EMAIL` Activity is logged **in every case**, so the flow lands in the
+activity feed and stays visible in the demo even when nothing is delivered.
+`src/lib/email.ts` calls Resend with `fetch`, matching how `ai/provider.ts`
+already talks to Gemini and Groq — no new dependency.
+
+### Context: typed, and from a file
+
+An optional box before drafting, plus an attached PDF/`.txt`/`.md`. Both feed
+the same delimited `<user-context>` block, so there is one prompt path rather
+than two.
+
+**Files are never stored** — read, parsed, used for one draft, dropped. That is
+what keeps uploads safe here: the risk worth caring about was *hosting*, and a
+visitor cannot park malware or illegal content on infrastructure that keeps
+nothing. **Persisting attachments would reopen that decision**, and would also
+need blob storage, retention rules and the nightly reset extended to purge them.
+
+Two caps, for different reasons: 5 MB rejects absurd uploads before parsing, and
+20,000 extracted characters is what actually bounds token cost — a small PDF can
+hold a great deal of text. Both are enforced server-side, and the character cap
+is re-applied when the client sends the text back.
+
+`unpdf` rather than `pdf-parse`: it targets serverless runtimes instead of
+assuming a filesystem.
+
+### Two things worth remembering
+
+- **Binary fixtures need `.gitattributes`.** The PDF test fixture is small and
+  mostly ASCII, so git did not auto-detect it as binary and was about to apply
+  CRLF conversion — corrupting it on checkout and failing the extraction test in
+  CI but never locally. Caught before merge; `*.pdf` and friends are now marked.
+- **Labelling context as "background, not instructions" reduces
+  instruction-following, it does not prevent it.** A test file saying "mention
+  the parrot by name" was obeyed. Acceptable while the content is the user's own,
+  feeding their own draft, with no other user's data in the prompt and no tools
+  available to the model. It stops being acceptable if either changes.
+
+---
+
+## 4. Deploy checklist
+
+Every one of these is inert without its environment variable, by design — a
+clone or self-hosted instance is unaffected.
 
 | Variable | Where | Effect |
 |---|---|---|
 | `DEMO_MODE=true` | Vercel (Production) | Demo account cannot delete records |
 | `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
+| `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |
+| `EMAIL_FROM` | Vercel (Production) | Sender identity, e.g. `Nexus CRM <onboarding@resend.dev>` |
+| `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | GitHub repo secrets | The nightly reset (§2) can reach production |
 
 `NEXT_PUBLIC_*` values are inlined at **build** time, so a redeploy that reuses
-the build cache will not pick up a changed DSN.
+the build cache will not pick up a changed DSN. The rest are read at runtime, so
+a plain redeploy is enough.
+
+The email pair only matters when signing in as a real account: the demo takes
+the simulated path regardless. Resend delivers only to your own signup address
+until a domain is verified — which is exactly the recipient here, so no domain
+purchase is needed.
 
 Optional: `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` upload source maps
 so stack traces name real files. Builds succeed without them.
@@ -136,7 +206,7 @@ baselines an existing database, then applies only what is missing.
 
 ---
 
-## 4. Known gaps — accepted, with reasoning
+## 5. Known gaps — accepted, with reasoning
 
 These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 
@@ -152,7 +222,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 
 ---
 
-## 5. What's still missing to be a commercial SaaS
+## 6. What's still missing to be a commercial SaaS
 
 Ranked by what would actually block charging money. None of these are bugs —
 they're unbuilt product surface.
@@ -176,12 +246,18 @@ user has asked to pay; 4 only matters once you handle real personal data.
 
 ---
 
-## 6. Smaller follow-ups
+## 7. Smaller follow-ups
 
 Not blocking anything, listed so they aren't forgotten.
 
 - **Nothing outstanding.** The nightly reset shipped (see §2); the Docker
   artifact is covered by the e2e suite.
+
+Worth knowing before adding persistent file attachments: uploads are enabled in
+the public demo **because nothing is stored** (§3). Storing them reintroduces
+exactly the risk that made them acceptable, and additionally needs blob storage,
+retention rules, and the nightly reset extended to purge them. It is a design
+pass, not an increment.
 
 Worth knowing if you touch `playwright.config.ts`: the webServer readiness URL
 differs by mode on purpose. CI waits on `/api/health` so the first DB-backed
