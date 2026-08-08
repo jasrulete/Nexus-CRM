@@ -1,0 +1,10 @@
+# Binary fixtures and assets must never get line-ending conversion. The PDF test
+# fixture is small and mostly ASCII, so git does not auto-detect it as binary —
+# without this it is corrupted on checkout and the extraction test fails.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.db binary

@@ -7,16 +7,20 @@ import {
   Gauge,
   Loader2,
   Mail,
+  Paperclip,
   Send,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   draftFollowUp,
+  extractFileText,
   scoreContact,
   sendFollowUp,
   summarizeContact,
   type AiActionResult,
 } from "@/server/actions/ai";
+import type { FileContext } from "@/lib/file-context";
 import { Button } from "@/components/ui/button";
 import { ScorePill } from "@/components/score-pill";
 
@@ -39,6 +43,28 @@ export function AiPanel({
   const [context, setContext] = useState("");
   const [showContext, setShowContext] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const [file, setFile] = useState<FileContext | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+
+  function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const chosen = e.target.files?.[0];
+    e.target.value = ""; // let the same file be re-picked after removing it
+    if (!chosen) return;
+
+    setFileError(null);
+    setBusy("file");
+    startTransition(async () => {
+      try {
+        const data = new FormData();
+        data.set("file", chosen);
+        const r = await extractFileText(data);
+        if (r.ok) setFile(r.file);
+        else setFileError(r.message);
+      } finally {
+        setBusy(null);
+      }
+    });
+  }
 
   function run(kind: "score" | "summary" | "email") {
     setBusy(kind);
@@ -54,7 +80,11 @@ export function AiPanel({
           const r =
             kind === "summary"
               ? await summarizeContact(contactId)
-              : await draftFollowUp(contactId, context.trim() || undefined);
+              : await draftFollowUp(
+                  contactId,
+                  context.trim() || undefined,
+                  file ?? undefined,
+                );
           setResult(r);
           setPanel(kind === "summary" ? "summary" : "email");
         }
@@ -179,6 +209,56 @@ export function AiPanel({
             <p className="mt-1 text-[11px] text-ink-faint">
               {context.length}/2000 · used for the next draft only, not saved
             </p>
+
+            <div className="mt-2.5">
+              {file ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-edge bg-surface px-2.5 py-1.5">
+                  <span className="min-w-0 truncate text-[12px] text-ink">
+                    <Paperclip className="mr-1 inline h-3 w-3 text-ink-faint" />
+                    {file.name}
+                    <span className="text-ink-faint">
+                      {" "}
+                      · {file.text.length.toLocaleString()} chars
+                      {file.truncated ? " (truncated)" : ""}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFile(null)}
+                    aria-label="Remove attached file"
+                    className="shrink-0 rounded p-0.5 text-ink-faint transition-colors hover:text-ink cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <label className="inline-flex cursor-pointer items-center gap-1.5 text-[12px] font-medium text-ink-faint transition-colors hover:text-ink">
+                  {busy === "file" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Paperclip className="h-3.5 w-3.5" />
+                  )}
+                  Attach a PDF or text file
+                  <input
+                    type="file"
+                    accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+                    onChange={pickFile}
+                    disabled={pending}
+                    className="sr-only"
+                    aria-label="Attach a PDF or text file"
+                  />
+                </label>
+              )}
+              {fileError ? (
+                <p className="mt-1 text-[11px] text-danger">{fileError}</p>
+              ) : null}
+              {/* The file is parsed and dropped — but its text still leaves the
+                  app, which the user should know before attaching. */}
+              <p className="mt-1 text-[11px] text-ink-faint">
+                Read once for the draft and never stored. Its text is sent to the
+                AI provider.
+              </p>
+            </div>
           </div>
         ) : null}
       </div>
