@@ -44,6 +44,10 @@ const optionalDate = z
 
 export const idSchema = z.string().min(1).max(64);
 
+// Optional background the user types before generating a draft. Capped so a
+// paste cannot blow past the model's context or the free-tier token budget.
+export const aiContextSchema = z.string().trim().max(2000).optional();
+
 // ---------- contacts ----------
 
 export const contactSchema = z.object({
