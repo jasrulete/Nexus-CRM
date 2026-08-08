@@ -50,6 +50,48 @@ test("the sidebar brand returns to the dashboard", async ({ page }) => {
   await expect(page).toHaveURL(/\/dashboard$/);
 });
 
+// Runs green with no AI or email credentials: draftFollowUp falls back to the
+// heuristic writer, and sendFollowUp takes its simulated path.
+test("a drafted follow-up can be sent to yourself and lands in the feed", async ({
+  page,
+}) => {
+  await page.goto("/contacts");
+  await page.locator('a[href^="/contacts/"]').first().click();
+  await page.waitForURL(/\/contacts\/.+/);
+
+  await page.getByRole("button", { name: "Draft a follow-up email" }).click();
+  // Waits on a real model call when an AI key is configured, so this needs more
+  // than the 5s budget a local UI interaction gets.
+  await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
+
+  await page
+    .getByRole("button", { name: "Send this draft to your own inbox" })
+    .click();
+
+  // Matches the result message specifically, not the static hint above the
+  // button — otherwise this passes even when the send never happened.
+  await expect(
+    page.getByText(/Set RESEND_API_KEY|does not deliver real email|^Sent to /),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByText(/\[simulated send\]|Sent to /).first(),
+  ).toBeVisible({ timeout: 15_000 });
+});
+
+test("extra context can be added before drafting", async ({ page }) => {
+  await page.goto("/contacts");
+  await page.locator('a[href^="/contacts/"]').first().click();
+  await page.waitForURL(/\/contacts\/.+/);
+
+  await page.getByRole("button", { name: /Add context for the draft/i }).click();
+  const box = page.getByLabel("Extra context for the draft");
+  await expect(box).toBeVisible();
+  await box.fill("They just closed a funding round.");
+
+  await page.getByRole("button", { name: "Draft a follow-up email" }).click();
+  await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
+});
+
 test("the pipeline board renders its stage columns", async ({ page }) => {
   await page.goto("/deals");
   for (const stage of ["Lead", "Qualified", "Proposal"]) {
