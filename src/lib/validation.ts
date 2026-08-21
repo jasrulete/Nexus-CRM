@@ -48,6 +48,15 @@ export const idSchema = z.string().min(1).max(64);
 // paste cannot blow past the model's context or the free-tier token budget.
 export const aiContextSchema = z.string().trim().max(2000).optional();
 
+// The draft the client sends back to be mailed and logged as an Activity.
+// Capped like every other activity body: without this it was the one write
+// path that could put an unbounded string into the table.
+export const aiDraftSchema = z
+  .string()
+  .trim()
+  .min(1, "There is no draft to send")
+  .max(5000, "That draft is too long to send");
+
 // ---------- contacts ----------
 
 export const contactSchema = z.object({

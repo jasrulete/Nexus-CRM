@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate } from "@/lib/authz";
+import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
@@ -29,6 +30,12 @@ export async function createTask(
   if (!parsed.success) return { errors: fieldErrors(parsed.error) };
 
   const { dueDate, contactId, dealId, ...data } = parsed.data;
+
+  // Same guard as createActivity: an id from a stale form must not reach
+  // Prisma as a dangling foreign key.
+  const missing = await findMissingRelation({ contactId, dealId });
+  if (missing) return { message: missingRelationMessage(missing) };
+
   const task = await prisma.task.create({
     data: {
       ...data,

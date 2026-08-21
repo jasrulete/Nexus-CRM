@@ -11,7 +11,7 @@ import {
 } from "@/lib/ai/heuristics";
 import { aiProviderName, extractJson, generateText } from "@/lib/ai/provider";
 import { rateLimit } from "@/lib/rate-limit";
-import { aiContextSchema, idSchema } from "@/lib/validation";
+import { aiContextSchema, aiDraftSchema, idSchema } from "@/lib/validation";
 import { emailConfigured, sendEmail, splitDraft } from "@/lib/email";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import {
@@ -272,7 +272,16 @@ export async function sendFollowUp(
   const contact = await loadContactContext(contactId);
   if (!contact) return { ok: false, provider: "none", message: "Contact not found" };
 
-  const { subject, body } = splitDraft(draft);
+  const parsedDraft = aiDraftSchema.safeParse(draft);
+  if (!parsedDraft.success) {
+    return {
+      ok: false,
+      provider: "email",
+      message: parsedDraft.error.issues[0]?.message ?? "That draft cannot be sent.",
+    };
+  }
+
+  const { subject, body } = splitDraft(parsedDraft.data);
 
   const simulated = isLockedDemoAccount(user) || !emailConfigured();
   const result = simulated ? null : await sendEmail({ to: user.email, subject, text: body });

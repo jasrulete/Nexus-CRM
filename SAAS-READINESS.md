@@ -14,7 +14,7 @@ Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **108 unit tests, 20 e2e tests**.
+e2e tests, and a production build. Current suite: **111 unit tests, 20 e2e tests**.
 
 ---
 
@@ -194,6 +194,7 @@ the running system.
 | **Any member could read every registered user's email.** The Settings "Team" card selected `email` with no admin condition, three lines above an audit-log query that *was* gated. Registration is open, so a throwaway account read the whole roster | High | Addresses gated to admins and the user's own row; names and roles stay as team context. Covered by a Playwright test that registers a fresh MEMBER |
 | The nightly reset declared the **production Turso write token at job level**, so it was in scope for `npm ci` — and `postinstall` runs `prisma generate` over a 921-package tree | High | Token scoped to the two steps that need it; `npm ci --ignore-scripts` plus an explicit `prisma generate`; all five GitHub Action uses pinned to commit SHAs |
 | **The nightly reset erased every audit entry**, including real accounts' — `auditLog.deleteMany()` with no filter — giving the "full audit trail" the Settings page advertises a maximum retention of 24 hours. Any incident noticed the next morning had nothing left to investigate | High | Pruned, not emptied: the demo account's own entries go (they describe records the reset is deleting), everything else ages out on a 30-day window so the table stays bounded. `AuditLog` holds no foreign key into the CRM tables, so it was never needed for the ordered deletes around it. Rule extracted to `auditPruneWhere()` and unit-tested |
+| **SECURITY.md asserted two controls that did not exist**: a `dangerouslySetInnerHTML` that appears nowhere in the tree, and relation-ID existence checks that `createActivity` and `createTask` did not perform. A security doc that overstates converts every known gap into a credibility problem | Medium | Implemented the missing checks rather than deleting the claim (`findMissingRelation`), so a stale form now gets a message instead of a Prisma P2003 error boundary. Corrected the inline-script claim, made the raw-SQL claim precise (one constant liveness probe), and validated the AI draft that `sendFollowUp` was writing unbounded into `Activity.content` — which was the last thing making "every mutation parses input with zod" false |
 | `next@16.2.11` carried a **direct high-severity advisory**, and the August release covers 16.3/15.5 — not 16.2 | High | Upgraded to `16.3.1`, `eslint-config-next` aligned. Advisories went 13 → 3 |
 
 **Correcting §5's advisory row.** It said the `postcss`/`sharp` advisories were

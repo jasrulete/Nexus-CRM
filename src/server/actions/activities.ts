@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate } from "@/lib/authz";
+import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { activitySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 export async function createActivity(
@@ -27,6 +28,12 @@ export async function createActivity(
   if (!contactId && !dealId && !companyId) {
     return { message: "Activity must be attached to a record" };
   }
+
+  // Without this a stale tab whose contact was just deleted throws Prisma
+  // P2003 out of the create, and the user gets the error boundary instead
+  // of a message — losing what they typed.
+  const missing = await findMissingRelation({ contactId, dealId, companyId });
+  if (missing) return { message: missingRelationMessage(missing) };
 
   const activity = await prisma.activity.create({
     data: {

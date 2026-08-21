@@ -31,11 +31,17 @@ free, self-hosted, single-instance app.
 
 - Every mutation parses input with **zod** (`src/lib/validation.ts`) —
   lengths, formats, enums — before touching the database.
-- Prisma parameterizes all queries (no raw SQL anywhere).
-- React escapes output by default; the only `dangerouslySetInnerHTML` is a
-  static, constant theme-init script.
-- Relation IDs coming from forms (`companyId`, `contactId`) are verified to
-  exist server-side before linking.
+- Prisma parameterizes every query. The one raw statement in the app is a
+  constant `SELECT 1` liveness probe (`src/app/api/health/route.ts`) with no
+  interpolation.
+- React escapes output by default, and there is no `dangerouslySetInnerHTML`
+  anywhere in the codebase — the theme script is an external file
+  (`public/theme-init.js`) loaded with `next/script`, not inlined.
+- Relation IDs coming from forms (`companyId`, `contactId`, `dealId`) are
+  verified to exist server-side before linking, in every action that accepts
+  one.
+- AI-generated text is rendered as plain text, never as HTML or markdown, so
+  model output has no path to the DOM.
 
 ## CSRF
 
