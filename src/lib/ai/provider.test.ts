@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { aiProviderName, extractJson } from "./provider";
+import { aiProviderName, extractJson, generateText } from "./provider";
 
 describe("extractJson", () => {
   it("parses a clean JSON object", () => {
@@ -48,5 +48,46 @@ describe("aiProviderName", () => {
     vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("GROQ_API_KEY", "");
     expect(aiProviderName()).toBeNull();
+  });
+});
+
+describe("generateText", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  // A provider that never answers is the likeliest production failure, and it
+  // has to reach the heuristic fallback rather than the page error boundary.
+  it.each([
+    ["a request timeout", Object.assign(new Error("timed out"), { name: "TimeoutError" })],
+    ["a network error", new TypeError("fetch failed")],
+  ])("returns null when the provider fails with %s", async (_label, error) => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "test-key");
+    vi.stubEnv("GROQ_API_KEY", "");
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
+
+    await expect(generateText("prompt")).resolves.toBeNull();
+  });
+
+  it("returns null rather than throwing when the provider answers with an error status", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "test-key");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("rate limited", { status: 429 }),
+    );
+
+    await expect(generateText("prompt")).resolves.toBeNull();
+  });
+
+  it("returns null without calling out when no key is configured", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(generateText("prompt")).resolves.toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

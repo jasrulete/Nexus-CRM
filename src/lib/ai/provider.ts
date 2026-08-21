@@ -1,4 +1,5 @@
 import "server-only";
+import * as Sentry from "@sentry/nextjs";
 
 /**
  * Pluggable AI provider. Free options, in priority order:
@@ -20,8 +21,22 @@ export function aiProviderName(): string | null {
 }
 
 export async function generateText(prompt: string): Promise<AiResult | null> {
-  if (process.env.GEMINI_API_KEY) return gemini(prompt);
-  if (process.env.GROQ_API_KEY) return groq(prompt);
+  // `!res.ok` inside each provider only covers a provider that *answered*. A
+  // timeout, DNS failure or connection reset rejects out of fetch, and without
+  // this the rejection escapes the calling server action into the error
+  // boundary — blanking the page instead of falling back to the heuristics
+  // that exist for exactly this case.
+  try {
+    if (process.env.GEMINI_API_KEY) return await gemini(prompt);
+    if (process.env.GROQ_API_KEY) return await groq(prompt);
+  } catch (error) {
+    // Catching here stops the rejection reaching `onRequestError`, which is
+    // what used to report it — so report it explicitly, or an expired key
+    // degrades every AI feature to heuristics indefinitely with no signal.
+    Sentry.captureException(error, { tags: { subsystem: "ai-provider" } });
+    console.error("ai provider request failed", error);
+    return null;
+  }
   return null;
 }
 
