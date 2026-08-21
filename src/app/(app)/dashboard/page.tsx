@@ -4,12 +4,13 @@ import {
   CircleDollarSign,
   KanbanSquare,
   ListTodo,
+  Target,
   Trophy,
   UserPlus,
 } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { OPEN_STAGES, STAGE_LABELS } from "@/lib/constants";
+import { OPEN_STAGES, STAGE_LABELS, weightedValue } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -71,6 +72,7 @@ export default async function DashboardPage() {
     ]);
 
   const pipelineValue = openDeals.reduce((s, d) => s + d.value, 0);
+  const forecast = weightedValue(openDeals);
   const wonDeals = closedDeals.filter((d) => d.stage === "WON");
   const winRate =
     closedDeals.length > 0
@@ -120,12 +122,18 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label="Open pipeline"
           value={formatCurrency(pipelineValue)}
           hint={`${openDeals.length} open deal${openDeals.length === 1 ? "" : "s"}`}
           icon={CircleDollarSign}
+        />
+        <StatCard
+          label="Weighted forecast"
+          value={formatCurrency(forecast)}
+          hint="Open pipeline × stage probability"
+          icon={Target}
         />
         <StatCard
           label="Won (all time)"

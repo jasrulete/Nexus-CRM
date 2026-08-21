@@ -2,7 +2,7 @@
 
 import { useDroppable } from "@dnd-kit/core";
 import { formatCompactCurrency, cn } from "@/lib/utils";
-import type { DealStage } from "@/lib/constants";
+import { STAGE_PROBABILITY, type DealStage } from "@/lib/constants";
 import { DealCard, type BoardDeal } from "./deal-card";
 
 const stageDot: Record<DealStage, string> = {
@@ -27,6 +27,13 @@ export function KanbanColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
   const total = deals.reduce((s, d) => s + d.value, 0);
+  const probability = STAGE_PROBABILITY[stage];
+  // Every card in a column shares a stage, so the column weight is one
+  // multiply rather than a per-deal sum. Only worth showing while a deal
+  // is still in play: at 100% it just repeats the total, and at 0% it is
+  // always zero — both read as a bug rather than a forecast.
+  const weighted = Math.round(total * probability);
+  const showWeighted = probability > 0 && probability < 1;
 
   return (
     <div className="flex w-64 shrink-0 flex-col">
@@ -36,8 +43,20 @@ export function KanbanColumn({
         <span className="text-[12px] tabular-nums text-ink-faint">
           {deals.length}
         </span>
-        <span className="ml-auto text-[12px] font-medium tabular-nums text-ink-faint">
+        <span
+          className="ml-auto text-[12px] font-medium tabular-nums text-ink-faint"
+          title={
+            showWeighted
+              ? `${formatCompactCurrency(total)} in ${label} · ${formatCompactCurrency(weighted)} weighted at ${Math.round(probability * 100)}%`
+              : `${formatCompactCurrency(total)} in ${label}`
+          }
+        >
           {formatCompactCurrency(total)}
+          {showWeighted ? (
+            <span className="ml-1.5 text-ink-faint/70">
+              {formatCompactCurrency(weighted)}
+            </span>
+          ) : null}
         </span>
       </div>
       <div
