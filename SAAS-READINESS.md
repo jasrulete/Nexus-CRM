@@ -10,8 +10,11 @@ protection and the nightly reset, and fixed four bugs found along the way (§2).
 Third pass: 2026-08-08 — the AI panel gained sending, typed context and file
 attachments (§3).
 
+Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
+then the deployment-surface fixes in §3a.
+
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **89 unit tests, 18 e2e tests**.
+e2e tests, and a production build. Current suite: **99 unit tests, 19 e2e tests**.
 
 ---
 
@@ -176,6 +179,39 @@ assuming a filesystem.
 
 ---
 
+## 3a. Fixed in the 2026-08-21 pass
+
+A research-and-audit pass (see `IMPROVEMENT-PLAN.md`) produced 58 verified
+findings. This first batch is the deployment-surface work — the class every
+earlier pass missed, because all three audited the source tree and none audited
+the running system.
+
+| Issue | Severity | Fix |
+|---|---|---|
+| **Preview deployments ran against the production database with the delete-lock off.** `createDbAdapter()` gated on `Boolean(process.env.VERCEL)`, but `VERCEL` is `"1"` on Preview and Development too — while `DEMO_MODE` is Production-only, so `isLockedDemoAccount()` returned false there. With ten live feature branches and credentials published in the README, any preview URL was an unguarded console onto production | Critical | Gates on `VERCEL` **and** `VERCEL_ENV === "production"`. Requiring both matters: `vercel env pull --environment=production` writes `VERCEL_ENV=production` into a local `.env`, so testing it alone would have re-opened the §2 "local dev wrote to production" incident |
+| `/monitoring` shipped as an **unauthenticated, unrate-limited relay** forwarding to a Sentry ingest host built from caller-supplied org/project ids — installed unconditionally, even with no DSN configured. The only unauthenticated non-GET surface in the app | High | `tunnelRoute` is set only when `NEXT_PUBLIC_SENTRY_DSN` exists, matching `sentryEnabled`. Verified absent from `.next/routes-manifest.json` after the change |
+| **A provider timeout blanked the whole page.** `!res.ok` only covers a provider that answered; a timeout or connection reset rejected out of `fetch`, escaped the AI server actions, and hit the error boundary — so the heuristic fallback never ran for the likeliest production failure | High | try/catch in `generateText`. It also reports to Sentry explicitly: catching the rejection stops it reaching `onRequestError`, which is what used to report it |
+| **Any member could read every registered user's email.** The Settings "Team" card selected `email` with no admin condition, three lines above an audit-log query that *was* gated. Registration is open, so a throwaway account read the whole roster | High | Addresses gated to admins and the user's own row; names and roles stay as team context. Covered by a Playwright test that registers a fresh MEMBER |
+| The nightly reset declared the **production Turso write token at job level**, so it was in scope for `npm ci` — and `postinstall` runs `prisma generate` over a 921-package tree | High | Token scoped to the two steps that need it; `npm ci --ignore-scripts` plus an explicit `prisma generate`; all five GitHub Action uses pinned to commit SHAs |
+| `next@16.2.11` carried a **direct high-severity advisory**, and the August release covers 16.3/15.5 — not 16.2 | High | Upgraded to `16.3.1`, `eslint-config-next` aligned. Advisories went 13 → 3 |
+
+**Correcting §5's advisory row.** It said the `postcss`/`sharp` advisories were
+"not fixable without downgrading to next@9". That was wrong: `next@16.3.1` is a
+non-semver-major bump that clears both plus the direct `next` advisory, and
+`npm audit fix` cleared four more. The three that remain
+(`prisma`, `@prisma/config`, `deepmerge-ts`) only "fix" by downgrading to Prisma
+6.12 — and `prisma` is a **devDependency**, the CLI, so none of the three ship to
+production. Wait for a Prisma 7 patch.
+
+**Known consequence, deliberate.** Preview deployments now fail rather than
+silently reaching production. Because `src/lib/db.ts` builds the adapter at
+module scope, that failure lands at **build** time, so a preview PR check goes
+red. To make previews work again, give them their own database and scope both
+`TURSO_DATABASE_URL` and `ALLOW_REMOTE_DB=true` to the Preview environment only.
+Set `DEMO_MODE=true` there as well.
+
+---
+
 ## 4. Deploy checklist
 
 Every one of these is inert without its environment variable, by design — a
@@ -183,7 +219,7 @@ clone or self-hosted instance is unaffected.
 
 | Variable | Where | Effect |
 |---|---|---|
-| `DEMO_MODE=true` | Vercel (Production) | Demo account cannot delete records |
+| `DEMO_MODE=true` | Vercel (Production **and Preview**) | Demo account cannot delete records. Preview matters: the delete-lock is inert wherever this is unset — see §3a |
 | `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
 | `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |
 | `EMAIL_FROM` | Vercel (Production) | Sender identity, e.g. `Nexus CRM <onboarding@resend.dev>` |
@@ -216,7 +252,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 | **Open registration into one shared workspace** — anyone can self-register and see all CRM data | It's a single-tenant showcase, not customer data | Invite-only registration, or real multi-tenancy (below) |
 | **In-memory rate limiter** resets per deploy and is per-instance | Free-tier single instance | Redis/Upstash-backed limiter |
 | **No backups configured** | Turso has its own snapshots | Documented restore procedure, tested |
-| **`postcss`/`sharp` advisories** inside Next's bundled deps | Not fixable without downgrading to next@9; not reachable from app code | Track the next Next.js patch |
+| **3 advisories in the `prisma` CLI chain** (`prisma`, `@prisma/config`, `deepmerge-ts`) | npm's only fix is a downgrade to Prisma 6.12; `prisma` is a devDependency, so none of it ships to production (corrected 2026-08-21 — see §3a) | Track the next Prisma 7 patch |
 | No password change / session revocation | No user-management UI exists at all | Account settings + "sign out everywhere" |
 | Unbounded list queries (kanban loads all deals, incl. all closed history) | Fine at demo scale | Pagination + date-bounded dashboard aggregates |
 
