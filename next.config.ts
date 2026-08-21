@@ -39,7 +39,13 @@ const nextConfig: NextConfig = {
 export const SENTRY_TUNNEL_ROUTE = "/monitoring";
 
 export default withSentryConfig(nextConfig, {
-  tunnelRoute: SENTRY_TUNNEL_ROUTE,
+  // Installed only when a DSN exists. The rewrite forwards to an ingest host
+  // built from *caller-supplied* org and project ids, and proxy.ts waives auth
+  // for the path — so without this condition an app with no DSN configured
+  // still ships an open, unrate-limited relay into anyone's Sentry quota.
+  tunnelRoute: process.env.NEXT_PUBLIC_SENTRY_DSN
+    ? SENTRY_TUNNEL_ROUTE
+    : undefined,
 
   // Source maps are uploaded only when CI supplies a token; a plain
   // `npm run build` (or a fork's build) must not fail for lack of one.
