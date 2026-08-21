@@ -10,7 +10,8 @@
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createDbAdapter } from "../src/lib/db-adapter";
-import { resolveResetTarget } from "../src/lib/reset-guard";
+import { auditPruneWhere, resolveResetTarget } from "../src/lib/reset-guard";
+import { DEMO_EMAIL } from "../src/lib/demo-guard";
 import { ensureDemoUser, seedDemoData } from "../prisma/seed-data";
 
 // "local" here means createDbAdapter() will ignore Turso, because both read the
@@ -20,7 +21,7 @@ const target = resolveResetTarget();
 const prisma = new PrismaClient({ adapter: createDbAdapter() });
 
 async function counts() {
-  const [companies, contacts, deals, tasks, activities, users] =
+  const [companies, contacts, deals, tasks, activities, users, auditLogs] =
     await Promise.all([
       prisma.company.count(),
       prisma.contact.count(),
@@ -28,23 +29,35 @@ async function counts() {
       prisma.task.count(),
       prisma.activity.count(),
       prisma.user.count(),
+      prisma.auditLog.count(),
     ]);
-  return { companies, contacts, deals, tasks, activities, users };
+  return { companies, contacts, deals, tasks, activities, users, auditLogs };
 }
 
 function describe(c: Awaited<ReturnType<typeof counts>>) {
-  return `${c.companies} companies, ${c.contacts} contacts, ${c.deals} deals, ${c.tasks} tasks, ${c.activities} activities, ${c.users} users`;
+  return `${c.companies} companies, ${c.contacts} contacts, ${c.deals} deals, ${c.tasks} tasks, ${c.activities} activities, ${c.users} users, ${c.auditLogs} audit entries`;
 }
 
 async function main() {
   console.log(`Resetting the ${target} demo workspace.`);
   console.log(`  before: ${describe(await counts())}`);
 
+  // AuditLog is pruned, not emptied — see auditPruneWhere. It holds no
+  // foreign key into the CRM tables (entityId is a plain string), so it is
+  // not part of the ordering below and a real account's security trail has
+  // no reason to die with the demo data.
+  const demoUser = await prisma.user.findUnique({
+    where: { email: DEMO_EMAIL },
+    select: { id: true },
+  });
+  await prisma.auditLog.deleteMany({
+    where: auditPruneWhere({ demoUserId: demoUser?.id ?? null, now: new Date() }),
+  });
+
   // Ordered so foreign keys are satisfied without relying on cascade
   // behaviour. User, Session and the migration ledger are never touched.
   await prisma.activity.deleteMany();
   await prisma.task.deleteMany();
-  await prisma.auditLog.deleteMany();
   await prisma.deal.deleteMany();
   await prisma.contact.deleteMany();
   await prisma.company.deleteMany();
