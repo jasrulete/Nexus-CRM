@@ -160,3 +160,12 @@ Vercel's serverless filesystem can't host the SQLite file, so production uses
 - Team invitations & per-record sharing controls
 - Import/export (CSV), webhooks, public API
 - Retrieval-augmented "ask your CRM" search over notes and activities
+
+## License
+
+[MIT](LICENSE) © Jeric Rulete — clone it, self-host it, learn from it.
+
+`package.json` stays `"private": true` deliberately: this is an application,
+not a publishable package, and that flag is the only thing standing between a
+stray `npm publish` and the registry. It does not restrict what you may do with
+the code — the licence above governs that.

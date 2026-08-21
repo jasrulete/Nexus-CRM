@@ -2,6 +2,15 @@
   "name": "nexus-crm",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasrulete/Nexus-CRM.git"
+  },
+  "homepage": "https://nexus-crm-jer2x.vercel.app",
+  "bugs": {
+    "url": "https://github.com/jasrulete/Nexus-CRM/issues"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
