@@ -26,7 +26,7 @@ five zero-dependency concept apps for offshore staffing / EOR operations.
 ## Features
 
 **CRM core**
-- 📇 Contacts & companies with search, status filters and rich detail pages
+- 📇 Contacts & companies with server-side search, filters and rich detail pages
 - 📊 Dashboard: open pipeline, win rate, revenue-won trend, pipeline by stage
 - 🗂️ Drag-and-drop deal kanban across six stages with live column totals
 - 📝 Activity timeline (notes, calls, emails, meetings) on every record
