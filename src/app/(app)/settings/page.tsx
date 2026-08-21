@@ -44,6 +44,16 @@ export default async function SettingsPage() {
       : Promise.resolve([]),
   ]);
 
+  // Registration is open, so without this a MEMBER could register a throwaway
+  // account and read every address that has ever signed up. Names and roles
+  // stay visible as team context; an address is PII and does not.
+  const roster = members.map((m) => ({
+    id: m.id,
+    name: m.name,
+    role: m.role,
+    email: isAdmin || m.id === user.id ? m.email : null,
+  }));
+
   return (
     <div className="mx-auto max-w-4xl">
       <PageHeader title="Settings" subtitle="Workspace, AI and security" />
@@ -104,12 +114,14 @@ export default async function SettingsPage() {
         <Card>
           <CardHeader title="Team" subtitle="Everyone in this workspace" />
           <ul className="divide-y divide-edge/60">
-            {members.map((m) => (
+            {roster.map((m) => (
               <li key={m.id} className="flex items-center gap-3 px-5 py-3">
                 <Avatar name={m.name} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{m.name}</p>
-                  <p className="truncate text-[12px] text-ink-faint">{m.email}</p>
+                  {m.email ? (
+                    <p className="truncate text-[12px] text-ink-faint">{m.email}</p>
+                  ) : null}
                 </div>
                 {m.role === "ADMIN" ? (
                   <Badge className="border-accent/25 bg-accent-soft text-accent">
