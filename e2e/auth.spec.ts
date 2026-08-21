@@ -76,3 +76,43 @@ test("a member cannot read other accounts' email addresses", async ({
   await expect(ownRow.getByText(email)).toBeVisible();
   await expect(page.getByText("demo@nexuscrm.dev")).toHaveCount(0);
 });
+
+// The authorization boundary the audit found had no test at any level: reads
+// are workspace-wide by design, so a member can open any contact — but the
+// update actions had no owner check while their delete siblings did, meaning
+// a member could rewrite every field of a record they cannot delete.
+test("a member cannot edit a contact owned by someone else", async ({
+  page,
+}) => {
+  const suffix = Date.now().toString().slice(-8);
+
+  // Registering makes a MEMBER — the seeded admin already exists — and the
+  // new account owns nothing, so every seeded contact belongs to someone else.
+  await page.goto("/register");
+  await page.getByLabel("Full name").fill(`Playwright Outsider ${suffix}`);
+  await page.getByLabel("Email").fill(`e2e-outsider-${suffix}@example.com`);
+  await page.getByLabel("Password").fill("outsider-password-123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  await page.goto("/contacts");
+  await page.locator('a[href^="/contacts/"]').first().click();
+  await expect(page).toHaveURL(/\/contacts\/.+/);
+
+  await page.getByRole("button", { name: "Edit" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel("First name").fill("Hijacked");
+  await dialog.getByRole("button", { name: /save|update/i }).click();
+
+  // Refused in the form rather than thrown, so the dialog stays open with the
+  // typed value intact instead of tripping the error boundary.
+  await expect(dialog.getByText("You can only edit records you own.")).toBeVisible();
+  await expect(dialog).toBeVisible();
+
+  // And the record itself is untouched.
+  await page.reload();
+  await expect(page.getByRole("heading", { level: 1 })).not.toContainText(
+    "Hijacked",
+  );
+});

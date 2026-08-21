@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate, NOT_YOURS } from "@/lib/authz";
 import { companySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -55,6 +56,8 @@ export async function updateCompany(
 
   const existing = await prisma.company.findUnique({ where: { id } });
   if (!existing) return { message: "Company not found" };
+  // Returned, not thrown: this runs inside a useActionState form.
+  if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
   await prisma.company.update({ where: { id }, data: parsed.data });
 
@@ -76,7 +79,7 @@ export async function deleteCompany(companyId: string): Promise<void> {
 
   const company = await prisma.company.findUnique({ where: { id } });
   if (!company) return;
-  if (company.ownerId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(company.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 

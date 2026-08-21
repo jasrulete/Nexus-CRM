@@ -7,6 +7,7 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate, NOT_YOURS } from "@/lib/authz";
 import { contactSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -70,6 +71,9 @@ export async function updateContact(
 
   const existing = await prisma.contact.findUnique({ where: { id } });
   if (!existing) return { message: "Contact not found" };
+  // Returned, not thrown: this runs inside a useActionState form, and throwing
+  // would trip the error boundary and lose what the user typed.
+  if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
   const { companyId, ...data } = parsed.data;
   await prisma.contact.update({
@@ -100,7 +104,7 @@ export async function deleteContact(contactId: string): Promise<void> {
 
   const contact = await prisma.contact.findUnique({ where: { id } });
   if (!contact) return;
-  if (contact.ownerId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(contact.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 

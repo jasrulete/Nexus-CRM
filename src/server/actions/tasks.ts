@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate } from "@/lib/authz";
 import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
@@ -55,7 +56,7 @@ export async function toggleTask(taskId: string): Promise<void> {
 
   const task = await prisma.task.findUnique({ where: { id } });
   if (!task) return;
-  if (task.assigneeId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(task.assigneeId, user)) {
     throw new Error("FORBIDDEN: only the assignee or an admin can update");
   }
 
@@ -76,7 +77,7 @@ export async function deleteTask(taskId: string): Promise<void> {
 
   const task = await prisma.task.findUnique({ where: { id } });
   if (!task) return;
-  if (task.assigneeId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(task.assigneeId, user)) {
     throw new Error("FORBIDDEN: only the assignee or an admin can delete");
   }
 

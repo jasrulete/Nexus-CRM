@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate, NOT_YOURS } from "@/lib/authz";
 import { dealMoveSchema, dealSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 const CLOSED_STAGES = new Set(["WON", "LOST"]);
@@ -84,6 +85,8 @@ export async function updateDeal(
 
   const existing = await prisma.deal.findUnique({ where: { id } });
   if (!existing) return { message: "Deal not found" };
+  // Returned, not thrown: this runs inside a useActionState form.
+  if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
   const { contactId, companyId, expectedCloseDate, ...data } = parsed.data;
   const stageChanged = existing.stage !== data.stage;
@@ -128,6 +131,8 @@ export async function moveDeal(input: {
   const { dealId, stage, position } = parsed.data;
   const deal = await prisma.deal.findUnique({ where: { id: dealId } });
   if (!deal) return { ok: false };
+  // The board rolls the card back and says so when this returns ok:false.
+  if (!canMutate(deal.ownerId, user)) return { ok: false };
 
   const stageChanged = deal.stage !== stage;
 
@@ -178,7 +183,7 @@ export async function deleteDeal(dealId: string): Promise<void> {
 
   const deal = await prisma.deal.findUnique({ where: { id } });
   if (!deal) return;
-  if (deal.ownerId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(deal.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 

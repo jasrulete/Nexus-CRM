@@ -6,6 +6,7 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate } from "@/lib/authz";
 import { activitySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 export async function createActivity(
@@ -59,7 +60,7 @@ export async function deleteActivity(activityId: string): Promise<void> {
 
   const activity = await prisma.activity.findUnique({ where: { id } });
   if (!activity) return;
-  if (activity.userId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(activity.userId, user)) {
     throw new Error("FORBIDDEN: only the author or an admin can delete");
   }
 
