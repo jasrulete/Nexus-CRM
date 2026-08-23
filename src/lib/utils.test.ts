@@ -89,3 +89,22 @@ describe("cn", () => {
     expect(cn("btn", false, undefined, "active")).toBe("btn active");
   });
 });
+
+describe("formatCompactCurrency determinism", () => {
+  // These exact strings were verified identical in Node's ICU and in Chrome.
+  // A mismatch between the two is a hydration error, not a cosmetic one: the
+  // kanban headers render on the server, so React rebuilds the entire board on
+  // the client when they disagree — which silently breaks keyboard focus.
+  it.each([
+    [61_000, "$61K"],
+    [24_600, "$24.6K"],
+    [53_000, "$53K"],
+    [62_000, "$62K"],
+    [1_000, "$1K"],
+    [999, "$999"],
+    [1_250_000, "$1.3M"],
+    [0, "$0"],
+  ])("formats %i as %s with no trailing zero", (value, expected) => {
+    expect(formatCompactCurrency(value)).toBe(expected);
+  });
+});

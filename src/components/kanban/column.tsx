@@ -61,6 +61,10 @@ export function KanbanColumn({
       </div>
       <div
         ref={setNodeRef}
+        // Named so a screen-reader user knows which stage they are in — which
+        // matters now that a card can be carried between columns by keyboard.
+        role="group"
+        aria-label={`${label} deals`}
         className={cn(
           "flex min-h-40 flex-1 flex-col gap-2 rounded-xl border border-edge/70 bg-surface-2/50 p-2 transition-colors",
           isOver && "border-accent/40 bg-accent-soft/50",

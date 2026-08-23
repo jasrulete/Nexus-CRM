@@ -18,6 +18,14 @@ export function formatCompactCurrency(value: number, currency = "USD") {
     style: "currency",
     currency,
     notation: "compact",
+    // minimumFractionDigits is load-bearing, not decoration. With only a
+    // maximum set, Node's ICU renders 61000 as "$61.0K" while Chrome renders
+    // "$61K" — the spec leaves the trailing zero to the implementation. The
+    // kanban column headers are server-rendered, so that disagreement was a
+    // hydration mismatch on every /deals load: React discarded the server HTML
+    // and rebuilt the whole board on the client, which also destroyed keyboard
+    // focus and made the board unusable without a mouse.
+    minimumFractionDigits: 0,
     maximumFractionDigits: 1,
   }).format(value);
 }

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   closestCorners,
   useSensor,
@@ -11,9 +12,11 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
 import {
   SortableContext,
+  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Plus } from "lucide-react";
@@ -40,6 +43,53 @@ function groupDeals(deals: BoardDeal[]): Columns {
   return cols;
 }
 
+
+/**
+ * Left/right moves between stage columns; up/down reorders within one.
+ *
+ * dnd-kit's stock `sortableKeyboardCoordinates` filters candidate droppables by
+ * raw geometry, which on this board resolves a right-arrow to the next card
+ * *below* rather than the next column — so a keyboard user could reorder a
+ * column but never change a deal's stage, which is the entire point of the
+ * page. Columns are the droppables whose id is a stage, so they can be found by
+ * name and stepped through in visual order.
+ */
+const boardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  const horizontal = event.code === "ArrowLeft" || event.code === "ArrowRight";
+  if (!horizontal) return sortableKeyboardCoordinates(event, args);
+
+  const { active, collisionRect, droppableContainers } = args.context;
+  if (!active || !collisionRect) return;
+  event.preventDefault();
+
+  const columns = droppableContainers
+    .getEnabled()
+    .filter((c) => (DEAL_STAGES as readonly string[]).includes(String(c.id)))
+    .map((c) => ({ id: String(c.id), rect: c.rect.current }))
+    .filter((c): c is { id: string; rect: NonNullable<typeof c.rect> } => c.rect != null)
+    .sort((a, b) => a.rect.left - b.rect.left);
+  if (columns.length === 0) return;
+
+  // The column the card is currently over: the nearest by horizontal centre,
+  // which stays correct even mid-transition between two columns.
+  const cardCentre = collisionRect.left + collisionRect.width / 2;
+  let nearest = 0;
+  for (let i = 1; i < columns.length; i++) {
+    const centre = columns[i]!.rect.left + columns[i]!.rect.width / 2;
+    const bestCentre = columns[nearest]!.rect.left + columns[nearest]!.rect.width / 2;
+    if (Math.abs(centre - cardCentre) < Math.abs(bestCentre - cardCentre)) nearest = i;
+  }
+
+  const target = columns[nearest + (event.code === "ArrowRight" ? 1 : -1)];
+  if (!target) return; // already at the first or last stage
+
+  // Aim just inside the target column so collision detection resolves to it.
+  return {
+    x: target.rect.left + target.rect.width / 2 - collisionRect.width / 2,
+    y: target.rect.top + 8,
+  };
+};
+
 export function KanbanBoard({
   deals,
   contacts,
@@ -65,6 +115,20 @@ export function KanbanBoard({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // Without this the board is mouse-only: cards already receive role="button"
+    // and a tabIndex from dnd-kit's attributes, so they focus — but nothing
+    // responds to a key, and moving a deal between stages is the whole point of
+    // the page. Space picks a card up, arrows move it, Space drops, Escape
+    // cancels. Enter is deliberately left out of the activator set so it stays
+    // free to open the card (see DealCard).
+    useSensor(KeyboardSensor, {
+      coordinateGetter: boardKeyboardCoordinates,
+      keyboardCodes: {
+        start: ["Space"],
+        cancel: ["Escape"],
+        end: ["Space"],
+      },
+    }),
   );
 
   const dealIndex = useMemo(() => {
@@ -165,6 +229,11 @@ export function KanbanBoard({
       </div>
 
       <DndContext
+        // Stable id, not decoration: dnd-kit derives the cards'
+        // aria-describedby from this, and without it falls back to a
+        // module-level counter that starts at 0 on the server and continues
+        // climbing on the client — a hydration mismatch on every board render.
+        id="nexus-kanban"
         sensors={sensors}
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}

@@ -139,6 +139,65 @@ test("the pipeline board renders its stage columns", async ({ page }) => {
   }
 });
 
+test("a deal can be moved between stages with the keyboard alone", async ({
+  page,
+}) => {
+  // The board is this CRM's signature interaction and was entirely mouse-only:
+  // dnd-kit gives each card role="button" and a tabIndex, so it focused, but no
+  // KeyboardSensor was registered and nothing responded to a key. WCAG 2.1.1.
+  const STAGES = ["Lead", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /Plant ops pilot/ }).first();
+  await expect(card).toBeVisible();
+
+  // Read the starting column rather than assuming it: this test moves a real
+  // row, so a repeat run against the same database starts somewhere else.
+  const startStage = await card.evaluate((el) =>
+    el.closest('[role="group"]')?.getAttribute("aria-label") ?? "",
+  );
+  const startIndex = STAGES.indexOf(startStage.replace(" deals", ""));
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+  expect(startIndex).toBeLessThan(STAGES.length - 1); // room to move right
+  const expected = `${STAGES[startIndex + 1]} deals`;
+
+  await card.focus();
+  await expect(card).toBeFocused();
+
+  // Space picks the card up, arrows move it, Space drops it. Enter is
+  // deliberately not an activator so it stays free to open the card. dnd-kit
+  // needs a frame between each step, so the presses are not back to back.
+  await page.keyboard.press("Space");
+  await expect(card).toHaveAttribute("aria-pressed", "true");
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Space");
+
+  // The move is optimistic then persisted; a reload proves it reached the
+  // database rather than only the client state.
+  await page.waitForTimeout(1500);
+  await page.reload();
+
+  await expect(
+    page.getByRole("group", { name: expected }).getByText(/Plant ops pilot/),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByRole("group", { name: startStage }).getByText(/Plant ops pilot/),
+  ).toHaveCount(0);
+});
+
+test("Enter opens a deal card without starting a drag", async ({ page }) => {
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /CS tooling/ }).first();
+  await card.focus();
+  await page.keyboard.press("Enter");
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Title")).toHaveValue(/CS tooling/);
+});
+
 test("a missing record renders the branded 404, not a crash", async ({
   page,
 }) => {

@@ -31,6 +31,22 @@ export function DealCard({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     sortable;
 
+  /**
+   * Space belongs to the drag sensor; Enter opens the card.
+   *
+   * dnd-kit supplies its own onKeyDown inside `listeners`, and spreading
+   * `listeners` after this handler would silently replace it — so call theirs
+   * first and only act on Enter if they did not already handle the event.
+   */
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    listeners?.onKeyDown?.(event);
+    if (event.defaultPrevented || !onClick) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onClick();
+    }
+  }
+
   const overdue =
     deal.expectedCloseDate &&
     new Date(deal.expectedCloseDate) < new Date() &&
@@ -47,9 +63,11 @@ export function DealCard({
       {...(overlay ? {} : attributes)}
       {...(overlay ? {} : listeners)}
       onClick={onClick}
+      onKeyDown={overlay ? undefined : handleKeyDown}
       className={cn(
         "cursor-grab rounded-lg border border-edge bg-surface p-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-shadow",
         "hover:border-edge-strong hover:shadow-md",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-2",
         isDragging && "opacity-40",
         overlay && "rotate-2 shadow-xl ring-2 ring-accent/30 cursor-grabbing",
       )}
