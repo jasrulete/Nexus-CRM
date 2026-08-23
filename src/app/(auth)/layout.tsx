@@ -1,5 +1,6 @@
 import { BrandLockup } from "@/components/brand";
 import { Sparkles, ShieldCheck, KanbanSquare } from "lucide-react";
+import { isSharedDemoInstance } from "@/lib/demo-guard";
 
 const highlights = [
   {
@@ -58,7 +59,11 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           </ul>
         </div>
         <p className="relative text-[12px] text-white/35">
-          Free, open-source, self-hosted. Your data stays yours.
+          {/* "Your data stays yours" is a property of self-hosting, not of the
+              shared demo — where every record is visible to every visitor. */}
+          {isSharedDemoInstance()
+            ? "Free and open-source. This is a shared public demo — self-host it and your data stays yours."
+            : "Free, open-source, self-hosted. Your data stays yours."}
         </p>
       </aside>
 
