@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SUPPORTED_CURRENCIES } from "./money";
 import {
   ACTIVITY_TYPES,
   COMPANY_SIZES,
@@ -119,6 +120,9 @@ export const dealSchema = z.object({
     .min(0, "Value cannot be negative")
     .max(1_000_000_000),
   stage: z.enum(DEAL_STAGES),
+  // Constrained to the list the picker offers: the value decides which rate is
+  // fetched, so an unknown code would mean an unconvertible amount.
+  currency: z.enum(SUPPORTED_CURRENCIES).default("USD"),
   expectedCloseDate: optionalDate,
   contactId: optionalTrimmed(64),
   companyId: optionalTrimmed(64),

@@ -26,7 +26,9 @@ export function KanbanColumn({
   onCardClick: (deal: BoardDeal) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-  const total = deals.reduce((s, d) => s + d.value, 0);
+  // baseValue: the column footer is a sum, so it must use the converted
+  // amount. The card itself shows the entered currency alongside.
+  const total = deals.reduce((s, d) => s + d.baseValue, 0);
   const probability = STAGE_PROBABILITY[stage];
   // Every card in a column shares a stage, so the column weight is one
   // multiply rather than a per-deal sum. Only worth showing while a deal

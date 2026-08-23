@@ -256,6 +256,7 @@ export function KanbanBoard({
                     id: deal.id,
                     title: deal.title,
                     value: deal.value,
+                    currency: deal.currency,
                     stage: deal.stage,
                     expectedCloseDate: deal.expectedCloseDate?.slice(0, 10) ?? null,
                     contactId: deal.contactId,

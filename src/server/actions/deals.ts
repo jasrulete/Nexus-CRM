@@ -7,6 +7,8 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { getRateToWorkspaceCurrency } from "@/lib/fx";
+import { convertAmount } from "@/lib/money";
 import { dealMoveSchema, dealSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 const CLOSED_STAGES = new Set(["WON", "LOST"]);
@@ -16,6 +18,7 @@ function parseForm(formData: FormData) {
     title: formData.get("title"),
     value: formData.get("value"),
     stage: formData.get("stage"),
+    currency: formData.get("currency") ?? undefined,
     expectedCloseDate: formData.get("expectedCloseDate"),
     contactId: formData.get("contactId"),
     companyId: formData.get("companyId"),
@@ -34,6 +37,25 @@ async function resolveRelation(
   return found ? relId : null;
 }
 
+
+/**
+ * Resolves an entered amount into the workspace currency.
+ *
+ * The rate is frozen onto the row here rather than applied at read time, so a
+ * closed deal's contribution to last quarter's revenue is the same number next
+ * year. A rate that cannot be fetched is refused rather than defaulted to 1 —
+ * storing a EUR amount as if it were dollars would corrupt every total the deal
+ * appears in, silently and permanently.
+ */
+async function resolveAmount(value: number, currency: string) {
+  const rate = await getRateToWorkspaceCurrency(currency);
+  if (!rate.ok) return null;
+  return { fxRate: rate.rate, baseValue: convertAmount(value, rate.rate) };
+}
+
+const RATE_UNAVAILABLE =
+  "Couldn't fetch an exchange rate just now — try again in a moment, or enter the amount in the workspace currency.";
+
 export async function createDeal(
   _prev: ActionState,
   formData: FormData,
@@ -49,9 +71,13 @@ export async function createDeal(
     orderBy: { position: "desc" },
   });
 
+  const amount = await resolveAmount(data.value, data.currency);
+  if (!amount) return { message: RATE_UNAVAILABLE };
+
   const deal = await prisma.deal.create({
     data: {
       ...data,
+      ...amount,
       position: (last?.position ?? -1) + 1,
       expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
       closedAt: CLOSED_STAGES.has(data.stage) ? new Date() : null,
@@ -91,10 +117,14 @@ export async function updateDeal(
   const { contactId, companyId, expectedCloseDate, ...data } = parsed.data;
   const stageChanged = existing.stage !== data.stage;
 
+  const amount = await resolveAmount(data.value, data.currency);
+  if (!amount) return { message: RATE_UNAVAILABLE };
+
   await prisma.deal.update({
     where: { id },
     data: {
       ...data,
+      ...amount,
       expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
       closedAt: CLOSED_STAGES.has(data.stage)
         ? (existing.closedAt ?? new Date())

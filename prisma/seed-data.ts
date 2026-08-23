@@ -76,13 +76,17 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
 
   const dealData: {
     title: string; value: number; stage: string; position: number;
+    // Seeded amounts carry an explicit currency and rate rather than calling a
+    // rate provider: a seed must work offline and produce the same numbers
+    // every run, and the demo is reset nightly.
+    currency?: string; fxRate?: number;
     contactId?: string; companyId?: string;
     expectedCloseDate?: Date; closedAt?: Date; createdDaysAgo: number;
   }[] = [
     { title: "Northwind — Analytics platform (annual)", value: 48000, stage: "PROPOSAL", position: 0, contactId: maya!.id, companyId: northwind!.id, expectedCloseDate: dateOnly(daysAgo(-21)), createdDaysAgo: 34 },
     { title: "Brightline — Claims team expansion", value: 62000, stage: "NEGOTIATION", position: 0, contactId: priya!.id, companyId: brightline!.id, expectedCloseDate: dateOnly(daysAgo(-10)), createdDaysAgo: 41 },
     { title: "Forge & Field — Plant ops pilot", value: 25000, stage: "LEAD", position: 0, contactId: ingrid!.id, companyId: forge!.id, expectedCloseDate: dateOnly(daysAgo(-75)), createdDaysAgo: 12 },
-    { title: "Lumen Studio — Team plan", value: 9600, stage: "QUALIFIED", position: 0, contactId: tomas!.id, companyId: lumen!.id, expectedCloseDate: dateOnly(daysAgo(-14)), createdDaysAgo: 19 },
+    { title: "Lumen Studio — Team plan", value: 9600, currency: "EUR", fxRate: 1.1699, stage: "QUALIFIED", position: 0, contactId: tomas!.id, companyId: lumen!.id, expectedCloseDate: dateOnly(daysAgo(-14)), createdDaysAgo: 19 },
     { title: "Harbor Logistics — CS tooling", value: 36000, stage: "LEAD", position: 1, contactId: aisha!.id, companyId: harbor!.id, expectedCloseDate: dateOnly(daysAgo(-45)), createdDaysAgo: 8 },
     { title: "Elena Vasquez — Partner program", value: 15000, stage: "QUALIFIED", position: 1, contactId: elena!.id, expectedCloseDate: dateOnly(daysAgo(-30)), createdDaysAgo: 16 },
     { title: "Harbor — Exec briefing package", value: 5000, stage: "PROPOSAL", position: 1, contactId: marcus!.id, companyId: harbor!.id, expectedCloseDate: dateOnly(daysAgo(3)), createdDaysAgo: 27 },
@@ -96,10 +100,18 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   ];
   const deals = [];
   for (const d of dealData) {
-    const { createdDaysAgo, ...rest } = d;
+    const { createdDaysAgo, fxRate = 1, ...rest } = d;
     deals.push(
       await prisma.deal.create({
-        data: { ...rest, ownerId, createdAt: daysAgo(createdDaysAgo) },
+        data: {
+          ...rest,
+          fxRate,
+          // Same rounding the actions use, so a seeded row is indistinguishable
+          // from one a user created.
+          baseValue: Math.round(d.value * fxRate),
+          ownerId,
+          createdAt: daysAgo(createdDaysAgo),
+        },
       }),
     );
   }

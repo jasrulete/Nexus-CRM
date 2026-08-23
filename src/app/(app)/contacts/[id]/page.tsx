@@ -14,7 +14,8 @@ import {
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
-import { formatCurrency, formatDate, fullName, timeAgo } from "@/lib/utils";
+import { formatDate, fullName, timeAgo } from "@/lib/utils";
+import { formatDealAmount } from "@/lib/money";
 import { deleteContact } from "@/server/actions/contacts";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -241,7 +242,7 @@ export default async function ContactDetailPage({
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
                       <span className="text-sm font-semibold tabular-nums text-ink">
-                        {formatCurrency(d.value)}
+                        {formatDealAmount(d)}
                       </span>
                       <StageBadge stage={d.stage} />
                     </div>

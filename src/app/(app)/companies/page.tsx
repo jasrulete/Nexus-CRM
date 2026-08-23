@@ -50,7 +50,7 @@ export default async function CompaniesPage({
         _count: { select: { contacts: true, deals: true } },
         deals: {
           where: { stage: { in: [...OPEN_STAGES] } },
-          select: { value: true },
+          select: { baseValue: true },
         },
       },
       orderBy: { updatedAt: "desc" },
@@ -155,7 +155,7 @@ export default async function CompaniesPage({
                     {c._count.contacts}
                   </Td>
                   <Td className="font-medium tabular-nums text-ink">
-                    {formatCurrency(c.deals.reduce((s, d) => s + d.value, 0))}
+                    {formatCurrency(c.deals.reduce((s, d) => s + d.baseValue, 0))}
                   </Td>
                   <Td className="text-right text-[13px] text-ink-faint">
                     {timeAgo(c.updatedAt)}

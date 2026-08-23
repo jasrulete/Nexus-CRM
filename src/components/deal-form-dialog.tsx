@@ -8,11 +8,13 @@ import { DEAL_STAGES, STAGE_LABELS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { FieldError, Input, Label, Select } from "@/components/ui/input";
+import { SUPPORTED_CURRENCIES, WORKSPACE_CURRENCY } from "@/lib/money";
 
 export type DealFormValues = {
   id: string;
   title: string;
   value: number;
+  currency: string;
   stage: string;
   expectedCloseDate: string | null;
   contactId: string | null;
@@ -70,16 +72,36 @@ export function DealFormDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="d-value">Value (USD)</Label>
-              <Input
-                id="d-value"
-                name="value"
-                type="number"
-                min={0}
-                step={1}
-                defaultValue={deal?.value ?? 0}
-                required
-              />
+              <Label htmlFor="d-value">Amount</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="d-value"
+                  name="value"
+                  type="number"
+                  min={0}
+                  step={1}
+                  defaultValue={deal?.value ?? 0}
+                  required
+                  className="flex-1"
+                />
+                <Select
+                  id="d-currency"
+                  name="currency"
+                  defaultValue={deal?.currency ?? WORKSPACE_CURRENCY}
+                  aria-label="Currency"
+                  className="w-24 shrink-0"
+                >
+                  {SUPPORTED_CURRENCIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <p className="mt-1 text-[12px] text-ink-faint">
+                Totals show in {WORKSPACE_CURRENCY}, converted at the rate on the
+                day the deal is saved.
+              </p>
               <FieldError message={state.errors?.value} />
             </div>
             <div>

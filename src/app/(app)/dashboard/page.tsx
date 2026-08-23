@@ -45,11 +45,11 @@ export default async function DashboardPage() {
     await Promise.all([
       prisma.deal.findMany({
         where: { stage: { in: [...OPEN_STAGES] } },
-        select: { stage: true, value: true },
+        select: { stage: true, baseValue: true },
       }),
       prisma.deal.findMany({
         where: { stage: { in: ["WON", "LOST"] } },
-        select: { stage: true, value: true, closedAt: true },
+        select: { stage: true, baseValue: true, closedAt: true },
       }),
       prisma.contact.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
       prisma.task.findMany({
@@ -71,7 +71,9 @@ export default async function DashboardPage() {
       }),
     ]);
 
-  const pipelineValue = openDeals.reduce((s, d) => s + d.value, 0);
+  // baseValue, never value: every deal is already converted to the workspace
+  // currency, so these are the only numbers that may be added together.
+  const pipelineValue = openDeals.reduce((s, d) => s + d.baseValue, 0);
   const forecast = weightedValue(openDeals);
   const wonDeals = closedDeals.filter((d) => d.stage === "WON");
   const winRate =
@@ -84,7 +86,7 @@ export default async function DashboardPage() {
     return {
       stage,
       label: STAGE_LABELS[stage],
-      value: deals.reduce((s, d) => s + d.value, 0),
+      value: deals.reduce((s, d) => s + d.baseValue, 0),
       count: deals.length,
     };
   });
@@ -96,7 +98,7 @@ export default async function DashboardPage() {
     const label = cursor.toLocaleDateString("en-US", { month: "short" });
     const value = wonDeals
       .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
-      .reduce((s, d) => s + d.value, 0);
+      .reduce((s, d) => s + d.baseValue, 0);
     months.push({ month: label, value });
     cursor.setMonth(cursor.getMonth() + 1);
   }
@@ -137,7 +139,7 @@ export default async function DashboardPage() {
         />
         <StatCard
           label="Won (all time)"
-          value={formatCurrency(wonDeals.reduce((s, d) => s + d.value, 0))}
+          value={formatCurrency(wonDeals.reduce((s, d) => s + d.baseValue, 0))}
           hint={`${wonDeals.length} closed-won deal${wonDeals.length === 1 ? "" : "s"}`}
           icon={Trophy}
         />

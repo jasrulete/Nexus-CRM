@@ -198,6 +198,29 @@ test("Enter opens a deal card without starting a drag", async ({ page }) => {
   await expect(dialog.getByLabel("Title")).toHaveValue(/CS tooling/);
 });
 
+test("a deal in another currency shows both amounts, and totals convert", async ({
+  page,
+}) => {
+  // Deal.currency used to be written on every row and read nowhere, so a
+  // non-USD amount would have been summed into the totals as if it were
+  // dollars. The seed carries one EUR deal specifically to keep this honest.
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /Team plan/ }).first();
+  await expect(card).toBeVisible();
+
+  // Converted amount first, the amount actually entered in parentheses.
+  await expect(card).toContainText("(EUR 9,600)");
+  await expect(card).toContainText("$11,231");
+
+  // A deal already in the workspace currency gets no parenthetical. Matched on
+  // the currency-code pattern, not a bare "(" — this deal is titled
+  // "Analytics platform (annual)".
+  const domestic = page.getByRole("button", { name: /Analytics platform/ }).first();
+  await expect(domestic).toContainText("$48,000");
+  expect(await domestic.textContent()).not.toMatch(/\([A-Z]{3}\s[\d,]+\)/);
+});
+
 test("a missing record renders the branded 404, not a crash", async ({
   page,
 }) => {

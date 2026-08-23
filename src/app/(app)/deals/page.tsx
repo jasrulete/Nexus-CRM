@@ -31,6 +31,8 @@ export default async function DealsPage() {
     id: d.id,
     title: d.title,
     value: d.value,
+    currency: d.currency,
+    baseValue: d.baseValue,
     stage: d.stage,
     position: d.position,
     expectedCloseDate: d.expectedCloseDate?.toISOString() ?? null,
@@ -42,7 +44,7 @@ export default async function DealsPage() {
 
   const openValue = deals
     .filter((d) => (OPEN_STAGES as string[]).includes(d.stage))
-    .reduce((s, d) => s + d.value, 0);
+    .reduce((s, d) => s + d.baseValue, 0);
 
   return (
     <div className="mx-auto max-w-[1400px]">

@@ -36,14 +36,19 @@ export const STAGE_PROBABILITY: Record<DealStage, number> = {
   LOST: 0,
 };
 
-/** Expected value of a set of deals, weighted by each one's stage. */
+/**
+ * Expected value of a set of deals, weighted by each one's stage.
+ *
+ * Takes `baseValue` — the amount converted to the workspace currency — because
+ * this is a sum, and amounts in different currencies cannot be added.
+ */
 export function weightedValue(
-  deals: { stage: string; value: number }[],
+  deals: { stage: string; baseValue: number }[],
 ): number {
   return Math.round(
     deals.reduce(
       (sum, d) =>
-        sum + d.value * (STAGE_PROBABILITY[d.stage as DealStage] ?? 0),
+        sum + d.baseValue * (STAGE_PROBABILITY[d.stage as DealStage] ?? 0),
       0,
     ),
   );

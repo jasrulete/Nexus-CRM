@@ -3,12 +3,17 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Building2, CalendarDays, User } from "lucide-react";
-import { cn, formatCurrency, formatDateOnly } from "@/lib/utils";
+import { cn, formatDateOnly } from "@/lib/utils";
+import { formatDealAmount } from "@/lib/money";
 
 export type BoardDeal = {
   id: string;
   title: string;
+  /** As entered, in `currency`. */
   value: number;
+  currency: string;
+  /** Converted to the workspace currency — the only figure safe to sum. */
+  baseValue: number;
   stage: string;
   position: number;
   expectedCloseDate: string | null;
@@ -74,7 +79,7 @@ export function DealCard({
     >
       <p className="text-[13px] font-medium leading-5 text-ink">{deal.title}</p>
       <p className="mt-1 text-sm font-semibold tabular-nums text-ink">
-        {formatCurrency(deal.value)}
+        {formatDealAmount(deal)}
       </p>
       <div className="mt-2 space-y-1">
         {deal.contactName ? (
