@@ -53,6 +53,34 @@ export function formatDateOnly(date: Date | string | null | undefined) {
   }).format(new Date(date));
 }
 
+/**
+ * Is a date-only value in the past?
+ *
+ * Date-only fields (`Task.dueDate`, `Deal.expectedCloseDate`) are stored at UTC
+ * midnight and rendered with `formatDateOnly`, which pins timeZone: "UTC". The
+ * comparison has to use the same frame, or the label and the styling disagree:
+ * comparing against a raw `new Date()` made a task go red the moment UTC ticked
+ * past midnight, which is the *previous evening* anywhere west of Greenwich —
+ * so a task due "Aug 22, 2026" rendered as overdue from 8pm on the 21st, while
+ * still displaying Aug 22.
+ *
+ * Compares whole UTC days, so a date is overdue only once the UTC day is past.
+ */
+export function isOverdueDateOnly(
+  date: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!date) return false;
+  const due = new Date(date);
+  if (Number.isNaN(due.getTime())) return false;
+  const todayUtcMidnight = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  return due.getTime() < todayUtcMidnight;
+}
+
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
   ["year", 1000 * 60 * 60 * 24 * 365],
   ["month", 1000 * 60 * 60 * 24 * 30],

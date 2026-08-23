@@ -3,7 +3,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Building2, CalendarDays, User } from "lucide-react";
-import { cn, formatDateOnly } from "@/lib/utils";
+import { cn, formatDateOnly, isOverdueDateOnly } from "@/lib/utils";
 import { formatDealAmount } from "@/lib/money";
 
 export type BoardDeal = {
@@ -53,8 +53,7 @@ export function DealCard({
   }
 
   const overdue =
-    deal.expectedCloseDate &&
-    new Date(deal.expectedCloseDate) < new Date() &&
+    isOverdueDateOnly(deal.expectedCloseDate) &&
     !["WON", "LOST"].includes(deal.stage);
 
   return (
