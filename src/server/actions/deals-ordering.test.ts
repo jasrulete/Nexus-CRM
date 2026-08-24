@@ -173,22 +173,101 @@ describe("createDeal positioning", () => {
   });
 });
 
-describe("known defect: updateDeal does not resequence on a stage change", () => {
-  it("leaves a duplicate position behind, so column order becomes ambiguous", async () => {
-    // Documented in IMPROVEMENT-PLAN §3.4. updateDeal writes stage but never
-    // position, so a card edited into another column keeps its old index and
-    // collides with whatever already sits there. The board sorts purely on
-    // position, so the resulting order is arbitrary until someone drags a card.
-    //
-    // This test pins the CURRENT behaviour deliberately. When the fix lands it
-    // will fail, which is the point: the change should be visible, not silent.
+describe("updateDeal moving a card between columns", () => {
+  it("appends the card to the target column instead of keeping its old index", async () => {
+    // The defect this replaces: updateDeal wrote stage but never position, so a
+    // card edited into another column kept its old index and collided with
+    // whatever already sat there. The board sorts purely on position, so the
+    // order of the colliding pair was arbitrary and stayed wrong until someone
+    // dragged a card and moveDeal resequenced.
     await seedColumn("PROPOSAL", ["X", "Y"]);
     const [, b] = await seedColumn("LEAD", ["A", "B"]); // B is at position 1
 
     await updateDeal(b.id, {}, formData({ title: "B", value: "100", stage: "PROPOSAL" }));
 
-    const positions = await positionsIn("PROPOSAL");
-    expect(positions).toEqual([0, 1, 1]); // Y and B both at 1
-    expect(new Set(positions).size).toBeLessThan(positions.length);
+    expect(await positionsIn("PROPOSAL")).toEqual([0, 1, 2]);
+    expect(await columnOrder("PROPOSAL")).toEqual(["X", "Y", "B"]);
+    expect(new Set(await positionsIn("PROPOSAL")).size).toBe(3);
+  });
+
+  it("lands in an empty column at position 0", async () => {
+    const [a] = await seedColumn("LEAD", ["A"]);
+
+    await updateDeal(a.id, {}, formData({ title: "A", value: "100", stage: "NEGOTIATION" }));
+
+    expect(await positionsIn("NEGOTIATION")).toEqual([0]);
+  });
+
+  it("leaves position alone when the stage did not change", async () => {
+    // A rename must not shuffle the board.
+    const [, b] = await seedColumn("LEAD", ["A", "B"]);
+
+    await updateDeal(b.id, {}, formData({ title: "B renamed", value: "100", stage: "LEAD" }));
+
+    expect(await columnOrder("LEAD")).toEqual(["A", "B renamed"]);
+    expect(await positionsIn("LEAD")).toEqual([0, 1]);
+  });
+
+  it("does not collide with a card that moveDeal later inserts", async () => {
+    // The two write paths into a column have to agree on what a position means.
+    await seedColumn("PROPOSAL", ["X"]);
+    const [a, b] = await seedColumn("LEAD", ["A", "B"]);
+
+    await updateDeal(a.id, {}, formData({ title: "A", value: "100", stage: "PROPOSAL" }));
+    await moveDeal({ dealId: b.id, stage: "PROPOSAL", position: 1 });
+
+    expect(await columnOrder("PROPOSAL")).toEqual(["X", "B", "A"]);
+    expect(await positionsIn("PROPOSAL")).toEqual([0, 1, 2]);
+  });
+});
+
+describe("concurrent writes keep the column well-formed", () => {
+  /** Positions in a column must always be 0..n-1 with no gaps and no repeats. */
+  async function expectWellFormed(stage: string) {
+    const positions = await positionsIn(stage);
+    expect(positions).toEqual(positions.map((_, i) => i));
+  }
+
+  it("survives simultaneous creates into the same column", async () => {
+    // Both the read of the last position and the insert now happen inside one
+    // transaction. Previously they did not, so two creates could read the same
+    // last position and both write it.
+    await Promise.all(
+      ["A", "B", "C", "D", "E"].map((title) =>
+        createDeal({}, formData({ title, value: "100", stage: "LEAD" })),
+      ),
+    );
+
+    expect(await prisma.deal.count({ where: { stage: "LEAD" } })).toBe(5);
+    await expectWellFormed("LEAD");
+  });
+
+  it("survives simultaneous drags within one column", async () => {
+    const [a, b, c] = await seedColumn("LEAD", ["A", "B", "C"]);
+
+    await Promise.all([
+      moveDeal({ dealId: c.id, stage: "LEAD", position: 0 }),
+      moveDeal({ dealId: a.id, stage: "LEAD", position: 2 }),
+      moveDeal({ dealId: b.id, stage: "LEAD", position: 1 }),
+    ]);
+
+    // Which order wins is a race and not worth asserting; that the column is
+    // still a valid sequence is the invariant that was breaking.
+    await expectWellFormed("LEAD");
+    expect(await prisma.deal.count({ where: { stage: "LEAD" } })).toBe(3);
+  });
+
+  it("survives simultaneous drags into the same column from elsewhere", async () => {
+    await seedColumn("PROPOSAL", ["X"]);
+    const [a, b] = await seedColumn("LEAD", ["A", "B"]);
+
+    await Promise.all([
+      moveDeal({ dealId: a.id, stage: "PROPOSAL", position: 0 }),
+      moveDeal({ dealId: b.id, stage: "PROPOSAL", position: 0 }),
+    ]);
+
+    await expectWellFormed("PROPOSAL");
+    expect(await prisma.deal.count({ where: { stage: "PROPOSAL" } })).toBe(3);
+    expect(await prisma.deal.count({ where: { stage: "LEAD" } })).toBe(0);
   });
 });

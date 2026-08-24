@@ -66,25 +66,36 @@ export async function createDeal(
 
   const { contactId, companyId, expectedCloseDate, ...data } = parsed.data;
 
-  const last = await prisma.deal.findFirst({
-    where: { stage: data.stage },
-    orderBy: { position: "desc" },
-  });
-
   const amount = await resolveAmount(data.value, data.currency);
   if (!amount) return { message: RATE_UNAVAILABLE };
 
-  const deal = await prisma.deal.create({
-    data: {
-      ...data,
-      ...amount,
-      position: (last?.position ?? -1) + 1,
-      expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
-      closedAt: CLOSED_STAGES.has(data.stage) ? new Date() : null,
-      contactId: await resolveRelation("contact", contactId),
-      companyId: await resolveRelation("company", companyId),
-      ownerId: user.id,
-    },
+  // Relations and the rate are resolved before the transaction opens: both can
+  // be slow (the rate is a network call) and neither depends on the position.
+  const resolvedContactId = await resolveRelation("contact", contactId);
+  const resolvedCompanyId = await resolveRelation("company", companyId);
+
+  // The append position is a read-then-write, so it belongs in one transaction.
+  // Outside it, two people adding a deal to the same column at the same moment
+  // both read the same last position and both write it.
+  const deal = await prisma.$transaction(async (tx) => {
+    const last = await tx.deal.findFirst({
+      where: { stage: data.stage },
+      orderBy: { position: "desc" },
+      select: { position: true },
+    });
+
+    return tx.deal.create({
+      data: {
+        ...data,
+        ...amount,
+        position: (last?.position ?? -1) + 1,
+        expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
+        closedAt: CLOSED_STAGES.has(data.stage) ? new Date() : null,
+        contactId: resolvedContactId,
+        companyId: resolvedCompanyId,
+        ownerId: user.id,
+      },
+    });
   });
 
   await audit({
@@ -120,18 +131,40 @@ export async function updateDeal(
   const amount = await resolveAmount(data.value, data.currency);
   if (!amount) return { message: RATE_UNAVAILABLE };
 
-  await prisma.deal.update({
-    where: { id },
-    data: {
-      ...data,
-      ...amount,
-      expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
-      closedAt: CLOSED_STAGES.has(data.stage)
-        ? (existing.closedAt ?? new Date())
-        : null,
-      contactId: await resolveRelation("contact", contactId),
-      companyId: await resolveRelation("company", companyId),
-    },
+  const resolvedContactId = await resolveRelation("contact", contactId);
+  const resolvedCompanyId = await resolveRelation("company", companyId);
+
+  await prisma.$transaction(async (tx) => {
+    // Editing the stage through the form moves the card to another column, and
+    // it has to be given a position there. Without this it kept its old index
+    // and collided with whatever already sat at that index; the board sorts
+    // purely on position, so the order of the two became arbitrary and stayed
+    // wrong until someone happened to drag a card and moveDeal resequenced.
+    // Appended to the end, which is where moveDeal would put an unplaced card.
+    let position: number | undefined;
+    if (stageChanged) {
+      const last = await tx.deal.findFirst({
+        where: { stage: data.stage, id: { not: id } },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      position = (last?.position ?? -1) + 1;
+    }
+
+    await tx.deal.update({
+      where: { id },
+      data: {
+        ...data,
+        ...amount,
+        ...(position === undefined ? {} : { position }),
+        expectedCloseDate: expectedCloseDate ? new Date(expectedCloseDate) : null,
+        closedAt: CLOSED_STAGES.has(data.stage)
+          ? (existing.closedAt ?? new Date())
+          : null,
+        contactId: resolvedContactId,
+        companyId: resolvedCompanyId,
+      },
+    });
   });
 
   await audit({
@@ -166,17 +199,22 @@ export async function moveDeal(input: {
 
   const stageChanged = deal.stage !== stage;
 
-  const column = await prisma.deal.findMany({
-    where: { stage, id: { not: dealId } },
-    orderBy: { position: "asc" },
-    select: { id: true },
-  });
-  const ids = column.map((d) => d.id);
-  ids.splice(Math.min(position, ids.length), 0, dealId);
+  // The column read has to happen inside the transaction that rewrites it.
+  // Reading first and then opening a batch transaction is a lost update: two
+  // people dragging cards in the same column at the same time each computed
+  // their new sequence from a snapshot taken before the other's writes landed,
+  // and the second one silently overwrote the first.
+  await prisma.$transaction(async (tx) => {
+    const column = await tx.deal.findMany({
+      where: { stage, id: { not: dealId } },
+      orderBy: { position: "asc" },
+      select: { id: true },
+    });
+    const ids = column.map((d) => d.id);
+    ids.splice(Math.min(position, ids.length), 0, dealId);
 
-  await prisma.$transaction([
-    ...ids.map((id, index) =>
-      prisma.deal.update({
+    for (const [index, id] of ids.entries()) {
+      await tx.deal.update({
         where: { id },
         data:
           id === dealId
@@ -188,9 +226,9 @@ export async function moveDeal(input: {
                   : null,
               }
             : { position: index },
-      }),
-    ),
-  ]);
+      });
+    }
+  });
 
   if (stageChanged) {
     await audit({
