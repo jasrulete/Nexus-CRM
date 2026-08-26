@@ -150,9 +150,17 @@ Vercel's serverless filesystem can't host the SQLite file, so production uses
    Re-run `db:push:turso` after every new migration — it applies only what the
    remote database is missing.
 3. In Vercel → Project → Settings → Environment Variables, add the same two
-   variables (plus `GEMINI_API_KEY` or `GROQ_API_KEY` if you want live AI).
+   variables **scoped to Production** (plus `GEMINI_API_KEY` or `GROQ_API_KEY`
+   if you want live AI, and `DEMO_MODE=true` if the deployment is a public demo).
 4. Push to GitHub — Vercel builds and deploys. The `postinstall` script runs
-   `prisma generate`, and the app picks Turso automatically when its URL is set.
+   `prisma generate`, and the app picks Turso automatically in Production.
+
+Only a **Production** deployment gets the database implicitly. A preview
+deployment refuses it and fails to build, on purpose — otherwise every
+feature-branch preview would be a fully-privileged console onto live data, and
+`DEMO_MODE` is not set outside Production so the delete-lock would be inert
+there too. To make previews work, give them their own Turso database: the
+step-by-step is in [SAAS-READINESS.md §4a](SAAS-READINESS.md).
 
 ## Roadmap ideas
 

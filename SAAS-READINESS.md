@@ -209,9 +209,7 @@ production. Wait for a Prisma 7 patch.
 **Known consequence, deliberate.** Preview deployments now fail rather than
 silently reaching production. Because `src/lib/db.ts` builds the adapter at
 module scope, that failure lands at **build** time, so a preview PR check goes
-red. To make previews work again, give them their own database and scope both
-`TURSO_DATABASE_URL` and `ALLOW_REMOTE_DB=true` to the Preview environment only.
-Set `DEMO_MODE=true` there as well.
+red until Preview is given its own database — see §4a.
 
 ---
 
@@ -242,6 +240,61 @@ so stack traces name real files. Builds succeed without them.
 
 Database migrations reach production with `npm run db:push:turso` — the script
 baselines an existing database, then applies only what is missing.
+
+---
+
+## 4a. Giving Preview its own database
+
+Preview deployments deliberately refuse the production database (§3a), so a
+preview build fails until Preview has one of its own. Turso's free tier allows
+several databases, so this costs nothing.
+
+**Do it once, in this order.** Applying the schema before setting the Vercel
+variables means the first preview build has something to talk to.
+
+**1. Create the database.** In the Turso dashboard, create `nexus-crm-preview`
+and copy its URL and auth token. (Or `turso db create nexus-crm-preview` then
+`turso db show --url nexus-crm-preview` and `turso db tokens create nexus-crm-preview`.)
+
+**2. Apply the schema to it, from your machine.** Point the existing migration
+script at the new database for one run — do not put these in `.env`, or local
+development starts using them:
+
+```powershell
+$env:TURSO_DATABASE_URL="libsql://nexus-crm-preview-....turso.io"
+$env:TURSO_AUTH_TOKEN="<preview token>"
+npm run db:push:turso
+$env:SEED_REMOTE="true"; npm run db:seed     # optional demo data
+Remove-Item Env:TURSO_DATABASE_URL, Env:TURSO_AUTH_TOKEN, Env:SEED_REMOTE
+```
+
+`db:push:turso` applies every migration to the empty database rather than
+baselining, because baselining only happens when the ledger is empty *and* the
+schema already exists. `SEED_REMOTE=true` is what lets `db:seed` reach a remote
+database at all, and it sets `ALLOW_REMOTE_DB` internally.
+
+**3. Scope the variables to Preview only** in Vercel → Settings → Environment
+Variables. The scoping is the whole point: Vercel applies a variable to every
+environment unless told otherwise, and an unscoped `ALLOW_REMOTE_DB=true` would
+put previews straight back onto production data.
+
+| Variable | Value | Environments |
+|---|---|---|
+| `TURSO_DATABASE_URL` | the **preview** database URL | Preview only |
+| `TURSO_AUTH_TOKEN` | the **preview** token | Preview only |
+| `ALLOW_REMOTE_DB` | `true` | Preview only |
+| `DEMO_MODE` | `true` | Preview only |
+
+`DEMO_MODE` belongs here too: it drives both the delete-lock and the shared-demo
+disclosure on the sign-up page, and a preview is exactly as public as production.
+
+**4. Redeploy the branch** and confirm the Vercel check goes green. Then open the
+preview URL and check the footer of the sign-in page says "shared public demo" —
+that proves it picked up the Preview environment and not Production's.
+
+**How to tell it worked.** A preview that is still misconfigured fails loudly at
+build with the message from `src/lib/db-adapter.ts`, naming the environment it
+found. It cannot silently fall through to production; that is what §3a fixed.
 
 ---
 
