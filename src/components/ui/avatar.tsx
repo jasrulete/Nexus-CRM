@@ -2,13 +2,29 @@ import { cn } from "@/lib/utils";
 import { initials } from "@/lib/utils";
 
 // Deterministic soft background per name so avatars are stable across renders.
+//
+// The text sits two steps darker than the obvious choice (-800, not -600): a
+// -500 tint at 15% opacity is very close to the page background, so -600
+// initials landed under 4.5:1. Caught by the axe check in
+// e2e/accessibility.spec.ts, not by eye.
+//
+// All six move together even though they failed at different thresholds. The
+// tint is chosen by hashing the name, so which one renders depends on which
+// contact happens to be on screen — fixing only the ones a given test run
+// exercised is how this stayed hidden through several runs. e2e asserts every
+// tint, not whichever appeared.
+//
+// The element is aria-hidden and the initials only repeat the name beside them,
+// so WCAG's decoration exemption could arguably be claimed instead. Making it
+// readable for low-vision users is the better answer, and it keeps the check
+// honest rather than suppressed.
 const TINTS = [
-  "bg-indigo-500/15 text-indigo-600 dark:text-indigo-300",
-  "bg-sky-500/15 text-sky-600 dark:text-sky-300",
-  "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300",
-  "bg-amber-500/15 text-amber-600 dark:text-amber-300",
-  "bg-rose-500/15 text-rose-600 dark:text-rose-300",
-  "bg-violet-500/15 text-violet-600 dark:text-violet-300",
+  "bg-indigo-500/15 text-indigo-800 dark:text-indigo-300",
+  "bg-sky-500/15 text-sky-800 dark:text-sky-300",
+  "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300",
+  "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+  "bg-rose-500/15 text-rose-800 dark:text-rose-300",
+  "bg-violet-500/15 text-violet-800 dark:text-violet-300",
 ];
 
 function tintFor(name: string) {

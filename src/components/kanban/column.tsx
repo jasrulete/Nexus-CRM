@@ -46,7 +46,7 @@ export function KanbanColumn({
           {deals.length}
         </span>
         <span
-          className="ml-auto text-[12px] font-medium tabular-nums text-ink-faint"
+          className="ml-auto text-[12px] font-medium tabular-nums text-ink-muted"
           title={
             showWeighted
               ? `${formatCompactCurrency(total)} in ${label} · ${formatCompactCurrency(weighted)} weighted at ${Math.round(probability * 100)}%`
@@ -54,8 +54,12 @@ export function KanbanColumn({
           }
         >
           {formatCompactCurrency(total)}
+          {/* Hierarchy is total-then-weighted, expressed with two real tokens.
+              The weighted figure was `text-ink-faint/70` — 70% opacity stacked
+              on the faintest text token already available, which put it under
+              AA. Caught by the axe check in e2e, not by eye. */}
           {showWeighted ? (
-            <span className="ml-1.5 text-ink-faint/70">
+            <span className="ml-1.5 text-ink-faint">
               {formatCompactCurrency(weighted)}
             </span>
           ) : null}

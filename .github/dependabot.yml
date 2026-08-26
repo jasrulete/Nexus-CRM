@@ -1,0 +1,53 @@
+# Dependency updates. Free on every GitHub repo, public or private.
+#
+# The 2026-08-21 audit found 13 advisories — 12 of them high — sitting in the
+# tree unnoticed, and an "accepted gap" note in SAAS-READINESS claiming they
+# were unfixable. They were not: a non-semver-major bump to next@16.3.1 cleared
+# most of them. Nothing was watching, so nobody knew.
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # A solo project cannot absorb a PR per package. Grouping keeps this to a
+    # couple of reviewable PRs a week instead of a dozen.
+    groups:
+      production-patch-and-minor:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+    open-pull-requests-limit: 5
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    ignore:
+      # Next, React and Prisma majors change APIs this app depends on directly
+      # (see AGENTS.md — this codebase pins to Next 16 conventions). Those are
+      # deliberate upgrades with a test run behind them, not a merge button.
+      - dependency-name: next
+        update-types: [version-update:semver-major]
+      - dependency-name: react
+        update-types: [version-update:semver-major]
+      - dependency-name: react-dom
+        update-types: [version-update:semver-major]
+      - dependency-name: "@prisma/*"
+        update-types: [version-update:semver-major]
+      - dependency-name: prisma
+        update-types: [version-update:semver-major]
+
+  # The workflows pin every action to a commit SHA, which is correct for supply
+  # chain but means nothing tells you when a pinned action has moved on.
+  # Dependabot rewrites the SHA and updates the trailing version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(ci)"
