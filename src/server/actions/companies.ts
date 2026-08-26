@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { companySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -59,7 +60,14 @@ export async function updateCompany(
   // Returned, not thrown: this runs inside a useActionState form.
   if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
-  await prisma.company.update({ where: { id }, data: parsed.data });
+  const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
+  if (!expectedVersion) return { message: STALE_RECORD };
+
+  const written = await prisma.company.updateMany({
+    where: { id, updatedAt: expectedVersion },
+    data: parsed.data,
+  });
+  if (written.count === 0) return { message: STALE_RECORD };
 
   await audit({
     action: "company.update",

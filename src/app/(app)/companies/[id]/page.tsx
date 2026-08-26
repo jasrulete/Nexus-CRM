@@ -97,6 +97,7 @@ export default async function CompanyDetailPage({
           <CompanyFormDialog
             company={{
               id: company.id,
+              updatedAt: company.updatedAt.toISOString(),
               name: company.name,
               domain: company.domain,
               industry: company.industry,

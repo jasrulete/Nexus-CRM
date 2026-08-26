@@ -8,6 +8,7 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { contactSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -75,11 +76,17 @@ export async function updateContact(
   // would trip the error boundary and lose what the user typed.
   if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
+  const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
+  if (!expectedVersion) return { message: STALE_RECORD };
+
   const { companyId, ...data } = parsed.data;
-  await prisma.contact.update({
-    where: { id },
+  const written = await prisma.contact.updateMany({
+    where: { id, updatedAt: expectedVersion },
     data: { ...data, companyId: await resolveCompanyId(companyId) },
   });
+  // Zero rows matched: someone saved this record between the form rendering
+  // and this submit. Refuse rather than overwrite their change.
+  if (written.count === 0) return { message: STALE_RECORD };
 
   await audit({
     action: "contact.update",

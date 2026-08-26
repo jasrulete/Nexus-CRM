@@ -12,6 +12,8 @@ import { SUPPORTED_CURRENCIES, WORKSPACE_CURRENCY } from "@/lib/money";
 
 export type DealFormValues = {
   id: string;
+  /** Row version this form was rendered from, as an ISO string. */
+  updatedAt: string;
   title: string;
   value: number;
   currency: string;
@@ -54,6 +56,9 @@ export function DealFormDialog({
         }
       >
         <form action={action} className="space-y-4" key={deal?.id ?? "new"}>
+          {deal ? (
+            <input type="hidden" name="updatedAt" value={deal.updatedAt} />
+          ) : null}
           {state.message ? (
             <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2.5 text-[13px] text-danger">
               {state.message}

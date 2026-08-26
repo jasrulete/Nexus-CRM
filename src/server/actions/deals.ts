@@ -7,6 +7,7 @@ import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { getRateToWorkspaceCurrency } from "@/lib/fx";
 import { convertAmount } from "@/lib/money";
 import { dealMoveSchema, dealSchema, fieldErrors, idSchema } from "@/lib/validation";
@@ -134,7 +135,10 @@ export async function updateDeal(
   const resolvedContactId = await resolveRelation("contact", contactId);
   const resolvedCompanyId = await resolveRelation("company", companyId);
 
-  await prisma.$transaction(async (tx) => {
+  const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
+  if (!expectedVersion) return { message: STALE_RECORD };
+
+  const conflicted = await prisma.$transaction(async (tx) => {
     // Editing the stage through the form moves the card to another column, and
     // it has to be given a position there. Without this it kept its old index
     // and collided with whatever already sat at that index; the board sorts
@@ -151,8 +155,8 @@ export async function updateDeal(
       position = (last?.position ?? -1) + 1;
     }
 
-    await tx.deal.update({
-      where: { id },
+    const written = await tx.deal.updateMany({
+      where: { id, updatedAt: expectedVersion },
       data: {
         ...data,
         ...amount,
@@ -165,7 +169,12 @@ export async function updateDeal(
         companyId: resolvedCompanyId,
       },
     });
+    // Nothing else in this transaction wrote, so returning here leaves the
+    // database untouched.
+    return written.count === 0;
   });
+
+  if (conflicted) return { message: STALE_RECORD };
 
   await audit({
     action: stageChanged ? "deal.stage_change" : "deal.update",

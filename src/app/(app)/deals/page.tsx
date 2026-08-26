@@ -30,6 +30,7 @@ export default async function DealsPage() {
   const boardDeals: BoardDeal[] = deals.map((d) => ({
     id: d.id,
     title: d.title,
+    updatedAt: d.updatedAt.toISOString(),
     value: d.value,
     currency: d.currency,
     baseValue: d.baseValue,

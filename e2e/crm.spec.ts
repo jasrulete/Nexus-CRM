@@ -158,8 +158,14 @@ test("a deal can be moved between stages with the keyboard alone", async ({
   );
   const startIndex = STAGES.indexOf(startStage.replace(" deals", ""));
   expect(startIndex).toBeGreaterThanOrEqual(0);
-  expect(startIndex).toBeLessThan(STAGES.length - 1); // room to move right
-  const expected = `${STAGES[startIndex + 1]} deals`;
+
+  // This test moves a real row and does not move it back, so consecutive runs
+  // walk the card along the board until it reaches an end. Pick the direction
+  // from where the card actually is rather than assuming there is room to the
+  // right — otherwise the suite passes until the day it doesn't.
+  const goRight = startIndex < STAGES.length - 1;
+  const arrow = goRight ? "ArrowRight" : "ArrowLeft";
+  const expected = `${STAGES[startIndex + (goRight ? 1 : -1)]} deals`;
 
   await card.focus();
   await expect(card).toBeFocused();
@@ -169,7 +175,7 @@ test("a deal can be moved between stages with the keyboard alone", async ({
   // needs a frame between each step, so the presses are not back to back.
   await page.keyboard.press("Space");
   await expect(card).toHaveAttribute("aria-pressed", "true");
-  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press(arrow);
   await page.waitForTimeout(300);
   await page.keyboard.press("Space");
 

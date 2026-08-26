@@ -15,6 +15,11 @@ import { FieldError, Input, Label, Select, Textarea } from "@/components/ui/inpu
 
 export type ContactFormValues = {
   id: string;
+  /**
+   * The row version this form was rendered from, as an ISO string. Submitted
+   * back so the update can refuse to overwrite a change made in the meantime.
+   */
+  updatedAt: string;
   firstName: string;
   lastName: string;
   email: string | null;
@@ -60,6 +65,11 @@ export function ContactFormDialog({
         }
       >
         <form action={action} className="space-y-4">
+          {/* Carries the version this form was rendered from, so a save that
+              would overwrite someone else's change is refused. */}
+          {contact ? (
+            <input type="hidden" name="updatedAt" value={contact.updatedAt} />
+          ) : null}
           {state.message ? (
             <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2.5 text-[13px] text-danger">
               {state.message}

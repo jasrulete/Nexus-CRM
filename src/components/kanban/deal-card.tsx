@@ -9,6 +9,8 @@ import { formatDealAmount } from "@/lib/money";
 export type BoardDeal = {
   id: string;
   title: string;
+  /** Row version, ISO string — submitted back by the edit form. */
+  updatedAt: string;
   /** As entered, in `currency`. */
   value: number;
   currency: string;

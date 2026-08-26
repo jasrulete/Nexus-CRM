@@ -95,3 +95,17 @@ export function formData(fields: Record<string, string>): FormData {
   for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   return fd;
 }
+
+/**
+ * Same, plus the optimistic-concurrency version the edit forms carry.
+ *
+ * The update actions refuse a submit with no version rather than falling back
+ * to last-write-wins, so a test exercising the *allowed* path has to send one —
+ * exactly as the real form does.
+ */
+export function formDataFor(
+  record: { updatedAt: Date },
+  fields: Record<string, string>,
+): FormData {
+  return formData({ ...fields, updatedAt: record.updatedAt.toISOString() });
+}

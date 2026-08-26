@@ -1,5 +1,5 @@
-/**
- * Kanban reordering — the product's signature interaction, and previously
+﻿/**
+ * Kanban reordering â€” the product's signature interaction, and previously
  * untested at any level.
  *
  * `moveDeal` is the one action that writes rows the caller did not name: it
@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createTestDatabase,
   formData,
+  formDataFor,
   makeUser,
   truncateAll,
   type TestUser,
@@ -183,7 +184,7 @@ describe("updateDeal moving a card between columns", () => {
     await seedColumn("PROPOSAL", ["X", "Y"]);
     const [, b] = await seedColumn("LEAD", ["A", "B"]); // B is at position 1
 
-    await updateDeal(b.id, {}, formData({ title: "B", value: "100", stage: "PROPOSAL" }));
+    await updateDeal(b.id, {}, formDataFor(b, { title: "B", value: "100", stage: "PROPOSAL" }));
 
     expect(await positionsIn("PROPOSAL")).toEqual([0, 1, 2]);
     expect(await columnOrder("PROPOSAL")).toEqual(["X", "Y", "B"]);
@@ -193,7 +194,7 @@ describe("updateDeal moving a card between columns", () => {
   it("lands in an empty column at position 0", async () => {
     const [a] = await seedColumn("LEAD", ["A"]);
 
-    await updateDeal(a.id, {}, formData({ title: "A", value: "100", stage: "NEGOTIATION" }));
+    await updateDeal(a.id, {}, formDataFor(a, { title: "A", value: "100", stage: "NEGOTIATION" }));
 
     expect(await positionsIn("NEGOTIATION")).toEqual([0]);
   });
@@ -202,7 +203,7 @@ describe("updateDeal moving a card between columns", () => {
     // A rename must not shuffle the board.
     const [, b] = await seedColumn("LEAD", ["A", "B"]);
 
-    await updateDeal(b.id, {}, formData({ title: "B renamed", value: "100", stage: "LEAD" }));
+    await updateDeal(b.id, {}, formDataFor(b, { title: "B renamed", value: "100", stage: "LEAD" }));
 
     expect(await columnOrder("LEAD")).toEqual(["A", "B renamed"]);
     expect(await positionsIn("LEAD")).toEqual([0, 1]);
@@ -213,7 +214,7 @@ describe("updateDeal moving a card between columns", () => {
     await seedColumn("PROPOSAL", ["X"]);
     const [a, b] = await seedColumn("LEAD", ["A", "B"]);
 
-    await updateDeal(a.id, {}, formData({ title: "A", value: "100", stage: "PROPOSAL" }));
+    await updateDeal(a.id, {}, formDataFor(a, { title: "A", value: "100", stage: "PROPOSAL" }));
     await moveDeal({ dealId: b.id, stage: "PROPOSAL", position: 1 });
 
     expect(await columnOrder("PROPOSAL")).toEqual(["X", "B", "A"]);

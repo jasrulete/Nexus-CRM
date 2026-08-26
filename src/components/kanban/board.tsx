@@ -254,6 +254,7 @@ export function KanbanBoard({
                 onCardClick={(deal) =>
                   setEditing({
                     id: deal.id,
+                    updatedAt: deal.updatedAt,
                     title: deal.title,
                     value: deal.value,
                     currency: deal.currency,

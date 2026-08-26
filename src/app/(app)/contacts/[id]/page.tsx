@@ -142,6 +142,7 @@ export default async function ContactDetailPage({
             companies={companies}
             contact={{
               id: contact.id,
+              updatedAt: contact.updatedAt.toISOString(),
               firstName: contact.firstName,
               lastName: contact.lastName,
               email: contact.email,

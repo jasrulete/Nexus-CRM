@@ -152,7 +152,12 @@ describe("update actions allow the owner and an admin", () => {
     const result = await updateContact(
       contact.id,
       {},
-      formData({ firstName: "Maya", lastName: "Okafor-Reyes", status: "QUALIFIED" }),
+      formData({
+        firstName: "Maya",
+        lastName: "Okafor-Reyes",
+        status: "QUALIFIED",
+        updatedAt: contact.updatedAt.toISOString(),
+      }),
     );
 
     expect(result.success).toBe(true);
@@ -168,7 +173,12 @@ describe("update actions allow the owner and an admin", () => {
     const result = await updateContact(
       contact.id,
       {},
-      formData({ firstName: "Maya", lastName: "Corrected", status: "LEAD" }),
+      formData({
+        firstName: "Maya",
+        lastName: "Corrected",
+        status: "LEAD",
+        updatedAt: contact.updatedAt.toISOString(),
+      }),
     );
 
     expect(result.success).toBe(true);
@@ -299,7 +309,12 @@ describe("mutations are audited", () => {
     await updateContact(
       contact.id,
       {},
-      formData({ firstName: "Maya", lastName: "Okafor", status: "CUSTOMER" }),
+      formData({
+        firstName: "Maya",
+        lastName: "Okafor",
+        status: "CUSTOMER",
+        updatedAt: contact.updatedAt.toISOString(),
+      }),
     );
 
     const entry = await prisma.auditLog.findFirstOrThrow({
