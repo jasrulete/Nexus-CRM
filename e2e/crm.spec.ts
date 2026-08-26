@@ -60,8 +60,9 @@ test("a drafted follow-up can be sent to yourself and lands in the feed", async 
   await page.waitForURL(/\/contacts\/.+/);
 
   await page.getByRole("button", { name: "Draft a follow-up email" }).click();
-  // Waits on a real model call when an AI key is configured, so this needs more
-  // than the 5s budget a local UI interaction gets.
+  // The suite runs with the AI keys blanked (see playwright.config.ts), so this
+  // is the deterministic heuristic path. The generous budget stays for
+  // E2E_LIVE_AI runs, which do wait on a real model call.
   await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
 
   await page
