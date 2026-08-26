@@ -115,13 +115,20 @@ export async function deleteContact(contactId: string): Promise<void> {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 
-  await prisma.contact.delete({ where: { id } });
-  await audit({
-    action: "contact.delete",
-    entityType: "contact",
-    entityId: id,
-    userId: user.id,
-    metadata: { name: `${contact.firstName} ${contact.lastName}` },
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.contact.delete({ where: { id } });
+    await audit(
+      {
+        action: "contact.delete",
+        entityType: "contact",
+        entityId: id,
+        userId: user.id,
+        metadata: { name: `${contact.firstName} ${contact.lastName}` },
+      },
+      tx,
+    );
   });
   revalidatePath("/contacts");
   revalidatePath("/dashboard");

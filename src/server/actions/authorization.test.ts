@@ -334,3 +334,44 @@ describe("mutations are audited", () => {
     expect(await prisma.auditLog.count()).toBe(0);
   });
 });
+
+describe("a delete and its audit entry commit together", () => {
+  it("rolls the delete back if the audit write fails", async () => {
+    const contact = await seedContact();
+
+    // Break the audit insert at the database, not with a spy: the action writes
+    // through the transaction client, so mocking the global one would miss it
+    // entirely, and a test that cannot fail is worse than no test.
+    await prisma.$executeRawUnsafe(
+      `CREATE TRIGGER fail_audit BEFORE INSERT ON "AuditLog"
+       BEGIN SELECT RAISE(ABORT, 'audit write refused'); END;`,
+    );
+
+    try {
+      // Prisma wraps the SQLite abort, so match the operation it names rather
+      // than the trigger's own message — it still proves the failure came from
+      // the audit write and not from the delete.
+      await expect(deleteContact(contact.id)).rejects.toThrow(/auditLog\.create/);
+    } finally {
+      // Dropped in a finally: leaking the trigger would break every later test
+      // in this file, and the failure would look unrelated.
+      await prisma.$executeRawUnsafe(`DROP TRIGGER fail_audit;`);
+    }
+
+    // The row survives. A delete that committed without its entry would leave
+    // the audit log silently incomplete, and after a delete that entry is the
+    // only evidence the row ever existed.
+    expect(await prisma.contact.count()).toBe(1);
+  });
+
+  it("writes both when the audit succeeds", async () => {
+    const contact = await seedContact();
+
+    await expect(deleteContact(contact.id)).rejects.toThrow(/NEXT_REDIRECT/);
+
+    expect(await prisma.contact.count()).toBe(0);
+    expect(
+      await prisma.auditLog.count({ where: { action: "contact.delete" } }),
+    ).toBe(1);
+  });
+});

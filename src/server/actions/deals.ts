@@ -171,20 +171,27 @@ export async function updateDeal(
     });
     // Nothing else in this transaction wrote, so returning here leaves the
     // database untouched.
-    return written.count === 0;
+    if (written.count === 0) return true;
+
+    // Audited inside the transaction: a change that committed without its entry
+    // would make the log — which Settings presents as the record of what
+    // happened — quietly incomplete.
+    await audit(
+      {
+        action: stageChanged ? "deal.stage_change" : "deal.update",
+        entityType: "deal",
+        entityId: id,
+        userId: user.id,
+        metadata: stageChanged
+          ? { from: existing.stage, to: data.stage }
+          : undefined,
+      },
+      tx,
+    );
+    return false;
   });
 
   if (conflicted) return { message: STALE_RECORD };
-
-  await audit({
-    action: stageChanged ? "deal.stage_change" : "deal.update",
-    entityType: "deal",
-    entityId: id,
-    userId: user.id,
-    metadata: stageChanged
-      ? { from: existing.stage, to: data.stage }
-      : undefined,
-  });
   revalidatePath("/deals");
   revalidatePath("/dashboard");
   return { success: true };
@@ -237,17 +244,20 @@ export async function moveDeal(input: {
             : { position: index },
       });
     }
-  });
 
-  if (stageChanged) {
-    await audit({
-      action: "deal.stage_change",
-      entityType: "deal",
-      entityId: dealId,
-      userId: user.id,
-      metadata: { from: deal.stage, to: stage, via: "kanban" },
-    });
-  }
+    if (stageChanged) {
+      await audit(
+        {
+          action: "deal.stage_change",
+          entityType: "deal",
+          entityId: dealId,
+          userId: user.id,
+          metadata: { from: deal.stage, to: stage, via: "kanban" },
+        },
+        tx,
+      );
+    }
+  });
   revalidatePath("/deals");
   revalidatePath("/dashboard");
   return { ok: true };
@@ -264,13 +274,20 @@ export async function deleteDeal(dealId: string): Promise<void> {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 
-  await prisma.deal.delete({ where: { id } });
-  await audit({
-    action: "deal.delete",
-    entityType: "deal",
-    entityId: id,
-    userId: user.id,
-    metadata: { title: deal.title },
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.deal.delete({ where: { id } });
+    await audit(
+      {
+        action: "deal.delete",
+        entityType: "deal",
+        entityId: id,
+        userId: user.id,
+        metadata: { title: deal.title },
+      },
+      tx,
+    );
   });
   revalidatePath("/deals");
   revalidatePath("/dashboard");

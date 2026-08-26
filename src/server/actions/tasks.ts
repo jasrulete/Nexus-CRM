@@ -88,12 +88,19 @@ export async function deleteTask(taskId: string): Promise<void> {
     throw new Error("FORBIDDEN: only the assignee or an admin can delete");
   }
 
-  await prisma.task.delete({ where: { id } });
-  await audit({
-    action: "task.delete",
-    entityType: "task",
-    entityId: id,
-    userId: user.id,
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.task.delete({ where: { id } });
+    await audit(
+      {
+        action: "task.delete",
+        entityType: "task",
+        entityId: id,
+        userId: user.id,
+      },
+      tx,
+    );
   });
   revalidateFor(task);
 }
