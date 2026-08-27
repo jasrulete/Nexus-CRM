@@ -34,20 +34,23 @@ export default defineConfig({
       ],
       // A floor, not a target, and set from the measured figure rather than an
       // aspiration — a threshold nobody can meet is one somebody deletes.
-      // Today: 58% statements, 52% branches, 62% functions, 59% lines. These
+      // Today: 70% statements, 66% branches, 75% functions, 72% lines. These
       // sit a few points under, so deleting a test file or shipping a new
       // module with none trips it, while ordinary churn does not.
       //
-      // The number is low for an honest reason. src/lib/db.ts and
-      // src/lib/auth/session.ts read 0% because every test mocks them, and
-      // src/server/actions/ai.ts, src/lib/auth/actions.ts, src/lib/password.ts
-      // and src/lib/relations.ts have no direct tests at all. Raise this as
-      // those are closed; do not raise it by narrowing `include`.
+      // What is still uncovered, and why. src/lib/db.ts and
+      // src/lib/auth/session.ts read 0% because every test mocks them — they
+      // are the seam the harness fakes, so this suite structurally cannot reach
+      // them. src/lib/auth/actions.ts (login, register, logout),
+      // src/lib/auth/password.ts and src/lib/relations.ts have no direct tests
+      // at all, and that is a real gap rather than an artefact.
+      //
+      // Raise this as those close. Do not raise it by narrowing `include`.
       thresholds: {
-        statements: 55,
-        branches: 48,
-        functions: 58,
-        lines: 55,
+        statements: 68,
+        branches: 63,
+        functions: 72,
+        lines: 69,
       },
     },
   },
