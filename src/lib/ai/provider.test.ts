@@ -110,12 +110,16 @@ describe("generateText failover", () => {
   const groqReply = (text: string) => json({ choices: [{ message: { content: text } }] });
 
   type Answer = () => Response | Promise<Response>;
-  /** Routes fetch by host so each provider can be scripted independently. */
+  /**
+   * Routes fetch by host so each provider can be scripted independently.
+   * Exact hostname, not a substring: CodeQL flags `includes(host)` as an
+   * incomplete URL check, and it is right — even in a test.
+   */
   function routeFetch(handlers: { gemini: Answer; groq: Answer }) {
     return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url =
         typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      return url.includes(GEMINI_HOST) ? handlers.gemini() : handlers.groq();
+      return new URL(url).hostname === GEMINI_HOST ? handlers.gemini() : handlers.groq();
     });
   }
   function requestedModel(call: unknown[]): string {
