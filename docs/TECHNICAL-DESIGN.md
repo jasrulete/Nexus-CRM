@@ -1396,61 +1396,64 @@ design document that only describes the parts that work is not a design document
 
 ### Data correctness
 
-**Currency is written and never read.** `Deal.currency` defaults to `"USD"` and
-is set on every row. Nothing reads it: `formatCurrency` in `src/lib/utils.ts`
-takes `currency = "USD"` as a *default parameter* and no caller anywhere passes
-the second argument, so the default is what always applies. It is called from
-the dashboard, the deals header, both
-charts, the kanban column footers and the company detail page. It is safe today
-only because every row happens to be USD. The moment an import or a currency
-dropdown writes anything else, €62,000 gets added to $48,000 and rendered as
-"$110,000". *Acceptable because* there is no way in the UI to create a non-USD
-deal. *Not acceptable the moment there is*, and the fix is a decision rather than
-a patch: either drop the column and add a workspace-level currency, or group every
-aggregate by currency and refuse to sum across them. Related: `value` is a whole
-integer of major units, so cents are unrepresentable.
+**Currency — resolved with a frozen rate.** A deal stores the amount as entered
+(`value`, `currency`) and the same amount converted into the workspace currency
+(`baseValue`) at the rate it was converted at (`fxRate`). Every aggregate —
+dashboard, deals header, both charts, kanban footers, company list and detail,
+the AI prompt and both heuristics — sums `baseValue` and nothing else, and
+`formatDealAmount` (`src/lib/money.ts`) renders `$72,534 (EUR 62,000)` so the
+original is always visible beside the converted figure. The rate is resolved
+once, when `value` or `currency` changes, and carried forward on every other
+edit; the first implementation re-resolved on every save, and the pre-merge
+review caught a title-only edit moving a closed deal's `baseValue` by 3,348.
+Rates come from Frankfurter (`src/lib/fx.ts`, ECB reference rates, no key), and
+an unavailable rate refuses the write rather than storing the amount at 1:1 —
+with the rate frozen, a wrong one would be permanent. `value` is still a whole
+integer of major units, so cents remain unrepresentable.
 
-**"Overdue" is a day early in negative UTC offsets.** Date-only fields
-(`Task.dueDate`, `Deal.expectedCloseDate`) are stored at UTC midnight, and
-`deal-card.tsx` compares `new Date(deal.expectedCloseDate) < new Date()` — a date
-against an *instant*. In `America/New_York`, a deal due 2026-08-22 renders in
-`text-danger` from 19:00 on the 21st, while the label beside it still reads
-"Aug 22, 2026". The UI says due-tomorrow and overdue at the same time. The
-formatter already handles this correctly (`formatDateOnly` passes
-`timeZone: "UTC"`); only the comparison does not. `src/lib/utils.test.ts` tests
-the formatter and never the comparison, which is exactly why it survived.
-*Acceptable because* the author and the demo audience are in UTC+8, where the bug
-does not appear. *That is a bad reason*, and it is a couple of hours to fix with
-an `isOverdueDateOnly()` helper and a fixed-clock test in two timezones.
+**"Overdue" — resolved.** Date-only fields (`Task.dueDate`,
+`Deal.expectedCloseDate`) are stored at UTC midnight, and both call sites used
+to compare that against `new Date()` — a date against an *instant* — so in
+`America/New_York` a deal due 2026-08-22 rendered in `text-danger` from 19:00 on
+the 21st while the label beside it still read "Aug 22, 2026". `isOverdueDateOnly()`
+in `src/lib/utils.ts` now compares whole UTC days, the same frame `formatDateOnly`
+already rendered in, and `src/lib/utils.test.ts` walks every hour of a due date
+asserting the label and the styling never disagree. It survived as long as it
+did because the author and the demo audience are in UTC+8, where it never
+appeared — which is a reason it went unnoticed, not a reason it was acceptable.
 
-**Deal ordering races and drifts.** Three defects in one column:
-`createDeal` reads `last.position` and writes `+1` outside a transaction, so two
-concurrent creates collide; `updateDeal` changes stage without resequencing at
-all, leaving duplicate positions in the target column and a gap in the vacated
-one, after which card order depends on SQLite rowid and shuffles between page
-loads; and `moveDeal` reads the column *outside* the `$transaction` it then
-writes inside — a lost update on concurrent drags. `moveDeal` also resequences
-every other owner's deals in that column and audits only stage changes, so a
-reorder that shuffles ten other people's cards leaves no record. *Acceptable
-because* a single-user demo has no concurrency. *It is also the first thing a
-reviewer probes in a drag-and-drop implementation*, so it is the highest-value
-correctness fix on the list.
+**Deal ordering — resolved.** Three defects in one column, fixed together:
+`createDeal` read `last.position` and wrote `+1` outside a transaction, so
+concurrent creates collided (in the reproduction, five at once all landed at
+position 0); `updateDeal` changed stage without resequencing, leaving duplicate
+positions in the target column and a gap in the vacated one, after which card
+order depended on SQLite rowid and shuffled between page loads; and `moveDeal`
+read the column *outside* the `$transaction` it then wrote inside — a lost
+update on concurrent drags. All three now read and write inside one
+transaction, and `updateDeal` appends a stage-changed card to the end of its new
+column. `deals-ordering.test.ts` asserts every column is `0..n-1` after each
+operation, including under concurrent writes. Still true and deliberately left:
+`moveDeal` resequences other owners' deals in the column, and audits only stage
+changes, so a pure reorder leaves no record.
 
-**No optimistic concurrency anywhere.** Every edit is a blind full-field
-overwrite. Two users open the same contact; A saves a new phone; B saves from a
-stale form and reverts it, with no conflict, no warning, and an audit entry
-recording only `contact.update` with no diff. The fix is small — a hidden
-`updatedAt` in each form and `where: { id, updatedAt: submitted }`, catching
-Prisma's `P2025` and returning a message through the `ActionState` channel that
-already exists.
+**Optimistic concurrency — resolved.** Every edit form carries the row's
+`updatedAt` as a hidden field (`VERSION_FIELD` in `src/lib/concurrency.ts`). The
+update is `updateMany({ where: { id, updatedAt: submitted } })` — `updateMany`
+rather than `update` because Prisma's `update` needs a unique `where` and
+`updatedAt` is not unique — and a count of zero returns `STALE_RECORD` through
+`ActionState`. A submit carrying no version is refused rather than silently
+falling back to last-write-wins, so a form that forgets the field fails loudly.
+Verified that a millisecond-precision timestamp survives the ISO round-trip and
+still matches its row; without that, every save would have looked like a
+conflict.
 
-**The audit log cannot be trusted to be complete.** `audit()` runs after and
-outside the transaction it describes, and swallows its own failures into
-`console.error`, which Sentry does not capture. A deal can commit as WON with
-nothing in the log. The Settings page sells the audit log as a compliance story,
-so absence of an entry currently proves nothing. *Acceptable because* nothing
-depends on it for compliance. *The one-line mitigation* — capture the swallow to
-Sentry — is not done and should be.
+**Audit completeness — resolved for state changes.** `audit(entry, tx?)` takes
+the caller's transaction client; every delete and the deal update and move write
+their entry inside the transaction that makes the change, so a deal cannot
+commit as WON with nothing in the log. Entries that have no transaction to join
+(logins, AI usage, the demo reset) remain best-effort, but a failed write is now
+`Sentry.captureException`'d rather than dropped into `console.error`, so absence
+of an entry is at least visible somewhere.
 
 **Enum-like columns have no database constraint**, and the seed, reset and
 add-member scripts all write them directly, bypassing zod. A typo like
@@ -1460,10 +1463,14 @@ explanation.
 
 ### Operations
 
-**Migrations are non-atomic in both appliers** (§8), with divergent failure
-modes — a Turso database that baselines away its missing tables, or a Docker
-container that can never boot again on a volume users are told survives rebuilds.
-Neither script is exercised by CI.
+**Migrations are non-atomic in both appliers** (§8), and cannot be wrapped in a
+transaction because Prisma's table rebuilds toggle `PRAGMA foreign_keys`, a
+no-op inside one. Mitigated rather than fixed: the shared `planMigrations()`
+(`src/lib/migration-ledger.ts`) records a ledger row before the SQL runs and
+stamps it afterwards, so an interrupted migration is detected on the next run
+instead of being baselined over — which is how a Turso database once lost its
+missing tables silently. The planning logic is unit tested; the two scripts that
+call it are still not exercised end-to-end by CI.
 
 **The rate limiter is per-instance and in-memory.** `src/lib/rate-limit.ts` keeps
 buckets in a module-level `Map`, so on Vercel every lambda instance has its own

@@ -515,14 +515,15 @@ self-hosted alternative would need a host, which is not free.
 Everything in this section is a place where the shipped behaviour and the intended
 behaviour do not match. None of it is speculative — each names the file.
 
-### 11.1 Currency is stored and never read
+### 11.1 ~~Currency is stored and never read~~ — resolved: multi-currency with a frozen rate
 
-`Deal.currency` defaults to `"USD"` and is written on every row, but nothing reads
-it. `formatCurrency` and `formatCompactCurrency` in `src/lib/utils.ts` take a
-`currency` parameter that defaults to `"USD"` and no caller ever passes one, and
-the deal form's field label is the literal string `Value (USD)`. Either the column
-should be dropped or the render path should read it. Today it is a promise the
-schema makes and the UI breaks.
+A deal now carries the amount as entered (`value`, `currency`) and the same amount
+converted to the workspace currency (`baseValue`) at a rate frozen when the amount
+was set (`fxRate`). Every total sums `baseValue`; a deal renders as
+`$72,534 (EUR 62,000)`. The form field is labelled `Amount` with a currency picker
+limited to `SUPPORTED_CURRENCIES`. Rates come from Frankfurter (free, no key) and an
+unavailable rate refuses the save rather than assuming 1. Full design in
+`docs/DATA-MODEL.md` → Money.
 
 ### 11.2 The demo delete lock is inconsistently surfaced
 
@@ -554,39 +555,42 @@ total past the 100-row cap. `/contacts` still renders
 contacts it states the cap as if it were the total — exactly the bug that was fixed
 one route over.
 
-### 11.5 "Overdue" is a day early west of UTC
+### 11.5 ~~"Overdue" is a day early west of UTC~~ — resolved
 
-Task due dates are stored at UTC midnight, and `TaskList` computes
-`new Date(task.dueDate) < new Date()` — a date compared against an instant. At
-09:00 in Manila a task due today is not yet overdue (UTC+8 is ahead of UTC), but in
-any negative UTC offset a task due today reads as overdue from local midnight
-onward. `formatDateOnly` already handles the rendering side correctly with
-`timeZone: "UTC"`; the comparison was not given the same treatment.
+The task list and the deal card both call `isOverdueDateOnly()`
+(`src/lib/utils.ts`), which compares whole UTC days — the same frame
+`formatDateOnly` renders in — so the styling and the label can no longer
+disagree. A test walks all 24 hours of a due date to prove it.
 
-### 11.6 Concurrent deal writes race
+### 11.6 ~~Concurrent deal writes race~~ — resolved
 
-`createDeal` reads the highest `position` in a stage and writes `+1` outside a
-transaction, so two simultaneous creates collide. `moveDeal` reads the whole
-column, splices, and writes the resequence inside `prisma.$transaction`, but the
-read that produced the plan happened outside it. At one-user demo scale this never
-fires; it is a correctness gap, not a live bug.
+`createDeal` and `moveDeal` now read the column inside the transaction they
+write in, and `updateDeal` resequences when a deal changes stage.
+`deals-ordering.test.ts` asserts every column stays `0..n-1`, including under
+five concurrent creates — which, against the old code, all landed at position 0.
 
-### 11.7 No optimistic concurrency anywhere
+### 11.7 ~~No optimistic concurrency anywhere~~ — resolved
 
-Two people editing the same contact produce last-write-wins with no warning. There
-is no version column and no `updatedAt` precondition on any update.
+Each edit form submits the row's `updatedAt`; the update matches on it and a
+conflicting save is refused with "This record changed while you were editing it."
+No new column was needed. See `src/lib/concurrency.ts`.
 
-### 11.8 Audit writes sit outside their transaction
+### 11.8 ~~Audit writes sit outside their transaction~~ — resolved for state changes
 
-Every action calls `audit()` after the database write completes, unwrapped. A crash
-between the two leaves a mutation with no audit entry — which weakens, slightly,
-the "full audit trail" claim on the Settings page.
+`audit()` accepts the caller's transaction client. Every delete, and the deal
+update and move, write their audit entry inside the same transaction as the
+mutation, so a change cannot commit without its record. Best-effort entries
+(logins, AI usage) stay outside but now report failures to Sentry instead of
+swallowing them.
 
 ### 11.9 Migration application is non-atomic
 
 `scripts/db-push-turso.ts` and `scripts/docker-entrypoint.mjs` apply migrations
-statement by statement with no surrounding transaction. A failure mid-migration
-leaves the schema half-applied.
+with no surrounding transaction, and cannot use one: Prisma's table rebuilds
+toggle `PRAGMA foreign_keys`, which is a no-op inside a transaction. A failure
+mid-migration still leaves the schema half-applied, but it is no longer silent —
+the ledger row is written before the SQL and stamped after, so the next run sees
+the unstamped row, stops, and says which migration was interrupted.
 
 ### 11.10 The AI provider never fails over
 

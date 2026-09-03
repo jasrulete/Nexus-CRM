@@ -399,10 +399,11 @@ inline wherever `QuickTaskForm` is mounted (`src/components/quick-task-form.tsx`
 - **Delete:** same `assertNotLockedDemoAccount` + `canMutate` pattern as every other delete action;
   same catch-and-message in `TaskList`.
 - **Overdue styling** is computed client-side in `TaskList`: `!task.done && task.dueDate &&
-  new Date(task.dueDate) < new Date()`. `dueDate` is stored as a date-only value but compared
-  against a full instant — this is one of the known open items: in a negative UTC offset (e.g.
-  US timezones), a task due "today" can render as overdue up to a day early, because midnight UTC
-  for that date has already passed locally before the user's own midnight has.
+  isOverdueDateOnly(task.dueDate)`. `dueDate` is stored as a date-only value at UTC midnight, and
+  the helper (`src/lib/utils.ts`) compares whole UTC days rather than the raw instant. The earlier
+  `new Date(task.dueDate) < new Date()` comparison marked a task due "today" as overdue up to a
+  day early in negative UTC offsets, because midnight UTC for that date had passed locally before
+  the user's own midnight — fixed, with a test that walks every hour of the due date.
 - All three actions call `revalidateFor(task)`, which revalidates `/dashboard` always, plus
   `/contacts/{contactId}` and `/deals` only if the task actually has that relation — so a
   dashboard-only quick task never triggers a wasted revalidation of `/deals`.

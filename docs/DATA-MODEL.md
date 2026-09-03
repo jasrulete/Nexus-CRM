@@ -202,8 +202,10 @@ cannot tell from the row whether a score is a model's opinion or a rule's.
 | --- | --- | --- | --- | --- |
 | `id` | `String` / TEXT PK | no | `cuid()` | |
 | `title` | `String` / TEXT | no | — | ≤160 |
-| `value` | `Int` / INTEGER | no | `0` | **Whole currency units** — not cents. See [Money](#money-value-and-a-currency-nothing-reads) |
-| `currency` | `String` / TEXT | no | `'USD'` | Written by the DB default and **read by nothing** |
+| `value` | `Int` / INTEGER | no | `0` | The amount **as entered**, in `currency`, whole units — not cents. Never summed. See [Money](#money-value-currency-and-the-frozen-rate) |
+| `currency` | `String` / TEXT | no | `'USD'` | ISO code the user picked from `SUPPORTED_CURRENCIES` (`src/lib/money.ts`). Read by `formatDealAmount`, which shows it alongside the converted amount |
+| `baseValue` | `Int` / INTEGER | no | `0` | `value` converted to `WORKSPACE_CURRENCY` at `fxRate`, rounded once. **The only amount that is ever summed** — every total, chart and forecast reads this, never `value`. Backfilled from `value` at rate 1 by the migration |
+| `fxRate` | `Float` / REAL | no | `1` | The rate `value` was converted at, **frozen when the amount was set**. Re-resolved only when `value` or `currency` changes, so an unrelated edit never re-prices a deal and historical totals do not drift. See [Money](#money-value-currency-and-the-frozen-rate) |
 | `stage` | `String` / TEXT | no | `'LEAD'` | `LEAD` / `QUALIFIED` / `PROPOSAL` / `NEGOTIATION` / `WON` / `LOST`. Enum-like, zod-only |
 | `position` | `Int` / INTEGER | no | `0` | Sort order within a stage column. See [Ordering](#dealposition-and-how-kanban-ordering-works) |
 | `expectedCloseDate` | `DateTime?` / DATETIME | yes | — | **Date-only**, stored at UTC midnight |
@@ -452,34 +454,51 @@ constant in `constants.ts` and the constraint in SQL both need updating together
 
 ---
 
-## Money: `value`, and a currency nothing reads
+## Money: `value`, `currency`, and the frozen rate
 
-`Deal.value` is `Int` holding **whole currency units** — 48000 means $48,000, not $480.00. Cents
-are unrepresentable. `dealSchema` enforces `int()`, `min(0)`, `max(1_000_000_000)`, so the form
-rejects `4800.50` with "Value must be a whole number".
+A deal is stored twice. `value` is the amount **as the user entered it**, in `currency` — an
+`Int` of whole units (48000 means €48,000 or $48,000, never $480.00; `dealSchema` enforces
+`int()`, `min(0)`, `max(1_000_000_000)`). `baseValue` is that amount converted into the
+workspace currency, and `fxRate` is the rate it was converted at. Both live on the row.
 
-`Deal.currency` is `String @default("USD")`, and:
+**Every aggregate sums `baseValue` and never `value`.** The dashboard cards, both charts, the
+kanban column footers, the company list's open-pipeline column, the weighted forecast, the AI
+prompt's deal list and both AI heuristics all read `baseValue`. That is the whole point of storing
+it: two deals in different currencies cannot be added, so the only number that is safe to add is
+the one already in a single currency. `formatDealAmount` (`src/lib/money.ts`) renders a deal as
+`$72,534 (EUR 62,000)` — converted amount first, original alongside by ISO code, because CAD, SGD,
+AUD and USD all share a `$` glyph.
 
-- **No form writes it.** `dealSchema` has no `currency` field; `createDeal` spreads only the
-  parsed data, so every row gets the SQL default.
-- **No reader honours it.** Every money render calls `formatCurrency(value)` or
-  `formatCompactCurrency(value)` from `src/lib/utils.ts`, whose signature is
-  `(value: number, currency = "USD")`. Grep the callers — dashboard (×3), deals header, both
-  charts, kanban column footers, deal cards, company list, company detail, contact detail — and
-  **not one passes a second argument**.
+**The rate is frozen when the amount is set, not applied at read time.** `createDeal` and
+`updateDeal` (`src/server/actions/deals.ts`) call `resolveAmount()` only when `value` or
+`currency` actually changes; any other edit carries the existing `fxRate` and `baseValue`
+forward. This matters more than it looks: the pre-merge review found the original implementation
+re-resolved on every save, so fixing a typo in a March-closed deal's title in August re-priced it
+at August's rate and quietly moved last quarter's revenue by 3,348. Converting live would have the
+same effect on every page load. Frozen-at-write is how accounting systems behave.
 
-So the column is inert, and the aggregates are safe only because every row happens to be `'USD'`.
-The moment an import or a currency dropdown writes anything else, `openDeals.reduce((s, d) => s + d.value, 0)`
-adds €62,000 to $48,000 and renders "$110,000" with no warning. A per-row currency that no reader
-honours is worse than no currency column at all: it looks like the system handles multi-currency.
+**Rates come from Frankfurter** (`src/lib/fx.ts` — ECB reference rates, no API key, free), cached
+per day in process. A rate that cannot be fetched **refuses the write** with a message rather than
+defaulting to 1: storing a EUR amount as if it were dollars would corrupt every total the deal
+appears in, permanently, because the rate is frozen. A deal in the workspace currency needs no rate
+and never touches the network, so a provider outage cannot block the single-currency case — nor
+renaming a foreign-currency deal, since that does not change the amount.
 
-The decision, per `IMPROVEMENT-PLAN.md` §3.2, is to pick one and make it explicit — either drop
-the column for a single workspace-level currency setting, or group every aggregate by currency and
-refuse to sum across them. Both are free. Neither has been done.
+**The workspace currency is a constant**, `WORKSPACE_CURRENCY` in `src/lib/money.ts`, overridable
+by env. `formatCurrency` and `formatCompactCurrency` in `src/lib/utils.ts` default to it. Note the
+env var is read at module scope and `money.ts` is in the client bundle, so a non-USD self-hoster
+would need it exposed as `NEXT_PUBLIC_WORKSPACE_CURRENCY` to avoid a hydration mismatch — an open
+follow-up; USD-everywhere is unaffected.
 
-The related debt is naming: `value` as whole units should eventually become `amountMinor` storing
-integer minor units, while the table is still small enough to migrate cheaply. Note that minor-unit
-exponents are not universally 2 (JPY is 0, KWD is 3), so "cents" is not a safe universal.
+**Migration note.** `20260823151943_add_deal_base_value_and_fx_rate` was hand-edited after
+generation. Prisma's SQL rebuilt the table with `baseValue INTEGER NOT NULL DEFAULT 0`, which would
+have zeroed every historical deal out of every total; it instead backfills `baseValue` from `value`
+at a rate of 1, which is correct because every pre-existing row was already in the workspace
+currency.
+
+The remaining debt is naming: `value` as whole units should eventually become `amountMinor` in
+integer minor units, while the table is small enough to migrate cheaply. Minor-unit exponents are
+not universally 2 (JPY is 0, KWD is 3), so "cents" is not a safe universal.
 
 ---
 
@@ -492,41 +511,50 @@ stage — two deals in different stages routinely share position 0.
 
 Three write paths touch it:
 
-**`createDeal`** finds the current maximum in the target stage and adds one:
+**`createDeal`** finds the current maximum in the target stage and adds one, inside the
+transaction that inserts:
 
 ```ts
-const last = await prisma.deal.findFirst({
-  where: { stage: data.stage },
-  orderBy: { position: "desc" },
+const deal = await prisma.$transaction(async (tx) => {
+  const last = await tx.deal.findFirst({
+    where: { stage: data.stage },
+    orderBy: { position: "desc" },
+    select: { position: true },
+  });
+  return tx.deal.create({ data: { …, position: (last?.position ?? -1) + 1 } });
 });
-// … position: (last?.position ?? -1) + 1
 ```
 
-The read and the write are **not in a transaction**, so two concurrent creates into the same
-column both read the same `last` and both write the same position.
+The read used to sit outside any transaction, so two concurrent creates into the same column
+both read the same `last` and both wrote the same position — in the reproduction, five at once
+all landed at 0. `deals-ordering.test.ts` now fires five concurrent creates and asserts `0..4`.
 
 **`moveDeal`** is the drag-and-drop path. It reads the whole target column excluding the moved
-deal, splices the id in at the requested index, and writes the entire resequenced column inside a
-`prisma.$transaction([...])` — one `update` per card. The read happens *outside* that transaction,
-so two concurrent drags is a textbook lost update. It also resequences other users' deals (the
-column read has no owner filter) and audits only stage changes, so a pure reorder that shuffles
-ten other people's cards leaves no record at all.
+deal, splices the id in at the requested index, and writes the entire resequenced column — one
+`update` per card — with the read and every write inside one interactive `$transaction`, and the
+audit entry written through the same client so a move cannot commit without its record. The read
+used to happen *outside* the transaction, which made two concurrent drags a textbook lost update.
+Two things are deliberately unchanged: it resequences other users' deals (the column read has no
+owner filter, because one column has one order), and it audits only stage changes, so a pure
+reorder leaves no record.
 
-**`updateDeal`** — the edit dialog — changes `stage` and **does not touch `position`**. Move a
-deal from Lead to Proposal through the form and it keeps whatever index it had in Lead, producing
-a duplicate position in Proposal and a gap in Lead. Once positions collide, card order falls back
-to whatever SQLite's row order gives you, which can shuffle between page loads.
+**`updateDeal`** — the edit dialog — appends a stage-changed deal to the **end of its new column**
+(`max(position) + 1`, read inside the same transaction as the write). It used to keep whatever
+index it had in the old column, producing a duplicate in the target and an order that fell back to
+SQLite's row order and shuffled between page loads. It does not close the gap it leaves behind;
+gaps are harmless because the board sorts on `position` and only duplicates make the order
+ambiguous.
 
 The board is optimistic: it applies the move locally, calls `moveDeal`, and on `{ ok: false }`
 restores a snapshot and shows "Couldn't move that deal — it's been put back."
-(`src/components/kanban/board.tsx:138–149`). `ok: false` is returned for a failed zod parse, a
-missing deal, or a `canMutate` refusal.
+(`src/components/kanban/board.tsx`). `ok: false` is returned for a failed zod parse, a missing
+deal, or a `canMutate` refusal.
 
-The strategic fix is a fractional/lexorank key so a move is one write instead of N. The tactical
-one is wrapping the read and the write in the same transaction. Neither is done.
+The strategic fix — a fractional/lexorank key so a move is one write instead of N — is not done,
+and at this table size does not need to be.
 
-There is also no keyboard path: `useSensors(useSensor(PointerSensor, …))` is the only sensor
-registered, so ordering is mouse/touch-only.
+Ordering is reachable from the keyboard: the board registers a `KeyboardSensor` beside the
+`PointerSensor`, and an e2e test walks a card to a neighbouring column with the arrow keys.
 
 ---
 
@@ -549,20 +577,18 @@ because rendering UTC midnight in a negative-offset local timezone would show th
 `formatDate()` (no `timeZone`) is for genuine instants — `createdAt`, `updatedAt`. Using the wrong
 one is the classic off-by-one-day bug, so the split is intentional and the docstring says so.
 
-**Known bug: the overdue comparison ignores the convention.** Both places that decide whether
-something is late compare the date-only value against `new Date()` — an instant:
+**The overdue comparison — fixed to honour the convention.** Both places that decide whether
+something is late used to compare the date-only value against `new Date()` — an instant. A task
+due `2026-08-22` is stored as `2026-08-22T00:00:00Z`; in `America/New_York` (UTC−4) that instant
+has passed at 20:00 on the 21st, so the row rendered in `text-danger` while the label beside it —
+correctly rendered through `formatDateOnly` — still read "Aug 22, 2026". Anywhere at or ahead of
+UTC it was correct, which is why it survived: the tests asserted the formatter and never the
+comparison.
 
-- `src/components/kanban/deal-card.tsx:36`: `new Date(deal.expectedCloseDate) < new Date()`
-- `src/components/task-list.tsx:44`: `new Date(task.dueDate) < new Date()`
-
-A task due `2026-08-22` is stored as `2026-08-22T00:00:00Z`. In `America/New_York` (UTC−4) that
-instant has already passed at 20:00 on the 21st, so the row renders in `text-danger` while the
-label next to it — correctly rendered through `formatDateOnly` — still reads "Aug 22, 2026". The
-UI says due-tomorrow and overdue at the same time. Anywhere at or ahead of UTC it is correct,
-which is why it survived: `src/lib/utils.test.ts` asserts the formatter and never the comparison.
-
-The fix is an `isOverdueDateOnly()` helper comparing at UTC day granularity, unit-tested with a
-fixed clock in two timezones.
+Both call sites (`src/components/kanban/deal-card.tsx`, `src/components/task-list.tsx`) now use
+`isOverdueDateOnly()` from `src/lib/utils.ts`, which compares at UTC day granularity — the same
+frame the formatter renders in — and `src/lib/utils.test.ts` walks all 24 hours of a due date
+asserting the label and the styling never disagree.
 
 `Deal.closedAt` deliberately does **not** follow the convention — it is a true instant recording
 when the transition happened, so the dashboard's `monthKey()` bucketing by local month is
@@ -689,11 +715,18 @@ ledger row. `db-push-turso.ts` additionally **baselines**: if the ledger is empt
 table already exists, it records migration #1 as applied instead of replaying it and failing on
 `CREATE TABLE`.
 
-Both are **non-atomic**: `client.executeMultiple(sql)` / `db.exec(sql)` runs first, and the
-`INSERT` into the ledger is a separate statement. A crash in between leaves a migration applied
-but unrecorded, and the next run replays it — which for a `CREATE TABLE` or `CREATE INDEX` means a
-hard failure requiring manual repair. Wrapping each migration plus its ledger insert in one
-transaction is the fix, and it is free.
+Both are **non-atomic**, and cannot be made atomic: the obvious fix — one transaction around the
+SQL and its ledger insert — does not work, because Prisma's table-rebuild migrations toggle
+`PRAGMA foreign_keys`, which SQLite documents as a no-op inside a transaction. Wrapping would
+silently leave foreign keys enforced during the rebuild and break exactly the migrations that need
+it most. So instead of preventing a half-applied migration, the runners make one impossible to
+miss: `planMigrations()` in `src/lib/migration-ledger.ts` (pure, shared by both runners, unit
+tested) has each runner write the ledger row **before** applying the SQL with an empty
+`applied_at`, and fill the timestamp in afterwards. A row with no timestamp means "interrupted
+partway through", and the next run stops and says so rather than guessing. The failure this
+replaces was silent: an interrupted first migration on Turso left some tables created and the
+ledger empty, the next run saw an empty ledger and a `User` table, baselined, and the app failed
+at query time with "no such table".
 
 ---
 
@@ -701,24 +734,28 @@ transaction is the fix, and it is free.
 
 Ordered roughly by how likely each is to produce a wrong number a human would act on.
 
-1. **`Deal.currency` is written and never read.** Every aggregate assumes USD. Safe only while
-   every row is USD. Decide: workspace-level currency, or group-by-currency aggregates that refuse
-   to sum across. (`IMPROVEMENT-PLAN.md` §3.2)
+1. ~~**`Deal.currency` is written and never read.**~~ **Fixed.** `baseValue`/`fxRate` added; every
+   aggregate sums `baseValue`; the rate is frozen at write. See [Money](#money-value-currency-and-the-frozen-rate).
 2. **`Deal.value` is whole units.** Cents are unrepresentable, and the name does not say what the
    unit is. Rename to `amountMinor` in minor units while the table is tiny; remember JPY (0) and
    KWD (3) are not 2-exponent.
-3. **Overdue is a day early in negative UTC offsets.** Date-only columns compared against an
-   instant, in `deal-card.tsx:36` and `task-list.tsx:44`. Needs an `isOverdueDateOnly()` helper
-   and a fixed-clock test.
-4. **`Deal.position` has three defects**: `createDeal` reads-then-writes outside a transaction;
-   `updateDeal` changes stage without resequencing at all; `moveDeal` reads the column outside the
-   transaction it writes inside. Result: duplicate positions and order that shuffles between loads.
-5. **No optimistic concurrency anywhere.** Every update is a blind full-field overwrite. Two people
-   editing the same contact means last-write-wins with no warning, and the audit entry records only
-   `contact.update` with no diff. A hidden `updatedAt` in each form plus
-   `where: { id, updatedAt: submitted }` and a `P2025` catch would fix it.
-6. **The audit write is outside the transaction it describes.** `audit()` runs after the mutation
-   and swallows its own errors, so the log can be missing entries for changes that did happen.
+3. ~~**Overdue is a day early in negative UTC offsets.**~~ **Fixed.** `isOverdueDateOnly()` in
+   `src/lib/utils.ts` compares whole UTC days, matching the frame `formatDateOnly` renders in; both
+   call sites use it, and `utils.test.ts` walks all 24 hours of a due date asserting the label and
+   the styling never disagree.
+4. ~~**`Deal.position` has three defects.**~~ **Fixed.** `createDeal`'s read-then-write and
+   `moveDeal`'s column read now happen inside the transaction that writes; `updateDeal` appends a
+   stage-changed card to the end of its new column. `deals-ordering.test.ts` asserts positions are
+   always `0..n-1` even under concurrent writes — against the old code, five concurrent creates all
+   landed at position 0.
+5. ~~**No optimistic concurrency anywhere.**~~ **Fixed.** Each edit form carries the row's
+   `updatedAt` as a hidden field; the update is `updateMany({ where: { id, updatedAt } })` and a
+   count of 0 returns `STALE_RECORD` through `ActionState`. A submit with no version is refused
+   rather than treated as last-write-wins. See `src/lib/concurrency.ts`.
+6. ~~**The audit write is outside the transaction it describes.**~~ **Fixed** for state changes:
+   `audit(entry, tx?)` joins the caller's transaction, so a mutation and its entry commit or roll
+   back together. Entries with no transaction to join (logins, AI usage) stay best-effort but now
+   report a failed write to Sentry instead of swallowing it.
 7. **Enum-like columns have no database constraint.** Any script writing through Prisma can put
    arbitrary strings in `status`, `stage`, `type`, `size`, `source`. The failure mode is silent
    under-reporting, not a crash.
@@ -744,7 +781,9 @@ Ordered roughly by how likely each is to produce a wrong number a human would ac
     you want CRM-style de-duplication; today there is none.
 16. **No soft delete anywhere.** A delete is permanent and cascades; the only trace is an audit row
     carrying the name in `metadata`. There is also no backups runbook.
-17. **Migrations are non-atomic** in both hand-rolled runners.
+17. **Migrations are non-atomic** in both hand-rolled runners, and must stay so (`PRAGMA
+    foreign_keys` is a no-op inside a transaction). Mitigated: an interrupted migration is now
+    detected on the next run instead of being baselined over. See [Migration history](#migration-history).
 
 ## Open questions
 
