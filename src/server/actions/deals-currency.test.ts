@@ -10,6 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createTestDatabase,
   formData,
+  formDataFor,
   makeUser,
   truncateAll,
   type TestUser,
@@ -94,7 +95,42 @@ describe("a deal in another currency", () => {
     expect(deal.baseValue).toBe(72_534); // 62000 * 1.1699, rounded once
   });
 
-  it("keeps the original rate when a later save cannot reach the provider", async () => {
+  it("keeps the frozen rate through an edit that does not touch the amount", async () => {
+    // The property the whole design rests on, and the one the pre-merge review
+    // found broken: updateDeal used to re-resolve the rate on every save, so a
+    // title fix months later re-priced a closed deal at that day's rate. A
+    // March-closed EUR 62,000 deal moved 72,534 -> 69,186 on a title-only edit.
+    rate.next = { ok: true, rate: 1.1699 };
+    await createDeal(
+      {},
+      formData({ title: "European", value: "62000", stage: "LEAD", currency: "EUR" }),
+    );
+    const before = await prisma.deal.findFirstOrThrow();
+
+    // The euro has moved since. The amount has not.
+    rate.next = { ok: true, rate: 1.1159 };
+    const result = await updateDeal(
+      before.id,
+      {},
+      formDataFor(before, {
+        title: "European (renamed)",
+        value: "62000",
+        stage: "LEAD",
+        currency: "EUR",
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    const after = await prisma.deal.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.title).toBe("European (renamed)");
+    expect(after.fxRate).toBe(1.1699); // frozen, not today's 1.1159
+    expect(after.baseValue).toBe(72_534);
+  });
+
+  it("does not need the provider at all for an edit that leaves the amount alone", async () => {
+    // Follows from the above: if the rate is carried forward, an unrelated edit
+    // must succeed even while the provider is down. Otherwise a Frankfurter
+    // outage would block renaming a deal.
     rate.next = { ok: true, rate: 1.1699 };
     await createDeal(
       {},
@@ -106,13 +142,67 @@ describe("a deal in another currency", () => {
     const result = await updateDeal(
       before.id,
       {},
-      formData({ title: "European (renamed)", value: "62000", stage: "LEAD", currency: "EUR" }),
+      formDataFor(before, {
+        title: "European (renamed)",
+        value: "62000",
+        stage: "LEAD",
+        currency: "EUR",
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    const after = await prisma.deal.findUniqueOrThrow({ where: { id: before.id } });
+    expect(after.title).toBe("European (renamed)");
+    expect(after.baseValue).toBe(72_534);
+  });
+
+  it("re-resolves the rate only when the amount or currency actually changes", async () => {
+    rate.next = { ok: true, rate: 1.1699 };
+    await createDeal(
+      {},
+      formData({ title: "European", value: "62000", stage: "LEAD", currency: "EUR" }),
+    );
+    const before = await prisma.deal.findFirstOrThrow();
+
+    rate.next = { ok: true, rate: 1.1159 };
+    const result = await updateDeal(
+      before.id,
+      {},
+      formDataFor(before, { title: "European", value: "70000", stage: "LEAD", currency: "EUR" }),
+    );
+
+    expect(result.success).toBe(true);
+    const after = await prisma.deal.findUniqueOrThrow({ where: { id: before.id } });
+    // A new amount is a new pricing event, so it gets the current rate.
+    expect(after.fxRate).toBe(1.1159);
+    expect(after.baseValue).toBe(78_113); // 70000 * 1.1159, rounded
+  });
+
+  it("refuses a real amount change when the provider is unreachable, and writes nothing", async () => {
+    rate.next = { ok: true, rate: 1.1699 };
+    await createDeal(
+      {},
+      formData({ title: "European", value: "62000", stage: "LEAD", currency: "EUR" }),
+    );
+    const before = await prisma.deal.findFirstOrThrow();
+
+    rate.next = { ok: false, reason: "unavailable" };
+    const result = await updateDeal(
+      before.id,
+      {},
+      formDataFor(before, {
+        title: "European (renamed)",
+        value: "70000",
+        stage: "LEAD",
+        currency: "EUR",
+      }),
     );
 
     expect(result.message).toMatch(/exchange rate/i);
     const after = await prisma.deal.findUniqueOrThrow({ where: { id: before.id } });
     // Nothing was written — not the title, and certainly not the amount.
     expect(after.title).toBe("European");
+    expect(after.value).toBe(62_000);
     expect(after.baseValue).toBe(72_534);
     expect(after.fxRate).toBe(1.1699);
   });

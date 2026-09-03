@@ -129,7 +129,17 @@ export async function updateDeal(
   const { contactId, companyId, expectedCloseDate, ...data } = parsed.data;
   const stageChanged = existing.stage !== data.stage;
 
-  const amount = await resolveAmount(data.value, data.currency);
+  // The rate is frozen onto the row when the amount is set, and has to stay put
+  // through unrelated edits. This used to call resolveAmount unconditionally, so
+  // fixing a typo in the title months later re-priced a closed deal at that
+  // day's rate — a March-closed EUR 62,000 deal moved 72,534 -> 69,186 on a
+  // title-only edit — quietly rewriting last quarter's revenue. Only an actual
+  // change to the amount or its currency earns a new rate.
+  const amountChanged =
+    data.value !== existing.value || data.currency !== existing.currency;
+  const amount = amountChanged
+    ? await resolveAmount(data.value, data.currency)
+    : { fxRate: existing.fxRate, baseValue: existing.baseValue };
   if (!amount) return { message: RATE_UNAVAILABLE };
 
   const resolvedContactId = await resolveRelation("contact", contactId);
