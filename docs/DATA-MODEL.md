@@ -69,7 +69,10 @@ per-user data partitioning. It is not.
 `src/app/(app)/contacts/page.tsx:35` filters on status and search text only.
 `src/app/(app)/companies/page.tsx:47` filters on size and search text only.
 `src/app/(app)/deals/page.tsx:13` filters on nothing at all. The dashboard's pipeline numbers
-(`src/app/(app)/dashboard/page.tsx:46`) count every deal in the table regardless of owner. The
+(`src/app/(app)/dashboard/page.tsx:46`) count every deal in the table regardless of owner, and
+the ⌘K palette's `searchRecords` (`src/server/actions/search.ts`) searches every contact,
+company, deal and activity in the workspace — pinned by a test in which a MEMBER finds a
+record the ADMIN owns. The
 only query anywhere that filters by the current user is the dashboard's task list
 (`where: { assigneeId: user.id, done: false }`), and that is a personal to-do widget, not a
 tenancy boundary.
@@ -389,6 +392,11 @@ by hand. Two of the four in the second migration exist because the first migrati
 
 Notable gaps, all of them fine at demo scale and all of them full scans:
 
+- **Global search is four `LIKE '%q%'` scans** — over `Contact` (five columns including
+  `notes`), `Company` (four including `notes`), `Deal.title` and `Activity.content` — which no
+  index can serve. Results are capped at five per type, so the payload is bounded; the scan is
+  not, and `%`/`_` in a query act as wildcards. The free upgrade is an FTS5 virtual table kept
+  in step by triggers in one migration, queried with `MATCH`. See `src/server/actions/search.ts`.
 - **`Activity.createdAt` has no index**, yet the dashboard does
   `orderBy: { createdAt: "desc" }, take: 8` over the whole table on every load.
 - **`Activity.userId` has no index**, so deleting a user must scan `Activity` to cascade.

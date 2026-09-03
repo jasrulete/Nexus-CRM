@@ -33,9 +33,9 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass (304 across 25 as of 2026-09-03) |
+| `npm test` (vitest) | 117 tests across 13 files, pass (331 across 27 as of 2026-09-03) |
 | `npm run build` | pass |
-| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (40 as of 2026-09-03) |
+| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (44 as of 2026-09-03) |
 | `npm audit` | 3 high, 0 critical |
 
 All three advisories are in the `prisma` CLI chain. `prisma` is a
@@ -529,21 +529,37 @@ the product.
 **Size.** M (4h). **Depends on:** W17 (the card must be a real focusable control
 anyway — do them together).
 
-#### W16 · Global search (⌘K)
+#### W16 · Global search (⌘K) — shipped
 
-**Scope.** The salesperson's most frequent action is "pull up Acme". Today: guess
-the entity type, navigate, then search — and only Contacts and (since `2f9a58c`)
-Companies have search at all. Notes are unsearchable anywhere. One command
-palette over contacts, companies, deals and activity content, server-side,
-scoped to the session.
+**What shipped.** Designed by a three-blueprint judge panel
+(`docs/superpowers/specs/2026-09-03-global-search-design.md`), then built
+test-first. One `searchRecords` server action over contacts (five columns
+including notes, plus a first-name/rest full-name match), companies (four
+including notes), deal titles and activity content — `requireUser()` first, zod
+before the rate limiter (120/min per user) so a rejected query costs nothing,
+four `findMany`s in one `Promise.all`, `take: 6` per type so "more exist" is
+known without a `count()`, fixed group order and recency inside a group, no
+fake relevance. The palette (`src/components/command-palette.tsx`) composes
+Radix Dialog primitives around a WAI-ARIA editable combobox with
+`aria-activedescendant` over a grouped listbox, a visible `role="status"` count,
+⌘K/Ctrl+K anywhere, focus returned to the opener. No new dependency: cmdk's
+value is client-side filtering, which the acceptance forbids. "Pull up Acme"
+used to mean guessing the entity type first; notes were searchable nowhere.
 
-**Acceptance.** Keyboard-reachable, screen-reader-labelled, works without a
-mouse. A Playwright test opens it with the keyboard and navigates to a record.
-Results are server-filtered, not client-filtered over a full table load.
+**Acceptance.** ✅ Keyboard-reachable, screen-reader-labelled, mouse-free:
+`e2e/crm.spec.ts` opens the palette with the keyboard, arrows to a company and
+lands on it; finds a seeded note from the header button; and checks the
+"No matches" state, Escape, and both focus-return paths. The accessibility
+suite scans the open palette with results. 26 unit tests cover the helpers,
+the schema and the action against a real migrations-built SQLite — including
+the cap, wildcards passing through, workspace-wide reads and the per-user
+limit. Not verified: how a screen reader announces the highlighted option
+inside a group.
 
-**Risk.** Medium. Unbounded `contains` queries over `Activity.content` at demo
-scale are fine and at real scale are not — bound the result count and say so in
-a comment, and note SQLite FTS5 as the free upgrade path if it ever matters.
+**Risk.** Was medium; the scans are bounded in result but not in cost — five
+hits per type, a two-character minimum, a 150 ms debounce — and the action's
+comment names SQLite FTS5 as the free upgrade path for when a search passes
+~100 ms. `%`/`_` act as LIKE wildcards (verified, pinned by a test).
 
 **Size.** M (3–4h). **Depends on:** W4 if you want a component test.
 
@@ -741,9 +757,9 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 304 tests (test:coverage adds the gate CI enforces)
+npm test            # vitest, 331 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
-npm run test:e2e    # playwright, 40 tests
+npm run test:e2e    # playwright, 44 tests
 ```
 
 In CI (`.github/workflows/ci.yml`) the e2e run serves
@@ -964,7 +980,7 @@ What is deliberately *not* in the ten hours, and why:
   W10, W11 and W12. It is the right *next* day, not this one.
 - **W16 (⌘K), W15 (deal detail).** Genuinely valuable product surface, but each
   is three to four hours that buys less reviewer signal than the eval harness.
-  (W15 has since shipped; W16 is still open.)
+  (Both have since shipped.)
 - **W21 (backups runbook).** Should be done — but a rehearsed restore takes real
   elapsed time against a live database, and it does not show up in the demo.
 

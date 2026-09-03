@@ -224,13 +224,14 @@ mutation API route — `src/app/api/` contains only `health/route.ts`. The actio
 | [`src/server/actions/tasks.ts`](../src/server/actions/tasks.ts) | `createTask`, `toggleTask`, `deleteTask` |
 | [`src/server/actions/activities.ts`](../src/server/actions/activities.ts) | `createActivity`, `deleteActivity` |
 | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `scoreContact`, `draftFollowUp`, `summarizeContact`, `sendFollowUp`, `extractFileText`, `currentAiProvider` |
+| [`src/server/actions/search.ts`](../src/server/actions/search.ts) | `searchRecords` — the ⌘K palette's one call; read-only, workspace-wide, five hits per type |
 
 **The part people get wrong.** The convenience of calling `await moveDeal({...})` from a
 component hides the truth: **that is an HTTP endpoint on the public internet.** An attacker
 does not have to use your UI. They can post to the action id directly, with whatever
 arguments they like, in any order, with no form, from anywhere. Which means:
 
-1. **Every action must authenticate itself.** All 21 actions under `src/server/actions/`
+1. **Every action must authenticate itself.** All 22 actions under `src/server/actions/`
    open with `await requireUser()` — even `currentAiProvider()`, which returns nothing more
    than the string `"gemini"`. The three exceptions are the auth actions in
    [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts), and they have to be:
@@ -1189,6 +1190,35 @@ nested-interactive rule flags — and the accessibility suite runs on the board.
 > *not* claimed is a screen-reader audit: the axe checks in `e2e/accessibility.spec.ts` cover
 > contrast and roles, not how a move is announced.
 
+#### The command palette (⌘K)
+
+**What it is.** One search box over contacts, companies, deals and notes, opened with ⌘K /
+Ctrl+K from anywhere in the app or from the header's Search button
+([`src/components/command-palette.tsx`](../src/components/command-palette.tsx)). Every
+keystroke that settles (150 ms debounce, two characters minimum) calls one server action,
+`searchRecords`, which returns at most five hits per type — server-filtered, never a table
+load filtered in the browser.
+
+**How it is built.** Radix's Dialog primitives composed directly (the shared `DialogContent`
+hard-codes a visible title row and a Close button) around a WAI-ARIA *editable combobox*: the
+`<input role="combobox">` keeps focus the whole time and points at the highlighted row with
+`aria-activedescendant`, while the rows are `<div role="option">` inside `role="group"`s inside
+one `role="listbox"`. That is the *virtual focus* pattern rather than a roving tabindex — a
+screen reader hears each option as the arrow keys move without focus ever leaving the text
+box. The listbox exists only when there are hits (an empty listbox fails axe's
+required-children rule), and the input's `aria-controls` is set only then — which is also what
+exempts the scrolling list from axe's scrollable-region rule. A visible `role="status"` line
+announces the count once a result settles (`"7 results — 2 contacts, 1 company, 3 deals, 1
+note."`), so sighted and screen-reader users read the same sentence and typing is never
+narrated. Escape closes in one step; focus returns to whatever had it when the shortcut was
+pressed, or to the header button when that opened it (`onCloseAutoFocus`, because Radix would
+otherwise always focus the trigger).
+
+> **If asked: "why not cmdk?"**
+> Its value is client-side filtering over a list you already hold, and the whole point here is
+> that the list never leaves the server. The keyboard and ARIA layer it would replace is about
+> sixty lines whose correctness the axe scan and a Playwright test assert directly.
+
 #### WCAG and contrast ratios
 
 **What it is.** The Web Content Accessibility Guidelines. The most-cited criterion is
@@ -1237,10 +1267,10 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 304 tests across 25 files.** Pure modules in `src/lib/`
+**Unit — vitest, 331 tests across 27 files.** Pure modules in `src/lib/`
 (`ai/heuristics`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
 `file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
-`fx`, `months`, `concurrency`, `migration-ledger`) plus, under `src/server/`, the server actions
+`fx`, `months`, `search`, `concurrency`, `migration-ledger`) plus, under `src/server/`, the server actions
 and the demo seed run against a real migrations-built SQLite through
 [`src/test/action-harness.ts`](../src/test/action-harness.ts) — which fakes only the database
 handle, the session, `revalidatePath` and `redirect`.
@@ -1271,10 +1301,10 @@ the glob **and** installing a DOM environment (`jsdom` or `happy-dom`) **and** a
 dialogs' `useActionState` wrappers are the highest-logic client code in the app and are
 covered only end-to-end.
 
-**End-to-end — Playwright, 40 tests across 4 files.** `e2e/auth.spec.ts`,
+**End-to-end — Playwright, 44 tests across 4 files.** `e2e/auth.spec.ts`,
 `e2e/crm.spec.ts`, `e2e/marketing.spec.ts`, and `e2e/accessibility.spec.ts` (axe scans of
-every page in both themes, an open dialog, and all six avatar tints). Two config choices are
-worth knowing:
+every page in both themes, an open dialog, the open search palette, and all six avatar tints).
+Two config choices are worth knowing:
 
 - **`fullyParallel: false, workers: 1`** — *"the suite shares one seeded SQLite database."*
   Parallel workers would race on shared rows. Honest constraint, honestly configured.
@@ -1500,7 +1530,8 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `formatDateOnly(date)` | [`src/lib/utils.ts`](../src/lib/utils.ts) | `Intl.DateTimeFormat` with **`timeZone: "UTC"`**. Date-only fields (due dates, expected close dates) are stored at UTC midnight; rendering them in local time would shift the day for anyone west of UTC. Returns `"—"` for null. |
 | `formatCurrency(value, currency = WORKSPACE_CURRENCY)` | same file | `Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 })`. Used for **totals**, which are always in the workspace currency because only `baseValue` is ever summed. |
 | `formatCompactCurrency(value, currency = WORKSPACE_CURRENCY)` | same file | Same, with `notation: "compact"` — `$48K` instead of `$48,000`. Used in kanban column headers where space is tight. |
-| `formatDealAmount(deal)` | [`src/lib/money.ts`](../src/lib/money.ts) | Renders **one deal's** amount: the converted `baseValue` in the workspace currency, then the original alongside when the currencies differ — `$72,534 (EUR 62,000)`. The original is shown by ISO code, not symbol, because CAD, AUD, SGD and USD all share `$`. Used by the deal card, the company and contact pages, and the AI prompt. |
+| `formatDealAmount(deal)` | [`src/lib/money.ts`](../src/lib/money.ts) | Renders **one deal's** amount: the converted `baseValue` in the workspace currency, then the original alongside when the currencies differ — `$72,534 (EUR 62,000)`. The original is shown by ISO code, not symbol, because CAD, AUD, SGD and USD all share `$`. Used by the deal card, the company and contact pages, the AI prompt and search hits. |
+| `nameTerms(q)` / `snippet(content, q)` / `activityHref(a)` | [`src/lib/search.ts`](../src/lib/search.ts) | The palette's pure helpers, import-free so the action, the client and the tests share them. `nameTerms` splits "Maya Okafor" into first/rest for a full-name match; `snippet` windows ~90 characters around the first match with "…" on cut edges (falling back to the head when SQLite's LIKE matched and JavaScript's `toLowerCase` does not); `activityHref` sends a note to its deal, else its contact, else its company. |
 | `timeAgo(date)` | same file | `Intl.RelativeTimeFormat` walking year → month → week → day → hour → minute, then `"just now"`. |
 | `cn(...inputs)` | same file | `twMerge(clsx(...))` — conditional class names with later Tailwind utilities correctly overriding earlier conflicting ones. |
 | `initials(name)` / `fullName(contact)` | same file | First letters of the first two words; `"First Last"`. |
@@ -1567,8 +1598,8 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 304 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
-| `test:e2e` | `playwright test` | The 40 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
+| `test` | `vitest run` | The 331 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test:e2e` | `playwright test` | The 44 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
 | `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |
 | `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the MEMBER demo account. Touches nothing else. | Once, when you want the member view available. |

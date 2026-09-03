@@ -199,6 +199,14 @@ single-developer, single-tenant app: the component set only grew when two call
 sites had already duplicated something (the `FilterChip` comment says this
 outright).
 
+One feature component sits outside `ui/` and deliberately does not use
+`DialogContent`: `CommandPalette` (`src/components/command-palette.tsx`, the ⌘K
+search). It composes `@radix-ui/react-dialog` primitives directly because the
+wrapper hard-codes a visible title row, `p-6` and a Close button, none of which a
+palette wants; its title and description are `sr-only`, it carries no motion
+classes (the spinner is `motion-reduce:animate-none`), and it uses only the
+surface/edge/ink tokens, so it holds AA in both themes without its own palette.
+
 ---
 
 ## 4. Data visualization
@@ -385,6 +393,14 @@ collapsed/hamburger mobile state — the sidebar is always present, just
 narrower, which keeps navigation reachable at every width but leaves limited
 horizontal room for content on phone-width screens next to a permanent 64px
 rail.
+
+**Search palette** (`src/components/command-palette.tsx`): the header trigger
+is a 224px search-box-shaped button with a `⌘K` hint at `md` and above, and an
+icon with `sr-only` text below it (accessible name "Search" either way). The
+dialog anchors at `top-[10vh]` rather than centred so the on-screen keyboard
+leaves room for the list, the input is `text-base` below `md` (iOS zooms into
+anything smaller than 16px), rows are `min-h-11` (44px targets), the kbd hints
+and footer are hidden, and the list scrolls inside `max-h-[60dvh]`.
 
 **Auth split layout** (`src/app/(auth)/layout.tsx`): the dark brand panel with
 the three-pillar pitch is `hidden` until `lg:flex` (1024px) — below that,

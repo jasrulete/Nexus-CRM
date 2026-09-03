@@ -531,6 +531,40 @@ otherwise lock everyone, including the demo account, out of the app entirely.
 
 ---
 
+## 12. Global search (⌘K)
+
+**Files:** `src/components/command-palette.tsx`, `src/server/actions/search.ts`,
+`src/lib/search.ts`, `src/lib/validation.ts` (`searchQuerySchema`).
+
+```mermaid
+flowchart TD
+    Open["⌘K / Ctrl+K anywhere<br/>or the header Search button"] --> Dialog["Radix Dialog opens;<br/>focus lands in the combobox input"]
+    Dialog --> Type[User types]
+    Type -->|"< 2 characters"| Hint["hint paragraph, blank status,<br/>no request"]
+    Type -->|"≥ 2 characters, 150 ms quiet"| Action["searchRecords(q)<br/>requireUser → zod → rate limit (120/min/user)<br/>→ 4 findMany in Promise.all, take 6 each"]
+    Action -->|"stale response (newer query since)"| Drop[dropped by sequence counter]
+    Action -->|"ok, hits"| List["listbox of role=option rows<br/>grouped Contacts · Companies · Deals · Notes<br/>first hit highlighted"]
+    Action -->|"ok, no hits"| None["status: 'No matches for “q”'<br/>listbox unmounted, aria-expanded=false"]
+    Action -->|"ok:false (too short / too long / limited)"| Msg[status shows the server's message]
+    Action -->|throws| Err["status: 'Couldn't search just now — try again.'"]
+    List --> Status["status: '7 results — 2 contacts, 1 company, 3 deals, 1 note.'<br/>+ 'Showing the first 5 of each type' when truncated"]
+    List -->|"↑ / ↓"| Move["highlight moves across groups, wrapping;<br/>aria-activedescendant follows; caret stays"]
+    List -->|"Enter or click"| Go["palette closes, router.push(hit.href)<br/>activity → its deal, else contact, else company"]
+    Dialog -->|Escape| Close["closes in one step; focus returns to the<br/>element that had it (shortcut) or the button (click)"]
+```
+
+- **What a screen reader hears:** the dialog's name ("Search") and its description (the keyboard
+  instructions) on open; the highlighted option's text as the arrows move, because the input's
+  `aria-activedescendant` points at it while focus never leaves the text box; the count sentence
+  once a result settles, through the visible `role="status"` line. Typing is never narrated.
+- **Stale-while-loading:** the previous list stays up while the next query runs; the spinner and
+  `aria-busy` say a request is in flight.
+- **What it does not do:** rank. Groups are in a fixed order and recency orders a group; a fake
+  relevance number is worse than none. `%` and `_` act as LIKE wildcards. See TECHNICAL-DESIGN §16
+  for the scan cost and the FTS5 path.
+
+---
+
 ## Reference: files behind these flows
 
 | Concern | File(s) |
@@ -552,3 +586,4 @@ otherwise lock everyone, including the demo account, out of the app entirely.
 | Rate limiting | `src/lib/rate-limit.ts` |
 | Audit logging | `src/lib/audit.ts` |
 | Demo reset | `.github/workflows/reset-demo.yml`, `scripts/reset-demo.ts`, `src/lib/reset-guard.ts` |
+| Global search (⌘K) | `src/components/command-palette.tsx`, `src/server/actions/search.ts`, `src/lib/search.ts` |

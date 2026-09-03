@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SUPPORTED_CURRENCIES } from "./money";
+import { SEARCH_MAX_CHARS, SEARCH_MIN_CHARS } from "./search";
 import {
   ACTIVITY_TYPES,
   COMPANY_SIZES,
@@ -143,6 +144,14 @@ export const activitySchema = z.object({
   dealId: optionalTrimmed(64),
   companyId: optionalTrimmed(64),
 });
+
+// ---------- search ----------
+
+export const searchQuerySchema = z
+  .string()
+  .trim()
+  .min(SEARCH_MIN_CHARS, `Type at least ${SEARCH_MIN_CHARS} characters`)
+  .max(SEARCH_MAX_CHARS, "That search is too long");
 
 // ---------- tasks ----------
 

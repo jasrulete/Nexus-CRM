@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openPaletteWithKeyboard } from "./palette";
 
 // Every test in this file starts signed in as the seeded demo user.
 test.beforeEach(async ({ page }) => {
@@ -278,6 +279,78 @@ test("a deal card opens its detail page, which shows its relations and takes an 
   await page.getByPlaceholder("Write a note…").fill(note);
   await page.getByRole("button", { name: "Log note" }).click();
   await expect(page.getByText(note)).toBeVisible({ timeout: 15_000 });
+});
+
+test("the search palette opens with the keyboard and lands on a record", async ({ page }) => {
+  // "Pull up Acme" used to mean guessing the entity type, navigating, then
+  // searching — and only contacts and companies had search at all.
+  await page.goto("/dashboard");
+  const dialog = await openPaletteWithKeyboard(page);
+  const box = dialog.getByRole("combobox", { name: "Search contacts, companies, deals and notes" });
+  await expect(box).toBeFocused();
+
+  await page.keyboard.type("brightline");
+  const company = dialog.getByRole("option", { name: /^Brightline Health/ });
+  await expect(company).toBeVisible();
+  await expect(box).toHaveAttribute("aria-expanded", "true");
+  await expect(dialog.getByRole("status")).toHaveText(/\d+ results?/);
+
+  // Groups are in a fixed order, so the seed's two brightline.health contacts
+  // precede the company. Arrow until it is highlighted rather than assuming
+  // how many; the assertion below fails loudly if it never is.
+  for (let i = 0; i < 8; i++) {
+    if ((await company.getAttribute("aria-selected")) === "true") break;
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect(company).toHaveAttribute("aria-selected", "true");
+  // Attribute comparison, never a "#id" selector — React 19 ids contain «».
+  await expect(box).toHaveAttribute("aria-activedescendant", (await company.getAttribute("id"))!);
+
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/companies\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Brightline Health");
+  await expect(dialog).toBeHidden();
+});
+
+test("a note is searchable from the header button and opens the record it belongs to", async ({
+  page,
+}) => {
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.keyboard.type("procurement window");
+
+  // The seed logs "Ingrid's procurement window opens next quarter" as a note;
+  // notes were searchable nowhere before.
+  await expect(page.getByRole("option", { name: /^Note on Ingrid Svensson/ })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/contacts\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Ingrid Svensson");
+});
+
+test("Escape closes the palette, reports no matches honestly, and returns focus", async ({
+  page,
+}) => {
+  await page.goto("/dashboard");
+  const home = page.getByRole("link", { name: "Nexus CRM home" }).first();
+  await home.focus();
+  const dialog = await openPaletteWithKeyboard(page);
+
+  await page.keyboard.type("zzqx-no-such-record");
+  await expect(dialog.getByRole("status")).toContainText("No matches");
+  await expect(dialog.getByRole("listbox")).toHaveCount(0);
+  await expect(dialog.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+
+  // Opened by the shortcut: focus goes back to what had it (WCAG 2.4.3).
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(home).toBeFocused();
+
+  // Opened from the header button: focus goes back to the button.
+  const trigger = page.getByRole("button", { name: "Search", exact: true });
+  await trigger.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
 });
 
 test("a missing deal renders the branded 404, not a crash", async ({ page }) => {

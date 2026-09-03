@@ -14,6 +14,7 @@
  */
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openPaletteWithKeyboard } from "./palette";
 
 /** WCAG 2.1 A and AA — the level this project holds itself to. */
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
@@ -96,6 +97,18 @@ test.describe("signed in", () => {
     await page.goto("/contacts");
     await page.getByRole("button", { name: "New contact" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
+    await expectNoViolations(page);
+  });
+
+  test("the open search palette, with results, has no automatically-detectable violations", async ({
+    page,
+  }) => {
+    // The only scan that sees the combobox/listbox/group markup, the
+    // aria-activedescendant link and the highlighted row's contrast.
+    await page.goto("/dashboard");
+    await openPaletteWithKeyboard(page);
+    await page.keyboard.type("northwind");
+    await expect(page.getByRole("option").first()).toBeVisible();
     await expectNoViolations(page);
   });
 });

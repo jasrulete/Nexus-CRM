@@ -21,7 +21,7 @@ const securityFeatures = [
   "Passwords hashed with bcrypt (cost 12) — never stored in plain text",
   "Sessions stored server-side as SHA-256 hashes in httpOnly, SameSite cookies",
   "Every mutation validated with zod and authorized on the server",
-  "Login and AI endpoints rate-limited",
+  "Login, AI and search actions rate-limited",
   "Full audit trail of logins, changes and AI usage",
 ];
 

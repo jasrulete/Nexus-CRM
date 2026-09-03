@@ -383,6 +383,21 @@ silently writing to production. Making previews work again means giving them the
 own Turso database and scoping `TURSO_DATABASE_URL`, `ALLOW_REMOTE_DB=true` and
 `DEMO_MODE=true` to the Preview environment only.
 
+### 7.12 Global search (⌘K)
+
+**Route:** any app route — `src/components/command-palette.tsx` in the header,
+`searchRecords` in `src/server/actions/search.ts`.
+
+| # | Acceptance criterion |
+|---|---|
+| G1 | ⌘K / Ctrl+K anywhere in the app, or the header's Search button, opens the palette with focus in the search box |
+| G2 | Searches contact first/last name, email, title and notes (plus "First Last" typed as one phrase), company name, domain, industry and notes, deal titles, and activity content — server-side, two characters minimum |
+| G3 | At most five hits per type; when more exist the status line says so and asks the user to keep typing |
+| G4 | Arrow keys move the highlight across groups, Enter opens the highlighted record, Escape closes; focus returns to what had it (shortcut) or to the button (click) |
+| G5 | The result count is announced through a visible `role="status"` line once a result settles — never while typing |
+| G6 | A hit opens its record; an activity opens its deal, else its contact, else its company |
+| G7 | A 120-searches-per-minute per-user limit answers with a message in the status line, not an error page |
+
 ---
 
 ## 8. The demo experience as a first-class requirement
@@ -497,7 +512,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 304 unit tests (coverage-gated), 40 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 331 unit tests (coverage-gated), 44 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -617,8 +632,8 @@ second route.
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-304 unit tests cover library modules and the server actions (against a real
-migrations-built SQLite). Component behaviour is covered exclusively by the 40
+331 unit tests cover library modules and the server actions (against a real
+migrations-built SQLite). Component behaviour is covered exclusively by the 44
 Playwright tests.
 
 ### 11.13 No backup or restore runbook
@@ -724,3 +739,4 @@ Genuine unknowns. Each needs a product decision, not an implementation.
 | `/settings` | users, auditLog (admin only) | none |
 | `/api/health` | `SELECT 1` | none |
 | any app route | — | `logout` (via the account menu) |
+| any app route (⌘K palette) | contacts, companies, deals, activities — capped at 5 per type, via `searchRecords` | none |

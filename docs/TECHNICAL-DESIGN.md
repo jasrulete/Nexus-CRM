@@ -69,8 +69,8 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 304 unit tests across 25 files pass, the production build succeeds, and
-40 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
+passes, 331 unit tests across 27 files pass, the production build succeeds, and
+44 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
 Prisma 6, which is rejected.
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 304 unit tests,<br/>build, 40 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 331 unit tests,<br/>build, 44 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         REPO --> CI
         REPO --> RESET
@@ -270,7 +270,7 @@ wrapper, no chance of the client sending a field the server stopped reading. Whe
 **No public mutation surface to protect.** Server Action endpoints are addressed
 by a build-generated action id, not by a guessable path. There is no
 `/api/deals/:id` for anyone to probe. Combined with `requireUser()` as the first
-statement in all 21 actions under `src/server/actions/`, the authenticated
+statement in all 22 actions under `src/server/actions/`, the authenticated
 surface is closed by construction.
 
 **The progressive-enhancement story is real.** Forms use `useActionState`, so the
@@ -285,7 +285,10 @@ deliberate scope choice, not an oversight. Server Actions also cannot be called
 by a cron service, which is one of the reasons the nightly reset is a GitHub
 Action running a script rather than a protected endpoint (ADR-010).
 
-The 24 actions live in six files under `src/server/actions/` (21 of them) plus
+The 25 actions live in seven files under `src/server/actions/` (22 of them — the
+newest, `search.ts`, is the first read-only one: still an action rather than a
+route handler so it shares the `requireUser()` opener, the harness tests and
+Next's origin check, and so results are POST-only and never URL-addressable) plus
 `src/lib/auth/actions.ts` (3). Every one of them begins with `requireUser()` except
 the three auth actions themselves, where `login` and `register` are the
 unauthenticated entry points and `logout` calls `getCurrentUser()` so it can
@@ -818,6 +821,7 @@ Current buckets:
 | `login:{ip}:{email}` | 10 failures | 15 min | `auth/actions.ts` |
 | `login:account:{email}` | 20 failures | 15 min | `auth/actions.ts` |
 | `ai:{userId}` | 30 | 1 hour | `server/actions/ai.ts` |
+| `search:{userId}` | 120 | 1 min | `server/actions/search.ts` — the highest-frequency action in the app (one call per settled keystroke); validation runs first so a rejected query costs nothing |
 
 The AI bucket exists to protect the free-tier quota, and it is the one that is
 weakest in production — see §16.
@@ -1116,8 +1120,8 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 304 unit tests, 25 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
-| 40 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog) |
+| 331 unit tests, 27 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 44 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
 because that package throws outside an RSC bundler and every interesting module
@@ -1536,9 +1540,9 @@ SHA-256 pre-hash.
 **No component tests exist.** `vitest.config.ts` sets `include: ["src/**/*.test.ts"]`
 and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
-covered only by the 40 e2e tests. *Acceptable because* the components are thin
+covered only by the 44 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"304 unit tests" means 304 tests of server modules and server actions — none of a rendered component.
+"331 unit tests" means 331 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
@@ -1556,9 +1560,21 @@ retuned to pass WCAG AA in both roles.
 matches on `e.message.includes("FORBIDDEN")`, and Next.js redacts errors crossing
 the server/client boundary in production builds. Whether the raw prefix reaches
 the browser from a production build has not been verified — the delete-forbidden
-path is not among the 40 e2e tests, though the *edit*-forbidden path is. If it
+path is not among the 44 e2e tests, though the *edit*-forbidden path is. If it
 does not survive, the user sees "Something went wrong. Try again." instead of the
 specific reason, which is a degradation rather than a security failure.
+
+**Global search is four `LIKE '%q%'` scans per keystroke.** `searchRecords`
+runs Prisma `contains` over contact, company, deal and activity columns, which
+SQLite cannot index; the `%`/`_` characters in a query act as wildcards (no
+`ESCAPE`, verified against the generated SQL). The result is bounded — five
+hits per type via `take: 6`, a two-character minimum and a 150 ms debounce on
+the client, 120 calls/min per user — but the *scan* is not, and Turso bills
+scanned rows against the free tier. *Acceptable because* the demo is a few
+hundred rows. *The free upgrade path* is SQLite FTS5 (a virtual table over the
+searched columns kept in step by triggers, queried with `MATCH` via
+`$queryRaw`, bm25 ranking included); both better-sqlite3 and libSQL ship it.
+Do that when a search passes ~100 ms, not before.
 
 ### Scope, not bugs
 

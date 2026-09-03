@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
+import { CommandPalette } from "@/components/command-palette";
 import { Sidebar } from "@/components/sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { UserMenu } from "@/components/user-menu";
@@ -18,6 +19,7 @@ export default async function AppLayout({
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-40 flex h-14 items-center justify-end gap-2 border-b border-edge bg-canvas/80 px-4 backdrop-blur md:px-8">
+          <CommandPalette />
           <ThemeToggle />
           <UserMenu user={user} />
         </header>

@@ -15,7 +15,7 @@ free, self-hosted, single-instance app.
   dummy hash, keeping response times uniform; failures return one generic
   message ("Invalid email or password").
 - **Rate limiting**: login 10/15min per IP+email, registration 5/15min per IP,
-  AI actions 30/hour per user (`src/lib/rate-limit.ts`).
+  AI actions 30/hour per user, global search 120/min per user (`src/lib/rate-limit.ts`).
 
 ## Authorization
 
@@ -64,7 +64,9 @@ script/connect sources — AI providers are called **server-side only**),
   Outputs are rendered as plain text (never HTML/markdown-executed).
 - **Score integrity**: model responses must parse as JSON with a 0–100
   integer or they're discarded in favor of the deterministic heuristic.
-- **Quota abuse**: per-user hourly rate limit on all AI actions.
+- **Quota abuse**: per-user hourly rate limit on all AI actions; per-user per-minute
+  limit on global search, whose results are capped at five per record type so a
+  query can never pull a whole table.
 - **Key handling**: API keys live in `.env` (gitignored) and are only read
   server-side; they never reach the client bundle.
 

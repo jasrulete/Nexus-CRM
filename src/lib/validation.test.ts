@@ -7,7 +7,23 @@ import {
   fieldErrors,
   loginSchema,
   registerSchema,
+  searchQuerySchema,
 } from "./validation";
+
+describe("searchQuerySchema", () => {
+  it("trims the query", () => {
+    expect(searchQuerySchema.parse(" ab ")).toBe("ab");
+  });
+
+  it("rejects a single character after trimming", () => {
+    expect(searchQuerySchema.safeParse(" a ").success).toBe(false);
+  });
+
+  it("rejects more than 100 characters", () => {
+    expect(searchQuerySchema.safeParse("x".repeat(101)).success).toBe(false);
+    expect(searchQuerySchema.safeParse("x".repeat(100)).success).toBe(true);
+  });
+});
 
 describe("registerSchema", () => {
   it("accepts a valid registration and lowercases the email", () => {
