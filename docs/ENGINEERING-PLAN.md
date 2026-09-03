@@ -472,28 +472,34 @@ make them pass).
 
 Ordered by impact per hour, which is not the same as by size.
 
-#### W14 · Make the seeded demo show the product working
+#### W14 · Make the seeded demo show the product working — shipped
 
-**Scope.** Two small edits to `prisma/seed-data.ts`, both worth more than their
-size suggests:
+**What shipped.** Two edits to `prisma/seed-data.ts`:
 
-- **No contact in the seed has an `aiScore`.** Grep confirms `aiScore` appears in
-  the schema and the migration and nowhere in the seed. So the flagship feature
-  presents as a column of twelve em-dashes on the page a reviewer opens second.
-  Seed scores and reasons on 8–10 of the 12 contacts; leave 2–3 null so the
-  Score button still has something to do on camera.
-- **The revenue chart opens on a bad story.** The WON deals close at 112, 96,
-  64, 38 and 11 days ago for 18,000 / 3,600 / 12,000 / 7,500 / 9,000 — so the
-  earliest month in a six-month window is empty and the series does not trend
-  up. The data is fabricated either way; make it fabricate a business that is
-  growing.
+- **Nine of the twelve contacts are scored** — not with hand-typed numbers but
+  by running the same rule-based scorer `scoreContact` falls back to over the
+  rows the seed just wrote, so a seeded score is exactly what the app would
+  compute offline and its reason reads "Rule-based score: …". That reason text
+  is the provenance label the risk note below asked for; nothing in the UI had
+  to change. Three low-signal leads (James, Luna, Marcus) are left null so the
+  Score button still has something to do on camera. To make the scorer
+  importable from the seed, `heuristicLeadScore` moved to `src/lib/ai/lead-score.ts`
+  (no imports, no `server-only`) and is re-exported from `heuristics.ts`.
+- **Won revenue is placed by calendar month, not day offset.** The dashboard
+  buckets the current month plus the five before it, and the demo is reseeded
+  nightly, so "n days ago" drifted across month boundaries and left a bucket
+  empty on some runs. Six WON deals now land on the 15th of each past month
+  (the 1st for the current one, never in the future) at 3,600 → 7,500 → 12,000
+  → 15,000 → 18,000 → 21,000 — a business that is growing.
 
-**Acceptance.** A fresh `npm run db:seed` produces a dashboard and contact list
-that look like a working CRM in a screenshot. The nightly reset reproduces it.
+**Acceptance.** ✅ `src/server/seed-data.test.ts` seeds a real-migrations
+database and asserts 8–10 scored contacts with rule-based reasons, that
+calling the real `scoreContact` on a seeded contact reproduces the seeded
+score and reason exactly, and that every one of the six months has revenue
+and each exceeds the last. All three failed against the old seed.
 
-**Risk.** Low. Seeded scores must be labelled as seeded, not presented as a
-model's live output — the seed writes `aiScoredAt`, so the UI's existing
-provenance labelling should be checked, not bypassed.
+**Risk.** Low. The provenance concern is met by the reason text rather than a
+separate label; `aiScoredAt` is set to yesterday and is still read by nothing.
 
 **Size.** S (35 min). **Depends on:** nothing. **Best impact-per-hour in this
 document.**
@@ -930,7 +936,7 @@ makes a claim true.
 
 | # | Work | Hours | Why this and not something else |
 |---|---|---|---|
-| 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | The flagship feature currently renders as twelve em-dashes on the page a reviewer opens second. Nothing else in this document changes so much for so little. |
+| 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | ✅ Shipped. The flagship feature rendered as twelve em-dashes on the page a reviewer opens second; nothing else in this document changed so much for so little. |
 | 2 | **W2 — `PRAGMA foreign_keys` on production** | 0.5 | One query. If the answer is 0, it changes what you believe about every delete path in the app, and you would rather know before spending the other nine hours. |
 | 3 | **W10 — provider fallback chain + structured output** | 2.0 | Failover half ✅ shipped: an exhausted Gemini free tier now hands off to Groq. Still open: a chatty reply defeats the JSON scan so a heuristic score is written as if the model had answered — *observable in the demo*. |
 | 4 | **W12 — minimal eval harness in CI** | 3.0 | The single highest-signal artifact for the stated goal. 10 fixtures with property assertions plus three injection payloads, running with no API key so it costs nothing and runs on every PR. The parrot test stops being a paragraph and becomes a test that goes red. |

@@ -409,7 +409,7 @@ category gap.
 
 | # | Item | Time | Why |
 |---|---|---|---|
-| 1 | **Seed AI scores on 8–10 of 12 contacts** | 20 min | The flagship feature currently presents as a column of twelve em-dashes on the page a recruiter opens second. Best impact-per-hour in the entire audit. Leave 2–3 null so the Score button still has something to do on camera. |
+| 1 | **Seed AI scores on 8–10 of 12 contacts** | 20 min | ✅ Done — nine scored by the real rule-based scorer at seed time (reasons say "Rule-based"), three left null for the Score button. The flagship feature had presented as a column of twelve em-dashes on the page a recruiter opens second. |
 | 2 | **Fix the revenue chart's seed data** | 15 min | "Revenue won, last 6 months" opens with empty months and a business shrinking 60%. The data is fabricated — it may as well tell a good story. Add WON deals at ~165 and ~140 days ago and lift the two most recent. |
 | 3 | **Deal detail page** | ~4h | `deals/[id]` does not exist. A seeded activity — "Sent proposal v2 with annual pricing and the SSO addendum" — is attached to the Northwind deal and is unreachable from it. `ActivityComposer` and `QuickTaskForm` already accept `dealId`, so this is mostly a page shell. Dead relations in the schema are exactly what a reviewer notices. |
 | 4 | **⌘K global search** | ~3–4h | The salesperson's most frequent action is "pull up Acme". Today: guess the entity type, navigate, then search — and only Contacts has search at all. Notes are unsearchable anywhere. |

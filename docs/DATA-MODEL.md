@@ -642,7 +642,7 @@ Seed baseline (`prisma/seed-data.ts`), which is also the nightly reset target:
 | --- | --- |
 | Company | 6 |
 | Contact | 12 |
-| Deal | 13 (7 open, 5 won, 1 lost) |
+| Deal | 14 (7 open, 6 won — one per month of the dashboard's window, 1 lost) |
 | Activity | 10 |
 | Task | 7 |
 | AuditLog | 1 (`system.seed`) |
