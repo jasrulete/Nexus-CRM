@@ -216,21 +216,24 @@ flowchart TD
     Load -->|not found| NF["ok:false 'Contact not found'"]
     Load -->|found| Prompt[Build prompt from recordBlock]
 
-    Prompt --> Provider{generateText prompt}
-    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout]
-    Provider -->|else GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout]
-    Provider -->|neither key set| NullProvider[returns null immediately]
+    Prompt --> Provider{generateText prompt<br/>providers with a key, in order}
+    Provider -->|no key set| NullProvider[returns null immediately]
+    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies here]
+    Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout]
 
     Gemini -->|res.ok, text extracted| AIResult[AiResult text + provider]
-    Gemini -->|"non-2xx response (e.g. 429 quota)"| LoggedNull["returns null from inside gemini()<br/>console.error only — never reaches the catch,<br/>so nothing reaches Sentry"]
-    Gemini -->|"fetch rejects: timeout / DNS / reset"| CaughtNull["caught in generateText,<br/>Sentry.captureException,<br/>returns null"]
+    Gemini -->|"non-2xx (e.g. 429 quota), or 200 with no text"| GeminiFailed["null from inside gemini()<br/>console.error only — nothing reaches Sentry"]
+    Gemini -->|"fetch rejects: timeout / DNS / reset"| GeminiCaught["caught in generateText,<br/>Sentry.captureException"]
+    GeminiFailed --> Next{GROQ_API_KEY set?}
+    GeminiCaught --> Next
+    Next -->|yes| Groq
+    Next -->|no| AllFailed[returns null]
     Groq -->|res.ok| AIResult
-    Groq -->|non-2xx| LoggedNull
-    Groq -->|fetch rejects| CaughtNull
+    Groq -->|"non-2xx, or no text"| AllFailed
+    Groq -->|"fetch rejects → Sentry"| AllFailed
 
     AIResult --> UseAI[Use model output]
-    CaughtNull --> Heuristic[Deterministic heuristic:<br/>heuristicLeadScore /<br/>heuristicSummary /<br/>heuristicEmailDraft]
-    LoggedNull --> Heuristic
+    AllFailed --> Heuristic[Deterministic heuristic:<br/>heuristicLeadScore /<br/>heuristicSummary /<br/>heuristicEmailDraft]
     NullProvider --> Heuristic
 
     UseAI --> Persist[score: write aiScore/aiScoreReason;<br/>draft/summary: not persisted]

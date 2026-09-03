@@ -592,12 +592,14 @@ mid-migration still leaves the schema half-applied, but it is no longer silent �
 the ledger row is written before the SQL and stamped after, so the next run sees
 the unstamped row, stops, and says which migration was interrupted.
 
-### 11.10 The AI provider never fails over
+### 11.10 ~~The AI provider never fails over~~ — resolved
 
-`generateText()` picks Gemini if its key is present, otherwise Groq — it never
-tries the second one. An exhausted Gemini free tier (observed at 20 requests/day)
-silently degrades every AI feature to heuristics for the rest of the day. The UI
-labels this honestly, but the free Groq key sitting in the same `.env` goes unused.
+`generateText()` tries every configured provider in order and moves to the next
+on any failure, so an exhausted Gemini free tier (observed at 20 requests/day)
+hands off to Groq instead of degrading every AI feature to heuristics for the
+rest of the day. The UI still cannot distinguish "no key configured" from
+"every provider failing" — both render the rule-based label — because the
+provider result is not yet a discriminated `{ ok, reason }`.
 
 ### 11.11 The kanban has no keyboard path
 

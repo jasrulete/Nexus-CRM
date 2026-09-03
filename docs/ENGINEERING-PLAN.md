@@ -119,10 +119,10 @@ reasoning:
 
 7. **The AI layer before the product features that lean on it.** Ask-your-CRM
    is worth building only on a provider layer that fails over and returns a
-   discriminated result. Today `generateText()` picks Gemini **or** Groq and
-   never falls back, so an exhausted Gemini free tier (20 requests/day,
-   observed) silently degrades every AI feature for the rest of the day while a
-   perfectly good `GROQ_API_KEY` sits unused.
+   discriminated result. The failover half is done — `generateText()` now tries
+   every configured provider in order, so an exhausted Gemini free tier (20
+   requests/day, observed) hands off to Groq instead of silently degrading every
+   AI feature for the rest of the day. The discriminated result is still open.
 
 8. **Packaging last, but not optional.** The audience is a hiring manager who
    spends minutes, not hours. Packaging converts finished engineering into
@@ -340,19 +340,22 @@ unit-tested deterministic fallback that is honestly labelled — stays.
 
 #### W10 · Make the provider abstraction actually a fallback chain
 
-**Scope.** `generateText()` in `src/lib/ai/provider.ts` runs
+**Scope.** `generateText()` in `src/lib/ai/provider.ts` ran
 `if (GEMINI_API_KEY) return gemini(); if (GROQ_API_KEY) return groq();` — the
-second key reads as a fallback and is not one. Try providers in order on
-failure; one retry with jitter honouring `Retry-After`; return a discriminated
-result (`{ ok: false, reason: 'rate_limited' | 'error' | 'not_configured' }`) so
-callers can tell degradation from absence. Also replace the greedy
+second key read as a fallback and was not one. **Done:** providers are tried in
+order on any failure, and `AI_MODEL` applies to the primary only.
+**Dropped:** the `Retry-After` retry — Gemini's quota resets daily, so waiting is
+pointless and the next provider is the right move. **Still open:** return a
+discriminated result (`{ ok: false, reason: 'rate_limited' | 'error' | 'not_configured' }`)
+so callers can tell degradation from absence. Also replace the greedy
 `extractJson` regex `/\{[\s\S]*\}/` with a real structured-output request —
 Gemini's `responseMimeType` + `responseSchema`, Groq's `response_format` — and
 zod-parse the result. Today a chatty reply defeats the scan and a heuristic
 score is written to the database as if the model had been consulted.
 
-**Acceptance.** A test where Gemini returns 429 and Groq answers, asserting the
-Groq text is used — failing against the current code. A test that a
+**Acceptance.** ✅ A test where Gemini returns 429 and Groq answers, asserting the
+Groq text is used — it failed against the old code (`provider.test.ts`,
+"generateText failover"). Still to do: a test that a
 non-JSON reply is rejected rather than silently heuristic-scored. The UI can
 distinguish "no key configured" from "provider failing".
 

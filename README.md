@@ -36,7 +36,8 @@ five zero-dependency concept apps for offshore staffing / EOR operations.
 - 🎯 Lead scoring (0–100) with a human-readable explanation, saved to the record
 - 🧠 One-click relationship summaries for account handoffs
 - ✉️ Context-aware follow-up email drafts (references the open deal)
-- 🔌 Works with **Google Gemini** or **Groq** free tiers — or falls back to
+- 🔌 Works with **Google Gemini** and/or **Groq** free tiers — set both and
+  Groq takes over when Gemini's daily quota runs out — or falls back to
   honest, clearly-labeled rule-based heuristics with **no API key at all**
 - 🛡️ CRM record data is fenced in `<record>` tags and treated as data, not
   instructions (prompt-injection mitigation); AI calls are rate-limited per user
@@ -76,7 +77,7 @@ Copy `.env.example` to `.env` and add **one** key:
 
 ```bash
 GEMINI_API_KEY=...   # https://aistudio.google.com/apikey
-# or
+# and/or — with both set, Groq takes over whenever Gemini fails
 GROQ_API_KEY=...     # https://console.groq.com/keys
 ```
 

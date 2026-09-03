@@ -1074,17 +1074,23 @@ unavailable)"` when `result.provider === "heuristic"`, and `/settings` says *"Ru
 mode (no API key configured)"*. A rule-based score presented as AI would be the kind of
 claim a reviewer checks.
 
-**The known gap.** `generateText` picks Gemini **or** Groq and never fails over:
+**The fallback chain.** `generateText` tries every provider that has a key, in order:
 
 ```ts
-if (process.env.GEMINI_API_KEY) return await gemini(prompt);
-if (process.env.GROQ_API_KEY) return await groq(prompt);
+for (const [index, provider] of configuredProviders().entries()) {
+  // any failure — error status, empty reply, rejected fetch — moves on to the next
+  const result = await provider.run(prompt, index === 0 ? process.env.AI_MODEL : undefined);
+  if (result) return result;
+}
+return null; // every provider failed → the caller uses heuristics
 ```
 
-With both keys set, an exhausted Gemini free tier (20 requests/day has been observed) means
-every AI feature silently degrades to heuristics for the rest of the day, even though a
-working Groq key sits right there. The fix is small — try the second provider when the first
-returns `null` — and it is on the backlog, not done.
+With both keys set, an exhausted Gemini free tier (20 requests/day has been observed) hands off
+to Groq instead of degrading every AI feature to heuristics for the rest of the day. `AI_MODEL`
+goes to the primary only, because a Gemini model name sent to Groq is a 404. It used to be
+`if (GEMINI_API_KEY) return gemini(); if (GROQ_API_KEY) return groq();` — a fallback in name
+only. Still on the backlog: a discriminated result, so the UI can tell "no key configured" from
+"every provider failing"; today both render the rule-based label.
 
 ---
 
@@ -1518,8 +1524,8 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `VERCEL_ENV` | `src/lib/db-adapter.ts`, `src/lib/sentry-options.ts` | `"production"`, `"preview"` or `"development"`. Also **not** sufficient alone, because `vercel env pull --environment=production` writes it into a local `.env`. Production requires `VERCEL` **and** `VERCEL_ENV === "production"`. |
 | `VERCEL_PROJECT_PRODUCTION_URL` | [`src/app/layout.tsx`](../src/app/layout.tsx) | Builds `metadataBase` for OpenGraph URLs; falls back to `http://localhost:3000`. |
 | `DEMO_MODE` | [`src/lib/demo-guard.ts`](../src/lib/demo-guard.ts) | `"true"` locks the demo account out of deleting. Set on Vercel Production **and Preview** — the guard is inert wherever it is unset. **Not documented in `.env.example`.** |
-| `GEMINI_API_KEY` / `GROQ_API_KEY` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | Pick one. Gemini wins if both are set, and there is no failover to the other. |
-| `AI_MODEL` | same | Overrides the default model (`gemini-flash-latest` or `llama-3.3-70b-versatile`). The Gemini default uses the `-latest` rolling alias because pinned snapshots get gated for new API keys. |
+| `GEMINI_API_KEY` / `GROQ_API_KEY` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | Set one or both. Gemini is tried first; Groq takes over when Gemini fails (error status, rejected fetch, or an empty reply) — which, with Gemini's small daily quota, is the normal case. |
+| `AI_MODEL` | same | Overrides the default model of the **primary** provider only (defaults: `gemini-flash-latest`, `llama-3.3-70b-versatile`); a fallback always uses its own default, since a Gemini model name sent to Groq is a 404. The Gemini default uses the `-latest` rolling alias because pinned snapshots get gated for new API keys. |
 | `RESEND_API_KEY` / `EMAIL_FROM` | [`src/lib/email.ts`](../src/lib/email.ts) | Both required for real delivery. Without them "Send to yourself" logs to the activity feed instead. |
 | `NEXT_PUBLIC_SENTRY_DSN` | `src/lib/sentry-options.ts`, `next.config.ts` | Enables Sentry **and** installs the `/monitoring` tunnel. Inlined at **build** time — a cache-reusing redeploy will not pick up a change. |
 | `SENTRY_ORG` / `SENTRY_PROJECT` / `SENTRY_AUTH_TOKEN` | `next.config.ts` | Source-map upload only. `sourcemaps: { disable: !SENTRY_AUTH_TOKEN }` means a plain `npm run build`, or a fork's build, never fails for lack of one. |

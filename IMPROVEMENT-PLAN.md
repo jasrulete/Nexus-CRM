@@ -361,9 +361,12 @@ aggressively rate-limited, so 429 is the *expected* steady state — and one 429
 silently downgrades to rule-based text while a perfectly good `GROQ_API_KEY` sits
 unused. The second key reads as a fallback chain but is not one.
 
-Try providers in order on failure; one retry with jitter honouring `Retry-After`;
-return a discriminated result (`{ ok: false, reason: 'rate_limited' | 'error' }`)
-so callers can tell degradation from absence.
+**Status:** failover done — providers are tried in order on any failure, and
+`AI_MODEL` applies to the primary only. The `Retry-After` retry was dropped on
+purpose: the Gemini quota that causes the 429 resets daily, so the next provider
+is the right move, not waiting. Still open: return a discriminated result
+(`{ ok: false, reason: 'rate_limited' | 'error' }`) so callers can tell
+degradation from absence.
 
 Ask for JSON directly (Gemini `responseMimeType` + `responseSchema`, Groq
 `response_format`) and zod-parse it, instead of a greedy `/\{[\s\S]*\}/` scan that

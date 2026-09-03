@@ -776,19 +776,31 @@ heuristic score is written to the database as if the model had been consulted.
 Neither provider is asked for structured output (`responseSchema` /
 `response_format`) even though both support it.
 
-### The provider never fails over
+### The provider chain
 
-`generateText` picks Gemini **or** Groq. It never tries the second one.
+`generateText` tries every provider that has a key, in order — Gemini, then
+Groq — and moves to the next on any failure: an error status, a fetch that
+rejects (timeout, DNS, reset), or a `200` with no text, which is what a
+safety-filtered Gemini reply looks like. Only when every provider has failed
+does it return `null`, and the caller falls back to heuristics.
 
-Gemini's free tier is aggressively rate-limited — 20 requests per day has been
-observed on this project — so `429` is the *expected steady state*, not an
-exception. When it happens, every AI feature silently degrades to rule-based
-output for the rest of the day while a perfectly good `GROQ_API_KEY` sits unused.
-The second key reads like a fallback chain and is not one.
+This matters because Gemini's free tier is quota-limited per day — 20 requests
+has been observed on this project — so its `429` is the *expected steady
+state*, not an exception. Until this was built, `generateText` picked Gemini
+**or** Groq and never tried the second, so one `429` silently degraded every AI
+feature to rule-based output for the rest of the day while a working
+`GROQ_API_KEY` sat unused. There is no retry with `Retry-After`: the quota that
+causes the `429` resets daily, so waiting is pointless and the right move is
+the next provider.
 
-From the outside, "never configured" and "broken since Tuesday" produce the
-identical UI label. The Sentry capture added in the timeout fix helps for
-exceptions, but a `429` returns `!res.ok` and only reaches `console.error`.
+`AI_MODEL` is applied to the primary provider only. It is one variable shared
+by both, and a Gemini model name forwarded to Groq is a `404` that would turn a
+working fallback into a second failure; a fallback always uses its own default.
+
+Still open: from the outside, "never configured" and "every provider failing"
+produce the identical UI label, because the result is `AiResult | null` rather
+than a discriminated `{ ok, reason }`. A rejected fetch reaches Sentry; a
+`429` from every provider only reaches `console.error`.
 
 ### Rate limiting — `src/lib/rate-limit.ts`
 
@@ -1489,12 +1501,11 @@ prompt — meaning the documented 20,000-character cost bound does not actually
 hold. And `file.name` is interpolated into the prompt uncapped, so a huge
 filename with no file attached defeats the cap sitting beside it.
 
-**The AI provider never fails over** (§9). An exhausted Gemini free tier — 20
-requests/day, observed — silently degrades every AI feature to rule-based output
-for the rest of the day, while a working `GROQ_API_KEY` sits unused. This is the
-single most user-visible gap in the AI layer, and the fix costs nothing: try the
-providers in order on failure and return a discriminated result so callers can
-tell degradation from absence.
+**The AI provider fails over — resolved** (§9). An exhausted Gemini free tier
+now hands off to Groq instead of degrading every AI feature to rule-based
+output for the rest of the day. Still open from the same item: the result is
+`AiResult | null`, not a discriminated `{ ok, reason }`, so callers and the UI
+cannot tell "no key configured" from "every provider failing".
 
 **No backups runbook.** Turso takes its own snapshots, so data exists somewhere;
 what does not exist is a written, tested restore procedure. *Acceptable because*
@@ -1574,5 +1585,6 @@ guessed at.
    See §16. Verifiable with one e2e test against the standalone build.
 5. **Is the Gemini free-tier limit still 20 requests/day?** That figure is an
    observation recorded during development, not a documented quota, and Google
-   changes free-tier limits. It matters because it is the reason the missing
-   provider failover is a daily problem rather than a rare one.
+   changes free-tier limits. It matters because it is the reason provider
+   failover fires daily rather than rarely — and the reason a Groq key is worth
+   setting alongside a Gemini one.
