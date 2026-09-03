@@ -463,29 +463,28 @@ with no schema change and no second set of models.
 
 **What it is.** A group of writes that all succeed or all roll back.
 
-**Here.** There is exactly one, in `moveDeal`
-([`src/server/actions/deals.ts`](../src/server/actions/deals.ts)). Dragging a card
-resequences an entire column, so every affected deal's `position` is rewritten in a single
-`prisma.$transaction([...])` array of updates. Without it, a failure halfway through would
-leave the column with duplicate and missing positions.
+**Here.** Every delete, and deal create, update and move, run inside `prisma.$transaction`
+([`src/server/actions/deals.ts`](../src/server/actions/deals.ts) and the contact, company,
+task and activity actions). `moveDeal` is the largest: dragging a card resequences an entire
+column, so every affected deal's `position` is read *and* rewritten inside one interactive
+transaction. Without it, a failure halfway through would leave the column with duplicate and
+missing positions — and reading outside it, as the code once did, was a lost update on
+concurrent drags. `createDeal` reads the last position inside the transaction that inserts for
+the same reason; `deals-ordering.test.ts` proves both under concurrent writes.
 
-**And the honest limits.** Two known gaps, both already catalogued in
-[`IMPROVEMENT-PLAN.md`](../IMPROVEMENT-PLAN.md) §3.4 and §3.6:
+**The audit write joins the transaction.** `audit(entry, tx?)`
+([`src/lib/audit.ts`](../src/lib/audit.ts)) has two modes. Given the caller's transaction
+client it writes through it, so a mutation and its entry commit or roll back together — a
+change cannot exist without its record. Without one (logins, AI usage: there is no business
+transaction to join) it stays best-effort and never throws, but a failed write is reported to
+Sentry rather than swallowed.
 
-- `moveDeal` reads the column *outside* the transaction and writes *inside* it — a
-  lost update on concurrent drags. `createDeal` reads `last.position` and writes `+1` with
-  no transaction at all, so two simultaneous creates collide on the same position.
-- [`src/lib/audit.ts`](../src/lib/audit.ts) writes *after and outside* the transaction it
-  describes. A crash between the two leaves a change with no audit entry. `audit()` also
-  swallows its own errors by design — *"auditing must not break the action it records"* —
-  which is the right call for availability and the wrong one for completeness.
-
-> **If asked: "why is the audit write outside the transaction?"**
-> Because `audit()` is deliberately non-throwing: a failed log write must not roll back a
-> successful business operation. The cost is that the log is best-effort, not guaranteed.
-> The right fix is to include the audit insert in the same `$transaction` as the mutation
-> and accept that a log failure fails the write — a tradeoff a real compliance requirement
-> would force. Right now availability wins.
+> **If asked: "why are some audit writes still outside a transaction?"**
+> Because a failed login must still be logged while the surrounding request is failing, and
+> there is no business transaction for it to join. For state changes there is, and the entry
+> rides in it: a log failure then fails the write, which is the tradeoff a compliance
+> requirement forces. The best-effort path is the exception, and it reports to Sentry so a gap
+> is visible rather than silent.
 
 #### Cascade and referential actions
 
@@ -1174,17 +1173,18 @@ Two configuration choices with reasons:
 `setNodeRef`, `attributes`, `listeners` and the transform, because the overlay copy must not
 also be a drop target. It gets `rotate-2 shadow-xl ring-2` instead, the visual "lifted" state.
 
-**The accessibility gap, stated plainly.** There is no keyboard path. dnd-kit ships a
-`KeyboardSensor`, and this board does not register it — only `PointerSensor`. A keyboard-only
-or screen-reader user can create, edit and delete deals through the form dialogs, but cannot
-move a card between stages by dragging. The workaround exists (open the card, change the
-stage field in the dialog) but it is not signposted.
+**The keyboard path.** dnd-kit's `KeyboardSensor` is registered beside the `PointerSensor`,
+with a board-aware coordinate getter rather than the default sortable one, because the targets
+are columns rather than positions in a single list. Cards are focusable: **Space** picks one
+up, the **arrow keys** move it between columns, **Space** drops it, **Escape** cancels, and
+**Enter** opens the card without starting a drag. `e2e/crm.spec.ts` moves a card to a
+neighbouring column with the keyboard alone and asserts the stage persists after a reload.
 
 > **If asked: "is the kanban accessible?"**
-> Not fully, and this is the honest gap. Adding `KeyboardSensor` with dnd-kit's sortable
-> coordinate getter is the fix and it is not large. What partially covers it today is that
-> stage is also an editable field on the deal form, so the *capability* exists without the
-> drag — but that is a mitigation, not equivalence, and I would not present it as one.
+> The drag has a full keyboard equivalent with an e2e test that exercises it, and stage is
+> also an editable field on the deal form, so there are two routes rather than one. What is
+> *not* claimed is a screen-reader audit: the axe checks in `e2e/accessibility.spec.ts` cover
+> contrast and roles, not how a move is announced.
 
 #### WCAG and contrast ratios
 
@@ -1467,10 +1467,10 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 |---|---|---|
 | `DEAL_STAGES` | [`src/lib/constants.ts`](../src/lib/constants.ts) | `["LEAD","QUALIFIED","PROPOSAL","NEGOTIATION","WON","LOST"] as const`. The single source of truth: `z.enum(DEAL_STAGES)` validates against it and `DealStage` is derived from it. |
 | `STAGE_PROBABILITY` | same file | LEAD 0.1, QUALIFIED 0.25, PROPOSAL 0.5, NEGOTIATION 0.75, WON 1, LOST 0. A **constant per stage**, deliberately not a column on `Deal` — a per-deal override is a feature with a migration and a form field behind it, and nothing has asked for one. The docblock's own honesty test: the number is defensible "as long as it is labelled as stage-based rather than as a model's prediction". |
-| `weightedValue(deals)` | same file | `Math.round(Σ value × STAGE_PROBABILITY[stage])`. Drives the "Weighted forecast" StatCard on the dashboard. Unknown stages contribute 0 via `?? 0`. |
+| `weightedValue(deals)` | same file | `Math.round(Σ baseValue × STAGE_PROBABILITY[stage])` — `baseValue`, never `value`, because amounts in different currencies cannot be added. Drives the "Weighted forecast" StatCard on the dashboard. Unknown stages contribute 0 via `?? 0`. |
 | `OPEN_STAGES` | same file | `["LEAD","QUALIFIED","PROPOSAL","NEGOTIATION"]` — in-play stages. **Careful:** [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) declares a *second, independent* `const OPEN_STAGES` with the same four values instead of importing this one. Two definitions, no link between them. |
 | `CLOSED_STAGES` | [`src/server/actions/deals.ts`](../src/server/actions/deals.ts) | `new Set(["WON","LOST"])`, **local to that file**, used to decide whether to stamp `closedAt`. It is not in `constants.ts`, and the dashboard and `deal-card.tsx` each use their own inline `["WON","LOST"]` literal. |
-| `position` | `Deal` model | Integer ordering within a stage column. Set to `(last?.position ?? -1) + 1` on create; fully resequenced by `moveDeal` inside a `$transaction`. Known to race on concurrent create/move. |
+| `position` | `Deal` model | Integer ordering within a stage column. Set to `(last?.position ?? -1) + 1` on create and on a stage change through the edit form (appended to the new column; the old column keeps a gap, harmless because only duplicates make order ambiguous); fully resequenced by `moveDeal`. Every read happens inside the transaction that writes, so concurrent creates and drags no longer race — `deals-ordering.test.ts` proves it. |
 | `showWeighted` | [`src/components/kanban/column.tsx`](../src/components/kanban/column.tsx) | `probability > 0 && probability < 1`. The weighted figure is hidden on WON and LOST because at 100% it repeats the total and at 0% it is always zero — *"both read as a bug rather than a forecast."* |
 | `BoardDeal` | [`src/components/kanban/deal-card.tsx`](../src/components/kanban/deal-card.tsx) | The client-safe shape of a deal for the board: dates already `toISOString()`'d, relation names pre-resolved to strings. |
 
@@ -1491,8 +1491,9 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | Term | Where | What it means |
 |---|---|---|
 | `formatDateOnly(date)` | [`src/lib/utils.ts`](../src/lib/utils.ts) | `Intl.DateTimeFormat` with **`timeZone: "UTC"`**. Date-only fields (due dates, expected close dates) are stored at UTC midnight; rendering them in local time would shift the day for anyone west of UTC. Returns `"—"` for null. |
-| `formatCurrency(value, currency = "USD")` | same file | `Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 })`. **Every caller omits the second argument**, so everything renders as USD regardless of `Deal.currency`. |
-| `formatCompactCurrency(value, currency = "USD")` | same file | Same, with `notation: "compact"` — `$48K` instead of `$48,000`. Used in kanban column headers where space is tight. |
+| `formatCurrency(value, currency = WORKSPACE_CURRENCY)` | same file | `Intl.NumberFormat("en-US", { style: "currency", currency, maximumFractionDigits: 0 })`. Used for **totals**, which are always in the workspace currency because only `baseValue` is ever summed. |
+| `formatCompactCurrency(value, currency = WORKSPACE_CURRENCY)` | same file | Same, with `notation: "compact"` — `$48K` instead of `$48,000`. Used in kanban column headers where space is tight. |
+| `formatDealAmount(deal)` | [`src/lib/money.ts`](../src/lib/money.ts) | Renders **one deal's** amount: the converted `baseValue` in the workspace currency, then the original alongside when the currencies differ — `$72,534 (EUR 62,000)`. The original is shown by ISO code, not symbol, because CAD, AUD, SGD and USD all share `$`. Used by the deal card, the company and contact pages, and the AI prompt. |
 | `timeAgo(date)` | same file | `Intl.RelativeTimeFormat` walking year → month → week → day → hour → minute, then `"just now"`. |
 | `cn(...inputs)` | same file | `twMerge(clsx(...))` — conditional class names with later Tailwind utilities correctly overriding earlier conflicting ones. |
 | `initials(name)` / `fullName(contact)` | same file | First letters of the first two words; `"First Last"`. |

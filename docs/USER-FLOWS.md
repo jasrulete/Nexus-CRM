@@ -401,9 +401,10 @@ inline wherever `QuickTaskForm` is mounted (`src/components/quick-task-form.tsx`
   may be assigned to someone else."
 - **Delete:** same `assertNotLockedDemoAccount` + `canMutate` pattern as every other delete action;
   same catch-and-message in `TaskList`.
-- **Overdue styling** is computed client-side in `TaskList`: `!task.done && task.dueDate &&
+- **Overdue styling** is computed client-side in `TaskList`: `!task.done &&
   isOverdueDateOnly(task.dueDate)`. `dueDate` is stored as a date-only value at UTC midnight, and
-  the helper (`src/lib/utils.ts`) compares whole UTC days rather than the raw instant. The earlier
+  the helper (`src/lib/utils.ts`) returns `false` for a null date and otherwise compares whole UTC
+  days rather than the raw instant. The earlier
   `new Date(task.dueDate) < new Date()` comparison marked a task due "today" as overdue up to a
   day early in negative UTC offsets, because midnight UTC for that date had passed locally before
   the user's own midnight — fixed, with a test that walks every hour of the due date.

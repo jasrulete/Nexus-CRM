@@ -1443,8 +1443,10 @@ order depended on SQLite rowid and shuffled between page loads; and `moveDeal`
 read the column *outside* the `$transaction` it then wrote inside — a lost
 update on concurrent drags. All three now read and write inside one
 transaction, and `updateDeal` appends a stage-changed card to the end of its new
-column. `deals-ordering.test.ts` asserts every column is `0..n-1` after each
-operation, including under concurrent writes. Still true and deliberately left:
+column. `deals-ordering.test.ts` asserts the target column is `0..n-1` after a
+stage change and under concurrent creates and drags; the vacated column keeps a
+gap, deliberately, since only duplicates make order ambiguous. Still true and
+deliberately left:
 `moveDeal` resequences other owners' deals in the column, and audits only stage
 changes, so a pure reorder leaves no record.
 
@@ -1463,7 +1465,7 @@ conflict.
 the caller's transaction client; every delete and the deal update and move write
 their entry inside the transaction that makes the change, so a deal cannot
 commit as WON with nothing in the log. Entries that have no transaction to join
-(logins, AI usage, the demo reset) remain best-effort, but a failed write is now
+(logins, AI usage) remain best-effort, but a failed write is now
 `Sentry.captureException`'d rather than dropped into `console.error`, so absence
 of an entry is at least visible somewhere.
 
@@ -1477,12 +1479,14 @@ explanation.
 
 **Migrations are non-atomic in both appliers** (§8), and cannot be wrapped in a
 transaction because Prisma's table rebuilds toggle `PRAGMA foreign_keys`, a
-no-op inside one. Mitigated rather than fixed: the shared `planMigrations()`
-(`src/lib/migration-ledger.ts`) records a ledger row before the SQL runs and
-stamps it afterwards, so an interrupted migration is detected on the next run
-instead of being baselined over — which is how a Turso database once lost its
-missing tables silently. The planning logic is unit tested; the two scripts that
-call it are still not exercised end-to-end by CI.
+no-op inside one. Mitigated rather than fixed: each runner records a ledger row
+before the SQL runs and stamps it afterwards, so an interrupted migration is
+detected on the next run instead of being baselined over — which is how a Turso
+database once lost its missing tables silently. The decision logic,
+`planMigrations()` in `src/lib/migration-ledger.ts`, is unit tested and called
+by `db-push-turso.ts`; `docker-entrypoint.mjs` cannot import the TypeScript
+module and duplicates the rule inline, which is its own drift risk. Neither
+script is exercised end-to-end by CI.
 
 **The rate limiter is per-instance and in-memory.** `src/lib/rate-limit.ts` keeps
 buckets in a module-level `Map`, so on Vercel every lambda instance has its own

@@ -720,10 +720,12 @@ SQL and its ledger insert — does not work, because Prisma's table-rebuild migr
 `PRAGMA foreign_keys`, which SQLite documents as a no-op inside a transaction. Wrapping would
 silently leave foreign keys enforced during the rebuild and break exactly the migrations that need
 it most. So instead of preventing a half-applied migration, the runners make one impossible to
-miss: `planMigrations()` in `src/lib/migration-ledger.ts` (pure, shared by both runners, unit
-tested) has each runner write the ledger row **before** applying the SQL with an empty
-`applied_at`, and fill the timestamp in afterwards. A row with no timestamp means "interrupted
-partway through", and the next run stops and says so rather than guessing. The failure this
+miss: each writes the ledger row **before** applying the SQL with an empty `applied_at`, and
+fills the timestamp in afterwards. A row with no timestamp means "interrupted partway through",
+and the next run stops and says so rather than guessing. The decision logic is `planMigrations()`
+in `src/lib/migration-ledger.ts` (pure, unit tested), which `db-push-turso.ts` calls;
+`docker-entrypoint.mjs` is plain JavaScript and cannot import the TypeScript module, so it carries
+the same rule inline — a duplication that has to be kept in step by hand. The failure this
 replaces was silent: an interrupted first migration on Turso left some tables created and the
 ledger empty, the next run saw an empty ledger and a `User` table, baselined, and the app failed
 at query time with "no such table".
@@ -745,9 +747,10 @@ Ordered roughly by how likely each is to produce a wrong number a human would ac
    the styling never disagree.
 4. ~~**`Deal.position` has three defects.**~~ **Fixed.** `createDeal`'s read-then-write and
    `moveDeal`'s column read now happen inside the transaction that writes; `updateDeal` appends a
-   stage-changed card to the end of its new column. `deals-ordering.test.ts` asserts positions are
-   always `0..n-1` even under concurrent writes — against the old code, five concurrent creates all
-   landed at position 0.
+   stage-changed card to the end of its new column. `deals-ordering.test.ts` asserts the target
+   column is `0..n-1` after a stage change, and after concurrent creates and drags — against the
+   old code, five concurrent creates all landed at position 0. The vacated column keeps its gap,
+   deliberately (see [ordering](#dealposition-and-how-kanban-ordering-works)).
 5. ~~**No optimistic concurrency anywhere.**~~ **Fixed.** Each edit form carries the row's
    `updatedAt` as a hidden field; the update is `updateMany({ where: { id, updatedAt } })` and a
    count of 0 returns `STALE_RECORD` through `ActionState`. A submit with no version is refused

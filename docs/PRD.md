@@ -565,9 +565,11 @@ disagree. A test walks all 24 hours of a due date to prove it.
 ### 11.6 ~~Concurrent deal writes race~~ — resolved
 
 `createDeal` and `moveDeal` now read the column inside the transaction they
-write in, and `updateDeal` resequences when a deal changes stage.
-`deals-ordering.test.ts` asserts every column stays `0..n-1`, including under
-five concurrent creates — which, against the old code, all landed at position 0.
+write in, and `updateDeal` appends a stage-changed deal at the end of its new
+column (it resequences nothing; the vacated column keeps a harmless gap).
+`deals-ordering.test.ts` asserts the target column stays `0..n-1` after a stage
+change and under five concurrent creates — which, against the old code, all
+landed at position 0.
 
 ### 11.7 ~~No optimistic concurrency anywhere~~ — resolved
 

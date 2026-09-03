@@ -358,16 +358,17 @@ audit was needed after the token change.
   (form inputs) — always the accent token, never a browser default outline
   color that could clash with either theme.
 
-### 7.3 Known, documented accessibility gap
+### 7.3 ~~Known, documented accessibility gap~~ — resolved: the kanban has a keyboard path
 
-**Kanban drag has no keyboard path.** `src/components/kanban/board.tsx` wires
-only `PointerSensor` into `@dnd-kit/core`'s `useSensors` — no `KeyboardSensor`,
-no `sortableKeyboardCoordinates`. Combined with cards that aren't real
-focusable buttons, `IMPROVEMENT-PLAN.md` states plainly: *"a keyboard-only user
-cannot move a deal or open one. The Deals page's entire function is
-mouse-only"* — flagged against WCAG 2.1.1 (Keyboard) and 4.1.2 (Name, Role,
-Value). This is the single largest accessibility gap in the app and is already
-tracked as such; it is not fixed as of this brief.
+**Kanban drag used to have no keyboard path** — `board.tsx` wired only
+`PointerSensor`, and `IMPROVEMENT-PLAN.md` flagged it against WCAG 2.1.1
+(Keyboard) and 4.1.2 (Name, Role, Value) as the largest accessibility gap in
+the app. `src/components/kanban/board.tsx` now registers a `KeyboardSensor`
+beside the `PointerSensor` with a board-aware coordinate getter: cards are
+focusable, **Space** picks a card up, the **arrow keys** move it between
+columns, **Space** drops it, **Escape** cancels, and **Enter** opens the card
+without starting a drag. `e2e/crm.spec.ts` moves a card to a neighbouring
+column with only the keyboard and asserts the stage persists after a reload.
 
 ---
 

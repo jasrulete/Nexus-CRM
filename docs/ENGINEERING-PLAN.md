@@ -176,24 +176,28 @@ been silently orphaning rows on every delete cascade the schema declares.
 
 **Size.** S (30 min to diagnose; up to M if it needs fixing). **Depends on:** W1.
 
-#### W3 · Make both migration appliers atomic, and test them
+#### W3 · ~~Make both migration appliers atomic~~ Make an interrupted migration impossible to miss — shipped
 
-**Scope.** Wrap each migration's SQL and its ledger `INSERT` in one
-`BEGIN`/`COMMIT` in `scripts/db-push-turso.ts` (around line 56–65) and
-`scripts/docker-entrypoint.mjs` (around line 37–44). SQLite DDL is
-transactional, so this is genuinely one transaction and not a simulation. Then
-add a test: run the applier twice against a throwaway libsql file and assert the
-second run applies zero migrations; simulate a crash between the DDL and the
-ledger write and assert the next run recovers rather than baselining.
+**What shipped.** Not the transaction this workstream first proposed. Prisma's
+table-rebuild migrations toggle `PRAGMA foreign_keys`, which SQLite treats as a
+no-op inside a transaction, so wrapping the SQL and its ledger `INSERT` in one
+`BEGIN`/`COMMIT` would have silently left foreign keys enforced during the
+rebuild and broken exactly the migrations that need it. Instead each runner
+writes the ledger row *before* the SQL with an empty `applied_at` and stamps it
+afterwards; an unstamped row on the next run means "interrupted", and the runner
+stops and says so rather than baselining over it. The decision logic is
+`planMigrations()` in `src/lib/migration-ledger.ts` — pure, unit tested in
+`migration-ledger.test.ts`, called by `db-push-turso.ts`; `docker-entrypoint.mjs`
+cannot import the TypeScript module and carries the same rule inline.
 
-**Acceptance.** A test that fails against the current code. `npm test` covers
-the double-run and the interrupted-run cases. The Docker path is exercised by
-the e2e run (which already boots the standalone artifact) or by a CI step that
-builds and boots the image twice against the same volume.
+**Acceptance.** ✅ The planner's interrupted and already-applied cases are unit
+tested. Still open: neither script is exercised end-to-end by CI (`ci.yml` runs
+`prisma migrate deploy`), so the inline copy in the Docker entrypoint can drift
+unnoticed.
 
-**Risk.** Medium. This is the bug class that already broke production once
-(`SAAS-READINESS.md` §1). Writing a test for it means deliberately corrupting a
-throwaway database — keep it in a temp directory, never point it at `.env`.
+**Risk.** Was medium — the bug class that already broke production once
+(`SAAS-READINESS.md` §1). Residual: the hand-duplicated rule in
+`docker-entrypoint.mjs`.
 
 **Size.** M (3–4h). **Depends on:** W1.
 
@@ -216,9 +220,22 @@ already has 921 packages. They do not ship to production.
 
 ### Phase 1 — Correctness
 
-#### W5 · Decide what money means
+#### W5 · Decide what money means — shipped, as option B
 
-**Scope.** This is a decision, then an implementation. Two honest options:
+**What shipped.** Option **B**, not the A this plan recommended, once the
+question was put to the owner: per-row currency kept and honoured. `Deal.value`
+stays the amount *as entered* in `Deal.currency`; two new columns, `baseValue`
+(converted into the workspace currency) and `fxRate` (the rate used, frozen when
+the amount is set), carry the number that is safe to add. Every aggregate —
+dashboard, `weightedValue`, both charts, kanban footers, company and contact
+pages, the AI prompt and heuristics — sums `baseValue` and nothing else, and
+`formatDealAmount` renders `$72,534 (EUR 62,000)`. Rates come from Frankfurter
+(`src/lib/fx.ts`, free, no key); an unavailable rate refuses the write rather
+than assuming 1:1. The migration hand-backfills `baseValue` from `value` so
+historical deals were not zeroed out of every total. Design and reasoning:
+`docs/DATA-MODEL.md` → Money. Still open: the `value` → `amountMinor` rename.
+
+**Original scope, for the record.** This was a decision, then an implementation. Two honest options:
 
 | Option | What it costs | What it buys |
 |---|---|---|
@@ -230,29 +247,28 @@ Separately, and while the table is small, rename `Deal.value` → `amountMinor`
 storing integer minor units — cents are currently unrepresentable and minor-unit
 exponents are not universally 2 (JPY 0, KWD 3).
 
-**Acceptance.** No column exists that no reader honours. A unit test asserts
-formatting of a non-USD value if B, or asserts the single-currency invariant if
-A. `SAAS-READINESS.md` records the decision and what was given up.
+**Acceptance.** ✅ No column exists that no reader honours.
+`deals-currency.test.ts` covers a non-USD deal's conversion, the rate staying
+frozen through unrelated edits, and refusal when the rate provider is down.
 
-**Risk.** Medium. Touches the seed, the migration path, and every currency
-render. Do it behind W3 so the migration cannot wedge Turso.
+**Risk.** Was medium. The frozen rate was initially *not* frozen — `updateDeal`
+re-resolved on every save, so a title edit re-priced a closed deal — and it was
+caught by the pre-merge review rather than a test. The test exists now.
 
 **Size.** M for A (3–5h), L for B. **Depends on:** W3.
 
-#### W6 · Fix date-only comparisons
+#### W6 · Fix date-only comparisons — shipped
 
-**Scope.** `src/components/kanban/deal-card.tsx:36` and
-`src/components/task-list.tsx:44` both compare a date-only field stored at UTC
-midnight against `new Date()` — an instant. Note the asymmetry already in the
-codebase: `formatDateOnly()` in `src/lib/utils.ts` correctly pins `timeZone:
-"UTC"` for *rendering*, and nothing does the equivalent for *comparison*. So a
-task due 2026-08-22 renders red from 19:00 on the 21st in `America/New_York`
-while the label still reads "Aug 22, 2026". Extract `isOverdueDateOnly()`
-next to `formatDateOnly()` and use it in both places.
+**What shipped.** `isOverdueDateOnly()` next to `formatDateOnly()` in
+`src/lib/utils.ts`, comparing whole UTC days — the same frame the formatter
+renders in — and used by both `deal-card.tsx` and `task-list.tsx`. Before it,
+both compared a date-only field stored at UTC midnight against `new Date()`, an
+instant, so a task due 2026-08-22 rendered red from 19:00 on the 21st in
+`America/New_York` while the label still read "Aug 22, 2026".
 
-**Acceptance.** A unit test with a fixed clock in two timezones (one negative
-offset, one positive) that fails against the current comparison.
-`src/lib/utils.test.ts` currently asserts only the formatter — that is why this
+**Acceptance.** ✅ `src/lib/utils.test.ts` walks all 24 hours of a due date and
+asserts the label and the styling never disagree; it failed against the old
+comparison. That file used to assert only the formatter — which is why this
 survived three audits.
 
 **Risk.** Low.
@@ -260,27 +276,28 @@ survived three audits.
 **Size.** S (1–2h). **Depends on:** nothing (but W4 if you also want a component
 test).
 
-#### W7 · Make deal ordering correct
+#### W7 · Make deal ordering correct — tactical half shipped
 
-**Scope.** Three defects in `src/server/actions/deals.ts`:
+**What shipped.** The three defects in `src/server/actions/deals.ts`, fixed
+together: `createDeal` read `last.position` and wrote `+1` outside a transaction
+(five concurrent creates all landed at 0 in the reproduction) — it now reads and
+inserts in one `$transaction`; `updateDeal` changed stage without touching
+`position`, leaving a duplicate in the target column and an order that fell back
+to SQLite rowid — it now appends the card at `max(position) + 1` in its new
+column, inside the transaction, and resequences nothing (the vacated column
+keeps a gap, harmless because only duplicates make order ambiguous); `moveDeal`
+read the column *outside* the `$transaction` it wrote inside — the read is now
+inside, and the audit entry is written through the same client.
 
-- `createDeal` (line ~47) reads `last.position` then writes `+1` outside a
-  transaction — two concurrent creates write the same position.
-- `updateDeal` changes stage without resequencing, producing duplicate
-  positions in the target column and a gap in the vacated one. Card order then
-  falls back to SQLite rowid and shuffles between page loads.
-- `moveDeal` (line ~139) reads the column **outside** the `$transaction` it
-  then writes inside — a lost update on concurrent drags. It also resequences
-  every other owner's deals in that stage and audits only stage changes, so a
-  reorder that shuffles ten other people's cards leaves no record.
+**Deliberately unchanged.** `moveDeal` still resequences other owners' deals in
+the column (one column has one order) and audits only stage changes, so a pure
+reorder leaves no record. **Still open:** the strategic fix — a fractional
+position key so a move is one write instead of N — which at this table size is
+not needed.
 
-Tactical fix: move the reads inside the transaction. Strategic fix: a fractional
-position key, so a move is one write instead of N.
-
-**Acceptance.** A test that drives two concurrent `moveDeal` calls and asserts
-positions stay unique and contiguous — failing against the current code. A test
-that `updateDeal` changing stage leaves both columns correctly sequenced. An
-audit entry exists for a reorder, not only for a stage change.
+**Acceptance.** ✅ `deals-ordering.test.ts` drives concurrent creates and
+concurrent drags and asserts the column stays `0..n-1`; it failed against the
+old code. Not done: an audit entry for a pure reorder.
 
 **Risk.** Medium. Reorder correctness is the first thing a reviewer probes in a
 drag-and-drop implementation, so it is worth getting right rather than
@@ -289,40 +306,42 @@ patching. Fractional positions need a rebalance path when precision runs out.
 **Size.** M (3–5h) tactical, L with fractional keys. **Depends on:** W3 if the
 position column type changes.
 
-#### W8 · Add optimistic concurrency to edits
+#### W8 · Add optimistic concurrency to edits — shipped
 
-**Scope.** There is no concurrency guard anywhere. Two people open the same
-contact; A saves a phone number; B saves a note from a stale form and silently
-reverts it. Add a hidden `updatedAt` to each edit form and make the update
-`where: { id, updatedAt: submitted }`. Prisma throws `P2025` on zero matches —
-catch it and return "This record changed while you were editing it." through the
-existing `ActionState` channel (`src/lib/action-state.ts`), which already
-carries field errors to the form.
+**What shipped.** Each edit form carries the row's `updatedAt` as a hidden
+field (`VERSION_FIELD` in `src/lib/concurrency.ts`), and the update is
+`updateMany({ where: { id, updatedAt: submitted } })`; a count of zero returns
+`STALE_RECORD` — "This record changed while you were editing it." — through the
+existing `ActionState` channel. **Not the `P2025` catch this plan proposed:**
+Prisma's `update` requires a unique `where` and `updatedAt` is not unique, so
+`updateMany` plus a count check is the mechanism — do not "fix" it back. A
+submit with no version is refused rather than treated as last-write-wins, so a
+form that forgets the field fails loudly instead of silently clobbering.
 
-**Acceptance.** A test that a stale `updatedAt` is rejected with the friendly
-message and does not write. Audit metadata records before/after so a clobber is
-reconstructible.
+**Acceptance.** ✅ `src/server/actions/concurrency.test.ts` covers a stale
+version, an absent one and an unparseable one, and asserts nothing is written.
+Not done: before/after in the audit metadata.
 
-**Risk.** Low-medium. Four update actions plus their forms; easy to add to three
-and forget the fourth — the same failure mode `canMutate()` was extracted to
-prevent. Consider a shared helper for the same reason.
+**Risk.** Was low-medium. The shared helper the plan suggested exists
+(`concurrency.ts`), for the reason `canMutate()` was extracted.
 
 **Size.** M (4–5h). **Depends on:** W7 (both edit `deals.ts`; sequence them so
 the diffs do not fight).
 
-#### W9 · Make the audit log trustworthy
+#### W9 · Make the audit log trustworthy — shipped for state changes
 
-**Scope.** `src/lib/audit.ts` writes **after and outside** the transaction it
-describes, and swallows failures into `console.error`, which Sentry does not
-capture. A deal can commit as WON with nothing in the log. Since `/settings`
-sells the audit log as a compliance story, absence of an entry currently proves
-nothing. Accept an optional transaction client so state-changing actions can
-write the audit row inside the same transaction; at minimum,
-`Sentry.captureException` on the swallow so a gap is visible.
+**What shipped.** `audit(entry, tx?)` accepts the caller's transaction client
+and writes through it; every delete, and the deal update and move, pass it, so
+a change and its entry commit or roll back together — a deal can no longer
+commit as WON with nothing in the log. Callers with no transaction to join
+(logins, AI usage) keep the never-throws contract, but a failed write is now
+reported with `Sentry.captureException` instead of swallowed into
+`console.error`.
 
-**Acceptance.** A test that a failed transaction leaves no audit row and a
-successful one always leaves exactly one. Sentry receives an event when the
-audit write itself fails.
+**Acceptance.** ✅ Met by construction: the entry is written through the same
+client as the mutation, so a failed transaction cannot leave a row and a
+successful one cannot omit it. Sentry receives an event when a best-effort
+write fails.
 
 **Risk.** Low. Keep the "never throws" contract for non-transactional callers
 (login failures, for instance, must still log when the surrounding request is
@@ -514,17 +533,20 @@ a comment, and note SQLite FTS5 as the free upgrade path if it ever matters.
 
 **Size.** M (3–4h). **Depends on:** W4 if you want a component test.
 
-#### W17 · Give the kanban a keyboard path
+#### W17 · Give the kanban a keyboard path — shipped
 
-**Scope.** `src/components/kanban/board.tsx:67` registers only a
-`PointerSensor`. There is no `KeyboardSensor`, and cards are not focusable — so
-a keyboard-only user cannot move a deal *or open one*. The Deals page's entire
-function is mouse-only (WCAG 2.1.1, 4.1.2). Add `KeyboardSensor` with
-`sortableKeyboardCoordinates`, make the card a real button, and add live-region
-announcements for the move.
+**What shipped.** `src/components/kanban/board.tsx` registers a
+`KeyboardSensor` beside the `PointerSensor`, with a board-aware coordinate
+getter rather than `sortableKeyboardCoordinates` because the targets are
+columns, not one list. Cards are focusable: Space picks up, the arrow keys move
+between columns, Space drops, Escape cancels, and Enter opens the card without
+starting a drag. Before this the board registered only `PointerSensor` and the
+Deals page's entire function was mouse-only (WCAG 2.1.1, 4.1.2).
 
-**Acceptance.** A Playwright test moves a card between columns using only the
-keyboard, and asserts the persisted stage changed. Focus is visible.
+**Acceptance.** ✅ `e2e/crm.spec.ts` moves a card to a neighbouring column
+using only the keyboard and asserts the persisted stage after a reload; a second
+test asserts Enter opens a focused card. Not verified: how a move is announced
+under a screen reader.
 
 **Risk.** Low. dnd-kit ships the keyboard sensor; the work is mostly making the
 card semantically a control.
@@ -910,20 +932,20 @@ makes a claim true.
 |---|---|---|---|
 | 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | The flagship feature currently renders as twelve em-dashes on the page a reviewer opens second. Nothing else in this document changes so much for so little. |
 | 2 | **W2 — `PRAGMA foreign_keys` on production** | 0.5 | One query. If the answer is 0, it changes what you believe about every delete path in the app, and you would rather know before spending the other nine hours. |
-| 3 | **W10 — provider fallback chain + structured output** | 2.0 | Today an exhausted Gemini free tier silently degrades every AI feature for the rest of the day while `GROQ_API_KEY` sits unused, and a chatty reply defeats the JSON scan so a heuristic score is written as if the model had answered. Both are *observable in the demo*, and the README's "pluggable providers" line implies neither happens. |
+| 3 | **W10 — provider fallback chain + structured output** | 2.0 | Failover half ✅ shipped: an exhausted Gemini free tier now hands off to Groq. Still open: a chatty reply defeats the JSON scan so a heuristic score is written as if the model had answered — *observable in the demo*. |
 | 4 | **W12 — minimal eval harness in CI** | 3.0 | The single highest-signal artifact for the stated goal. 10 fixtures with property assertions plus three injection payloads, running with no API key so it costs nothing and runs on every PR. The parrot test stops being a paragraph and becomes a test that goes red. |
-| 5 | **W6 — `isOverdueDateOnly()` + fixed-clock tests** | 1.0 | A wrong number a human acts on, in the UI, today: "due Aug 22" rendered in red on Aug 21. Small, provable, and the test is a good interview story about why the formatter passing was not enough. |
-| 6 | **W3 — atomic migrations + double-run test** | 1.5 | This bug class already broke production once. It is the cheapest insurance in the document and it unblocks every schema change that comes after. |
+| 5 | **W6 — `isOverdueDateOnly()` + fixed-clock tests** | 1.0 | ✅ Shipped. Was a wrong number a human acts on, in the UI: "due Aug 22" rendered in red on Aug 21. The 24-hour test is a good interview story about why the formatter passing was not enough. |
+| 6 | **W3 — ~~atomic migrations~~ interrupted-migration detection + tests** | 1.5 | ✅ Shipped, though not as a transaction — see W3 for why that cannot work. This bug class already broke production once; it was the cheapest insurance in the document. |
 | 7 | **W23 (partial) — Mermaid architecture diagram + decision log pointer** | 1.5 | Converts nine hours of engineering into something a reviewer can absorb in two minutes. Check `docs/` first — if a companion document already covers the decisions, spend this hour and a half on **W7** (deal-ordering transactions) instead. |
 
 **Total: 10 hours.**
 
 What is deliberately *not* in the ten hours, and why:
 
-- **W5 (money).** Correct, important, and invisible to a reviewer who only ever
-  sees USD. If it nags, there is a 30-minute honest version: write the decision
-  down, add the comment, and add a test asserting the single-currency
-  invariant — then do the migration later.
+- **W5 (money).** Was left out as invisible to a reviewer who only ever sees
+  USD — and then shipped anyway, as option B, once the owner chose
+  multi-currency. See W5; the deal card now shows `$72,534 (EUR 62,000)`, which
+  a reviewer does see.
 - **W18 (ask-your-CRM).** A day on its own, and worth building only on top of
   W10, W11 and W12. It is the right *next* day, not this one.
 - **W16 (⌘K), W15 (deal detail).** Genuinely valuable product surface, but each
