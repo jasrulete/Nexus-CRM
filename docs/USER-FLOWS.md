@@ -373,9 +373,13 @@ sequenceDiagram
   `deals` prop whenever it changes identity (`if (lastDeals !== deals)`), which happens after
   `revalidatePath("/deals")` re-renders the server component with fresh data — this is what makes
   the optimistic state eventually consistent with the database even without a per-move refetch.
-- Clicking a card (rather than dragging it) opens `DealFormDialog` pre-filled via `setEditing()`
-  — a separate path from drag, going through `updateDeal()` (§4's pattern: `canMutate` check,
-  returns `{ message: NOT_YOURS }` on rejection rather than throwing, since it's a form).
+- Clicking a card (rather than dragging it), or pressing Enter on a focused one, navigates to
+  `/deals/[id]` via `router.push` — the deal's own page, with its details, tasks, composer and
+  timeline. Editing lives there: `DealEditButton` opens `DealFormDialog` pre-filled, which goes
+  through `updateDeal()` (§4's pattern: `canMutate` check, returns `{ message: NOT_YOURS }` on
+  rejection rather than throwing, since it's a form). The board keeps only the "New deal" dialog.
+  A link nested inside the draggable card was rejected because an interactive element inside a
+  `role="button"` trips axe's nested-interactive rule, and the accessibility suite runs on `/deals`.
 
 ---
 

@@ -1165,7 +1165,7 @@ Two configuration choices with reasons:
 
 - `useSensor(PointerSensor, { activationConstraint: { distance: 6 } })` — a drag does not
   begin until the pointer moves 6px. Without it, every *click* on a card starts a drag, and
-  the click-to-edit behaviour (`onCardClick` opening the edit dialog) becomes unusable.
+  the click-to-open behaviour (`onCardClick` navigating to `/deals/[id]`) becomes unusable.
 - `collisionDetection: closestCorners` — better than the default for column layouts, where
   what you want is the nearest column edge rather than pointer containment.
 
@@ -1177,8 +1177,11 @@ also be a drop target. It gets `rotate-2 shadow-xl ring-2` instead, the visual "
 with a board-aware coordinate getter rather than the default sortable one, because the targets
 are columns rather than positions in a single list. Cards are focusable: **Space** picks one
 up, the **arrow keys** move it between columns, **Space** drops it, **Escape** cancels, and
-**Enter** opens the card without starting a drag. `e2e/crm.spec.ts` moves a card to a
+**Enter** opens the deal's page without starting a drag. `e2e/crm.spec.ts` moves a card to a
 neighbouring column with the keyboard alone and asserts the stage persists after a reload.
+Opening the page rather than an in-place dialog is deliberate: a link nested inside the
+draggable card would be an interactive element inside a `role="button"`, which axe's
+nested-interactive rule flags — and the accessibility suite runs on the board.
 
 > **If asked: "is the kanban accessible?"**
 > The drag has a full keyboard equivalent with an e2e test that exercises it, and stage is
@@ -1560,7 +1563,7 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 117 unit tests, once, non-watch. | Before committing; CI step 4. |
+| `test` | `vitest run` | The 297 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 20 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
 | `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |

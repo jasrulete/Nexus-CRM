@@ -12,7 +12,10 @@ import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
   if (task.contactId) revalidatePath(`/contacts/${task.contactId}`);
-  if (task.dealId) revalidatePath("/deals");
+  if (task.dealId) {
+    revalidatePath("/deals");
+    revalidatePath(`/deals/${task.dealId}`);
+  }
   revalidatePath("/dashboard");
 }
 

@@ -504,19 +504,25 @@ separate label; `aiScoredAt` is set to yesterday and is still read by nothing.
 **Size.** S (35 min). **Depends on:** nothing. **Best impact-per-hour in this
 document.**
 
-#### W15 · Deal detail page
+#### W15 · Deal detail page — shipped
 
-**Scope.** `deals/[id]` does not exist. `src/app/(app)/deals` is the kanban and
-nothing else, while the seed attaches real activities to deals
-(`dealId: deals[0]!.id`) that are unreachable from any deal. `ActivityComposer`
-and `QuickTaskForm` already accept `dealId`, so this is mostly a page shell plus
-routing from the kanban card.
+**What shipped.** `src/app/(app)/deals/[id]/page.tsx`, the same shape as the
+contact and company pages: details (amount converted-first, stage, contact and
+company links, expected and actual close), open tasks with the quick-add form,
+the activity composer and the timeline. The seed's deal-attached activities are
+reachable at last, and `ActivityComposer`/`QuickTaskForm` finally receive the
+`dealId` they always accepted. The board opens the page on click and on Enter;
+Edit and Delete live on the page (a link nested inside the draggable card would
+be an interactive element inside a `role="button"`, which axe flags).
+`deleteDeal` redirects to `/deals` afterwards, as the other two deletes do.
 
-**Acceptance.** A kanban card links to a detail page showing the deal, its
-company and contact, its activity timeline and its tasks. A Playwright test
-navigates card → detail → activity. No dead relation remains in the schema.
+**Acceptance.** ✅ Playwright: Enter on a focused card lands on its page; a
+click opens the page showing the company link, the contact link, the seeded
+"Sent proposal v2" activity, and a note logged from the page; a missing id
+renders the branded 404. No relation in the schema is now unreachable from
+the product.
 
-**Risk.** Low. Dead relations in a schema are exactly what a reviewer notices.
+**Risk.** Was low. Dead relations in a schema are exactly what a reviewer notices.
 
 **Size.** M (4h). **Depends on:** W17 (the card must be a real focusable control
 anyway — do them together).
@@ -545,14 +551,14 @@ a comment, and note SQLite FTS5 as the free upgrade path if it ever matters.
 `KeyboardSensor` beside the `PointerSensor`, with a board-aware coordinate
 getter rather than `sortableKeyboardCoordinates` because the targets are
 columns, not one list. Cards are focusable: Space picks up, the arrow keys move
-between columns, Space drops, Escape cancels, and Enter opens the card without
-starting a drag. Before this the board registered only `PointerSensor` and the
+between columns, Space drops, Escape cancels, and Enter opens the deal's page
+without starting a drag. Before this the board registered only `PointerSensor` and the
 Deals page's entire function was mouse-only (WCAG 2.1.1, 4.1.2).
 
 **Acceptance.** ✅ `e2e/crm.spec.ts` moves a card to a neighbouring column
 using only the keyboard and asserts the persisted stage after a reload; a second
-test asserts Enter opens a focused card. Not verified: how a move is announced
-under a screen reader.
+test asserts Enter on a focused card opens its page. Not verified: how a move is
+announced under a screen reader.
 
 **Risk.** Low. dnd-kit ships the keyboard sensor; the work is mostly making the
 card semantically a control.
@@ -956,6 +962,7 @@ What is deliberately *not* in the ten hours, and why:
   W10, W11 and W12. It is the right *next* day, not this one.
 - **W16 (⌘K), W15 (deal detail).** Genuinely valuable product surface, but each
   is three to four hours that buys less reviewer signal than the eval harness.
+  (W15 has since shipped; W16 is still open.)
 - **W21 (backups runbook).** Should be done — but a rehearsed restore takes real
   elapsed time against a live database, and it does not show up in the demo.
 

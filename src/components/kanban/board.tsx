@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
@@ -23,7 +24,7 @@ import { Plus } from "lucide-react";
 import { moveDeal } from "@/server/actions/deals";
 import { DEAL_STAGES, STAGE_LABELS, type DealStage } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
-import { DealFormDialog, type DealFormValues } from "@/components/deal-form-dialog";
+import { DealFormDialog } from "@/components/deal-form-dialog";
 import { KanbanColumn } from "./column";
 import { DealCard, type BoardDeal } from "./deal-card";
 
@@ -99,9 +100,9 @@ export function KanbanBoard({
   contacts: { id: string; name: string }[];
   companies: { id: string; name: string }[];
 }) {
+  const router = useRouter();
   const [columns, setColumns] = useState<Columns>(() => groupDeals(deals));
   const [activeDeal, setActiveDeal] = useState<BoardDeal | null>(null);
-  const [editing, setEditing] = useState<DealFormValues | null>(null);
   const [creating, setCreating] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -251,19 +252,12 @@ export function KanbanBoard({
                 stage={stage}
                 label={STAGE_LABELS[stage]}
                 deals={columns[stage]}
-                onCardClick={(deal) =>
-                  setEditing({
-                    id: deal.id,
-                    updatedAt: deal.updatedAt,
-                    title: deal.title,
-                    value: deal.value,
-                    currency: deal.currency,
-                    stage: deal.stage,
-                    expectedCloseDate: deal.expectedCloseDate?.slice(0, 10) ?? null,
-                    contactId: deal.contactId,
-                    companyId: deal.companyId,
-                  })
-                }
+                // Click and Enter open the deal's page, where editing lives.
+                // A link nested inside the draggable card would have been the
+                // alternative, but an interactive element inside a
+                // role="button" is exactly what axe's nested-interactive rule
+                // flags, and the accessibility suite runs on this page.
+                onCardClick={(deal) => router.push(`/deals/${deal.id}`)}
               />
             </SortableContext>
           ))}
@@ -276,15 +270,6 @@ export function KanbanBoard({
       <DealFormDialog
         open={creating}
         onOpenChange={setCreating}
-        contacts={contacts}
-        companies={companies}
-      />
-      <DealFormDialog
-        open={editing !== null}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null);
-        }}
-        deal={editing}
         contacts={contacts}
         companies={companies}
       />

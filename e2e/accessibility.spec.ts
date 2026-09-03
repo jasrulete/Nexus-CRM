@@ -79,6 +79,15 @@ test.describe("signed in", () => {
     await expectNoViolations(page);
   });
 
+  test("a deal detail page has no automatically-detectable violations", async ({
+    page,
+  }) => {
+    await page.goto("/deals");
+    await page.getByRole("button", { name: /Analytics platform/ }).first().click();
+    await page.waitForURL(/\/deals\/.+/);
+    await expectNoViolations(page);
+  });
+
   test("an open dialog has no automatically-detectable violations", async ({
     page,
   }) => {

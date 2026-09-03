@@ -366,8 +366,8 @@ audit was needed after the token change.
 the app. `src/components/kanban/board.tsx` now registers a `KeyboardSensor`
 beside the `PointerSensor` with a board-aware coordinate getter: cards are
 focusable, **Space** picks a card up, the **arrow keys** move it between
-columns, **Space** drops it, **Escape** cancels, and **Enter** opens the card
-without starting a drag. `e2e/crm.spec.ts` moves a card to a neighbouring
+columns, **Space** drops it, **Escape** cancels, and **Enter** opens the deal's
+page without starting a drag. `e2e/crm.spec.ts` moves a card to a neighbouring
 column with only the keyboard and asserts the stage persists after a reload.
 
 ---

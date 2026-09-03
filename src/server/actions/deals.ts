@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import type { ActionState } from "@/lib/action-state";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
@@ -203,6 +204,7 @@ export async function updateDeal(
 
   if (conflicted) return { message: STALE_RECORD };
   revalidatePath("/deals");
+  revalidatePath(`/deals/${id}`);
   revalidatePath("/dashboard");
   return { success: true };
 }
@@ -301,4 +303,6 @@ export async function deleteDeal(dealId: string): Promise<void> {
   });
   revalidatePath("/deals");
   revalidatePath("/dashboard");
+  // The deal page calls this; without the redirect it re-renders as a 404.
+  redirect("/deals");
 }

@@ -295,7 +295,7 @@ it is labelled as stage-based rather than as a model's prediction.
 | F5 | Moving a deal into WON or LOST stamps `closedAt` (preserving an existing one); moving it back out clears `closedAt` to null |
 | F6 | A cross-stage move writes a `deal.stage_change` audit entry with `{ from, to, via: "kanban" }` |
 | F7 | If the server refuses the move — e.g. the deal belongs to someone else — the board snaps back and shows *"Couldn't move that deal — it's been put back."* |
-| F8 | Clicking a card opens the edit dialog; the page subtitle shows total open pipeline and the instruction *"drag cards to update stage"* |
+| F8 | Clicking a card (or pressing Enter on a focused one) opens the deal's page at `/deals/[id]`, where editing and deleting live; the board subtitle shows total open pipeline and the instruction *"drag cards to update stage"* |
 | F9 | Deal value is validated as a non-negative whole number up to 1,000,000,000 |
 
 ### 7.7 Activity timeline
@@ -497,7 +497,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 117 unit tests, 20 e2e tests, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 297 unit tests (coverage-gated), 38 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -530,8 +530,10 @@ unavailable rate refuses the save rather than assuming 1. Full design in
 `DeleteButton` (contacts, companies) takes a `disabledReason` and explains itself.
 The other three delete paths do not:
 
-- **Deals** — the delete button lives inside `DealFormDialog`
-  (`src/components/deal-form-dialog.tsx`). It has no confirmation step, no demo
+- **Deals** — the deal page (`/deals/[id]`) now uses the standard `DeleteButton`,
+  with confirmation and the demo-lock explanation. The older delete button inside
+  `DealFormDialog` (`src/components/deal-form-dialog.tsx`) remains, reachable from
+  the page's Edit dialog. It has no confirmation step, no demo
   lock UI, and its `onClick` is `try { … } finally { … }` with no `catch`. On the
   locked demo the `DEMO_READONLY` throw produces an unhandled rejection and the
   user sees nothing happen at all.
@@ -603,28 +605,32 @@ rest of the day. The UI still cannot distinguish "no key configured" from
 "every provider failing" — both render the rule-based label — because the
 provider result is not yet a discriminated `{ ok, reason }`.
 
-### 11.11 The kanban has no keyboard path
+### 11.11 ~~The kanban has no keyboard path~~ — resolved
 
-`KanbanBoard` registers only a `PointerSensor`. dnd-kit ships a `KeyboardSensor`
-and it is not wired up, so stage changes by keyboard are only possible through the
-edit dialog's stage `<select>`.
+`KanbanBoard` registers a `KeyboardSensor` beside the `PointerSensor`: Space picks
+a card up, the arrow keys move it between stages, Space drops, Escape cancels,
+Enter opens the deal's page. A Playwright test moves a card with the keyboard alone
+and checks the stage persisted. The edit form's stage `<select>` remains as a
+second route.
 
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-117 unit tests cover library modules. Component behaviour is covered exclusively by
-the 20 Playwright tests.
+297 unit tests cover library modules and the server actions (against a real
+migrations-built SQLite). Component behaviour is covered exclusively by the 38
+Playwright tests.
 
 ### 11.13 No backup or restore runbook
 
 Turso takes its own snapshots. There is no documented, tested restore procedure,
 and no one has ever performed one.
 
-### 11.14 Dead prop paths
+### 11.14 ~~Dead prop paths~~ — resolved
 
-`ActivityComposer` and `QuickTaskForm` both accept a `dealId` prop and nothing ever
-passes one, because there is no deal detail page — deals exist only as kanban cards
-and an edit dialog.
+`ActivityComposer` and `QuickTaskForm` both accept a `dealId` prop that nothing
+passed, because there was no deal detail page. `/deals/[id]` now passes it: a deal
+has its own timeline and task list, and the seeded activities logged against deals
+are reachable.
 
 ---
 
@@ -684,9 +690,9 @@ Genuine unknowns. Each needs a product decision, not an implementation.
 6. **Should scores expire?** `aiScoredAt` is written and never read. A score from
    three months and forty activities ago is shown with the same confidence as one
    from this morning.
-7. **Does the product need a deal detail page?** Deals have no timeline of their
-   own, no tasks surface, and no permalink — which is why two component props in
-   §11.14 are dead.
+7. ~~**Does the product need a deal detail page?**~~ Answered yes: `/deals/[id]`
+   gives a deal a timeline, a task list and a permalink, and the board opens it on
+   click. Editing moved there from the card; the board keeps "New deal".
 8. **Should registration stay open?** It is what makes the demo frictionless and
    also what forced the email-gating fix on `/settings`. An invite flag is cheap;
    the question is whether the demo would be worse for it.

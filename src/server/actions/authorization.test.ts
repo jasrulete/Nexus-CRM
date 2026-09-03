@@ -258,7 +258,9 @@ describe("delete actions allow the owner and an admin", () => {
     const deal = await seedDeal();
     currentUser = admin;
 
-    await deleteDeal(deal.id);
+    // Like deleteContact: the deal page calls this, so it ends in redirect(),
+    // which Next signals by throwing.
+    await expect(deleteDeal(deal.id)).rejects.toThrow(/NEXT_REDIRECT/);
     expect(await prisma.deal.count()).toBe(0);
   });
 });
@@ -295,7 +297,7 @@ describe("the demo lock outranks ownership", () => {
     });
     currentUser = demo;
 
-    await deleteDeal(deal.id);
+    await expect(deleteDeal(deal.id)).rejects.toThrow(/NEXT_REDIRECT/);
     expect(await prisma.deal.count()).toBe(0);
   });
 });

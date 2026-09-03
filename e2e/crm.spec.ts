@@ -193,16 +193,45 @@ test("a deal can be moved between stages with the keyboard alone", async ({
   ).toHaveCount(0);
 });
 
-test("Enter opens a deal card without starting a drag", async ({ page }) => {
+test("Enter opens a deal's detail page without starting a drag", async ({ page }) => {
   await page.goto("/deals");
 
   const card = page.getByRole("button", { name: /CS tooling/ }).first();
   await card.focus();
   await page.keyboard.press("Enter");
 
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByLabel("Title")).toHaveValue(/CS tooling/);
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("CS tooling");
+});
+
+test("a deal card opens its detail page, which shows its relations and takes an activity", async ({
+  page,
+}) => {
+  // Deals used to exist only as kanban cards and an edit dialog: the seed
+  // attaches activities to deals that no page could show. The detail page is
+  // where a deal's company, contact, timeline and tasks come together.
+  await page.goto("/deals");
+  await page.getByRole("button", { name: /Analytics platform/ }).first().click();
+
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Analytics platform");
+  await expect(page.getByText("$48,000").first()).toBeVisible();
+  // `.first()`: the contact is linked from the details card and again from
+  // every timeline entry that names her.
+  await expect(page.getByRole("link", { name: "Northwind Analytics" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Maya Okafor" }).first()).toBeVisible();
+  // A seeded activity that was, until now, reachable from nowhere.
+  await expect(page.getByText(/Sent proposal v2/)).toBeVisible();
+
+  const note = `Deal note ${Date.now()}`;
+  await page.getByPlaceholder("Write a note…").fill(note);
+  await page.getByRole("button", { name: "Log note" }).click();
+  await expect(page.getByText(note)).toBeVisible({ timeout: 15_000 });
+});
+
+test("a missing deal renders the branded 404, not a crash", async ({ page }) => {
+  await page.goto("/deals/this-id-does-not-exist");
+  await expect(page.getByText("Not found")).toBeVisible();
 });
 
 test("a deal in another currency shows both amounts, and totals convert", async ({

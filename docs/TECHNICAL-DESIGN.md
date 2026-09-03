@@ -69,7 +69,7 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 117 unit tests across 13 files pass, the production build succeeds, and
+passes, 297 unit tests across 24 files pass, the production build succeeds, and
 20 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 117 unit tests,<br/>build, 20 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 297 unit tests,<br/>build, 38 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         REPO --> CI
         REPO --> RESET
@@ -1116,7 +1116,7 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 117 unit tests, 13 files | vitest, `environment: "node"` | Pure server modules: heuristics, provider, authz, constants, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation |
+| 297 unit tests, 24 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
 | 20 e2e tests, 3 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts` |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
@@ -1538,7 +1538,7 @@ and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
 covered only by the 20 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"117 unit tests" means 117 tests of pure server modules.
+"297 unit tests" means 297 tests of server modules and server actions — none of a rendered component.
 
 **The kanban has no keyboard path.** `board.tsx` registers only a
 `PointerSensor`. dnd-kit ships a `KeyboardSensor`, and adding it plus

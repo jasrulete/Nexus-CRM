@@ -55,6 +55,7 @@ export async function createActivity(
 
   if (contactId) revalidatePath(`/contacts/${contactId}`);
   if (companyId) revalidatePath(`/companies/${companyId}`);
+  if (dealId) revalidatePath(`/deals/${dealId}`);
   revalidatePath("/deals");
   revalidatePath("/dashboard");
   return { success: true };
@@ -88,6 +89,7 @@ export async function deleteActivity(activityId: string): Promise<void> {
 
   if (activity.contactId) revalidatePath(`/contacts/${activity.contactId}`);
   if (activity.companyId) revalidatePath(`/companies/${activity.companyId}`);
+  if (activity.dealId) revalidatePath(`/deals/${activity.dealId}`);
   revalidatePath("/deals");
   revalidatePath("/dashboard");
 }
