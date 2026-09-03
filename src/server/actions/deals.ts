@@ -281,7 +281,9 @@ export async function deleteDeal(dealId: string): Promise<void> {
   const id = idSchema.parse(dealId);
 
   const deal = await prisma.deal.findUnique({ where: { id } });
-  if (!deal) return;
+  // Already gone (a stale tab, or two people deleting): the outcome the user
+  // asked for is true, so leave the page rather than staying on a dead record.
+  if (!deal) redirect("/deals");
   if (!canMutate(deal.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }

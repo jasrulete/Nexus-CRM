@@ -81,7 +81,7 @@ GEMINI_API_KEY=...   # https://aistudio.google.com/apikey
 GROQ_API_KEY=...     # https://console.groq.com/keys
 ```
 
-Restart the dev server. The Settings page shows which provider is active.
+Restart the dev server. The Settings page shows which provider is tried first and which takes over.
 Without a key, AI features run in deterministic rule-based mode and are labeled
 as such in the UI.
 

@@ -263,6 +263,16 @@ describe("delete actions allow the owner and an admin", () => {
     await expect(deleteDeal(deal.id)).rejects.toThrow(/NEXT_REDIRECT/);
     expect(await prisma.deal.count()).toBe(0);
   });
+
+  it("still leaves the page when the deal is already gone", async () => {
+    const deal = await seedDeal();
+    await prisma.deal.delete({ where: { id: deal.id } });
+
+    // A stale tab deleting a row someone else removed used to return
+    // silently: the dialog closed and the page stayed on a record that no
+    // longer existed.
+    await expect(deleteDeal(deal.id)).rejects.toThrow(/NEXT_REDIRECT/);
+  });
 });
 
 // ---------------------------------------------------------------- demo guard

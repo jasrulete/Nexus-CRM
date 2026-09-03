@@ -28,6 +28,9 @@ const securityFeatures = [
 export default async function SettingsPage() {
   const user = (await getCurrentUser())!;
   const provider = aiProviderName();
+  // The card used to say "AI features are using the gemini API" — false for
+  // most of any day Gemini's quota is exhausted and Groq is serving.
+  const fallback = provider === "gemini" && process.env.GROQ_API_KEY ? "groq" : null;
   const isAdmin = user.role === "ADMIN";
 
   const [members, auditEntries] = await Promise.all([
@@ -87,8 +90,12 @@ export default async function SettingsPage() {
                     Connected: <span className="capitalize">{provider}</span>
                   </p>
                   <p className="mt-0.5 text-[13px] leading-5 text-ink-faint">
-                    AI features are using the {provider} API. Change providers by
-                    editing <code className="font-mono text-[12px]">.env</code>.
+                    AI features try the {provider} API first
+                    {fallback
+                      ? ` and fall back to ${fallback} when it fails — with a free-tier daily quota, that is routine`
+                      : ""}
+                    . Change providers by editing{" "}
+                    <code className="font-mono text-[12px]">.env</code>.
                   </p>
                 </div>
               ) : (

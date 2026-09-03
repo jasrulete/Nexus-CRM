@@ -1237,11 +1237,13 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 117 tests across 13 files.** All in `src/lib/`:
-`ai/heuristics.test.ts`, `ai/provider.test.ts`, `authz.test.ts`, `constants.test.ts`,
-`db-adapter.test.ts`, `demo-guard.test.ts`, `email.test.ts`, `file-context.test.ts`,
-`rate-limit.test.ts`, `reset-guard.test.ts`, `sentry-options.test.ts`, `utils.test.ts`,
-`validation.test.ts`.
+**Unit — vitest, 304 tests across 25 files.** Pure modules in `src/lib/`
+(`ai/heuristics`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
+`file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
+`fx`, `months`, `concurrency`, `migration-ledger`) plus, under `src/server/`, the server actions
+and the demo seed run against a real migrations-built SQLite through
+[`src/test/action-harness.ts`](../src/test/action-harness.ts) — which fakes only the database
+handle, the session, `revalidatePath` and `redirect`.
 
 One config detail is load-bearing.
 [`vitest.config.ts`](../vitest.config.ts) aliases the `server-only` package to a local stub:
@@ -1269,8 +1271,10 @@ the glob **and** installing a DOM environment (`jsdom` or `happy-dom`) **and** a
 dialogs' `useActionState` wrappers are the highest-logic client code in the app and are
 covered only end-to-end.
 
-**End-to-end — Playwright, 20 tests across 3 files.** `e2e/auth.spec.ts`,
-`e2e/crm.spec.ts`, `e2e/marketing.spec.ts`. Two config choices are worth knowing:
+**End-to-end — Playwright, 40 tests across 4 files.** `e2e/auth.spec.ts`,
+`e2e/crm.spec.ts`, `e2e/marketing.spec.ts`, and `e2e/accessibility.spec.ts` (axe scans of
+every page in both themes, an open dialog, and all six avatar tints). Two config choices are
+worth knowing:
 
 - **`fullyParallel: false, workers: 1`** — *"the suite shares one seeded SQLite database."*
   Parallel workers would race on shared rows. Honest constraint, honestly configured.
@@ -1563,8 +1567,8 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 297 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
-| `test:e2e` | `playwright test` | The 20 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
+| `test` | `vitest run` | The 304 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test:e2e` | `playwright test` | The 40 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
 | `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |
 | `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the MEMBER demo account. Touches nothing else. | Once, when you want the member view available. |

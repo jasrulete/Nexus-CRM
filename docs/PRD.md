@@ -497,7 +497,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 297 unit tests (coverage-gated), 38 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 304 unit tests (coverage-gated), 40 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -528,12 +528,13 @@ unavailable rate refuses the save rather than assuming 1. Full design in
 ### 11.2 The demo delete lock is inconsistently surfaced
 
 `DeleteButton` (contacts, companies) takes a `disabledReason` and explains itself.
-The other three delete paths do not:
+The other delete paths were less careful:
 
-- **Deals** — the deal page (`/deals/[id]`) now uses the standard `DeleteButton`,
-  with confirmation and the demo-lock explanation. The older delete button inside
-  `DealFormDialog` (`src/components/deal-form-dialog.tsx`) remains, reachable from
-  the page's Edit dialog. It has no confirmation step, no demo
+- **Deals** — resolved: the deal page (`/deals/[id]`) uses the standard
+  `DeleteButton`, with confirmation and the demo-lock explanation, and the older
+  delete button inside `DealFormDialog` (`src/components/deal-form-dialog.tsx`)
+  has been removed rather than left as a second, less careful path. That button
+  had no confirmation step, no demo
   lock UI, and its `onClick` is `try { … } finally { … }` with no `catch`. On the
   locked demo the `DEMO_READONLY` throw produces an unhandled rejection and the
   user sees nothing happen at all.
@@ -616,8 +617,8 @@ second route.
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-297 unit tests cover library modules and the server actions (against a real
-migrations-built SQLite). Component behaviour is covered exclusively by the 38
+304 unit tests cover library modules and the server actions (against a real
+migrations-built SQLite). Component behaviour is covered exclusively by the 40
 Playwright tests.
 
 ### 11.13 No backup or restore runbook

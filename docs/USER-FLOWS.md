@@ -218,7 +218,7 @@ flowchart TD
 
     Prompt --> Provider{generateText prompt<br/>providers with a key, in order}
     Provider -->|no key set| NullProvider[returns null immediately]
-    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies here]
+    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies to whichever<br/>provider is first in the chain]
     Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout]
 
     Gemini -->|res.ok, text extracted| AIResult[AiResult text + provider]

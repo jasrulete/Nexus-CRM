@@ -51,7 +51,7 @@ export default async function DealsPage() {
     <div className="mx-auto max-w-[1400px]">
       <PageHeader
         title="Deals"
-        subtitle={`${formatCurrency(openValue)} in open pipeline — drag cards to update stage`}
+        subtitle={`${formatCurrency(openValue)} in open pipeline — drag cards to update stage, open a card for its details`}
       />
       <KanbanBoard
         deals={boardDeals}

@@ -35,8 +35,12 @@ export function DealCard({
   onClick?: () => void;
 }) {
   const sortable = useSortable({ id: deal.id, disabled: overlay });
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, active } =
     sortable;
+  // Any card being dragged, not only this one: while a keyboard drag is in
+  // progress, opening a deal would navigate away mid-drag and leave dnd-kit's
+  // document key listeners attached to the new page.
+  const dragInProgress = active !== null;
 
   /**
    * Space belongs to the drag sensor; Enter opens the card.
@@ -47,7 +51,7 @@ export function DealCard({
    */
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     listeners?.onKeyDown?.(event);
-    if (event.defaultPrevented || !onClick) return;
+    if (event.defaultPrevented || !onClick || dragInProgress) return;
     if (event.key === "Enter") {
       event.preventDefault();
       onClick();
@@ -68,7 +72,7 @@ export function DealCard({
       }
       {...(overlay ? {} : attributes)}
       {...(overlay ? {} : listeners)}
-      onClick={onClick}
+      onClick={dragInProgress ? undefined : onClick}
       onKeyDown={overlay ? undefined : handleKeyDown}
       className={cn(
         "cursor-grab rounded-lg border border-edge bg-surface p-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-shadow",

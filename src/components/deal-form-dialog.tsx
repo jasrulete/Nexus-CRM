@@ -1,8 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { Loader2, Trash2 } from "lucide-react";
-import { createDeal, deleteDeal, updateDeal } from "@/server/actions/deals";
+import { useActionState } from "react";
+import { Loader2 } from "lucide-react";
+import { createDeal, updateDeal } from "@/server/actions/deals";
 import { idle, type ActionState } from "@/lib/action-state";
 import { DEAL_STAGES, STAGE_LABELS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
@@ -45,7 +45,6 @@ export function DealFormDialog({
     },
     idle,
   );
-  const [deleting, setDeleting] = useState(false);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -162,46 +161,22 @@ export function DealFormDialog({
             />
             <FieldError message={state.errors?.expectedCloseDate} />
           </div>
-          <div className="flex items-center justify-between gap-2 pt-1">
-            {deal ? (
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                disabled={deleting}
-                onClick={async () => {
-                  setDeleting(true);
-                  try {
-                    await deleteDeal(deal.id);
-                    onOpenChange(false);
-                  } finally {
-                    setDeleting(false);
-                  }
-                }}
-              >
-                {deleting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
-                Delete
-              </Button>
-            ) : (
-              <span />
-            )}
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => onOpenChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={pending}>
-                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {deal ? "Save changes" : "Create deal"}
-              </Button>
-            </div>
+          {/* Deleting lives on the deal page's DeleteButton, which confirms and
+              explains the demo lock. The unconfirmed Delete that used to sit
+              here was the only way to delete a deal when the board opened this
+              dialog; now it would be a second, less careful path. */}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {deal ? "Save changes" : "Create deal"}
+            </Button>
           </div>
         </form>
       </DialogContent>

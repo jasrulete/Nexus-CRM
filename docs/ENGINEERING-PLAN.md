@@ -33,9 +33,9 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass |
+| `npm test` (vitest) | 117 tests across 13 files, pass (304 across 25 as of 2026-09-03) |
 | `npm run build` | pass |
-| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass |
+| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (40 as of 2026-09-03) |
 | `npm audit` | 3 high, 0 critical |
 
 All three advisories are in the `prisma` CLI chain. `prisma` is a
@@ -375,8 +375,10 @@ score is written to the database as if the model had been consulted.
 **Acceptance.** ✅ A test where Gemini returns 429 and Groq answers, asserting the
 Groq text is used — it failed against the old code (`provider.test.ts`,
 "generateText failover"). Still to do: a test that a
-non-JSON reply is rejected rather than silently heuristic-scored. The UI can
-distinguish "no key configured" from "provider failing".
+non-JSON reply is rejected rather than silently heuristic-scored, and a UI that
+can distinguish "no key configured" from "provider failing" — it cannot yet; the
+Settings card now at least names the fallback, but a live failure still renders
+the rule-based label.
 
 **Risk.** Low. Both free tiers stay free; retries must not multiply the daily
 quota, so cap at one.
@@ -739,9 +741,9 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 117 tests
+npm test            # vitest, 304 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
-npm run test:e2e    # playwright, 20 tests
+npm run test:e2e    # playwright, 40 tests
 ```
 
 In CI (`.github/workflows/ci.yml`) the e2e run serves

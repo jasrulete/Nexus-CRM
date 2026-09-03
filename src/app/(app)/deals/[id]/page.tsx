@@ -15,7 +15,7 @@ import {
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
-import { formatDate, formatDateOnly, fullName } from "@/lib/utils";
+import { cn, formatDate, formatDateOnly, fullName, isOverdueDateOnly } from "@/lib/utils";
 import { formatDealAmount } from "@/lib/money";
 import { deleteDeal } from "@/server/actions/deals";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -28,7 +28,18 @@ import { DeleteButton } from "@/components/delete-button";
 import { QuickTaskForm } from "@/components/quick-task-form";
 import { TaskList, type TaskItem } from "@/components/task-list";
 
-export const metadata: Metadata = { title: "Deal" };
+// The document title is the first thing a screen reader announces after the
+// board's Enter/click navigation; a static "Deal" was one letter away from
+// "Deals", the page the user had just left.
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+  const { id } = await params;
+  const deal = await prisma.deal.findUnique({ where: { id }, select: { title: true } });
+  return { title: deal?.title ?? "Deal" };
+}
 
 /**
  * Where a deal's relations come together. Until this page existed, deals were
@@ -82,6 +93,10 @@ export default async function DealDetailPage({
 
   if (!deal) notFound();
 
+  const overdue =
+    isOverdueDateOnly(deal.expectedCloseDate?.toISOString() ?? null) &&
+    !["WON", "LOST"].includes(deal.stage);
+
   const taskItems: TaskItem[] = deal.tasks.map((t) => ({
     id: t.id,
     title: t.title,
@@ -118,7 +133,16 @@ export default async function DealDetailPage({
     {
       icon: CalendarDays,
       label: "Expected",
-      value: deal.expectedCloseDate ? formatDateOnly(deal.expectedCloseDate.toISOString()) : "—",
+      // Said in words, not only in colour: the card turns the date red, and a
+      // page that is now the deal's canonical view has to carry the same fact.
+      value: deal.expectedCloseDate ? (
+        <span className={cn(overdue && "font-medium text-danger")}>
+          {formatDateOnly(deal.expectedCloseDate.toISOString())}
+          {overdue ? " · overdue" : ""}
+        </span>
+      ) : (
+        "—"
+      ),
     },
     {
       icon: CalendarCheck2,

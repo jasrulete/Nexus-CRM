@@ -5,6 +5,23 @@ import { Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
 
+/**
+ * A server action that ends in redirect() rejects the client's promise on
+ * purpose: Next's action reducer performs the navigation itself and rejects
+ * with a redirect error (marked handled) so an error boundary can remount the
+ * caller — see next/dist/client/components/router-reducer/reducers/server-action-reducer.js.
+ * Every delete here redirects to its list, so that rejection is the success
+ * path, not "Something went wrong".
+ */
+function isRedirect(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "digest" in error &&
+    String((error as { digest: unknown }).digest).startsWith("NEXT_REDIRECT")
+  );
+}
+
 export function DeleteButton({
   label,
   description,
@@ -53,6 +70,7 @@ export function DeleteButton({
                   await onConfirm();
                   setOpen(false);
                 } catch (e) {
+                  if (isRedirect(e)) return;
                   setError(
                     e instanceof Error && e.message.includes("FORBIDDEN")
                       ? "Only the owner or an admin can delete this."

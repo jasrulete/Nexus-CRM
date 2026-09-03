@@ -176,6 +176,13 @@ test("a deal can be moved between stages with the keyboard alone", async ({
   // needs a frame between each step, so the presses are not back to back.
   await page.keyboard.press("Space");
   await expect(card).toHaveAttribute("aria-pressed", "true");
+
+  // Enter while a card is picked up must not open it: that navigated away
+  // mid-drag and left dnd-kit's document key listeners behind on the new page.
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/deals$/);
+  await expect(card).toHaveAttribute("aria-pressed", "true");
+
   await page.keyboard.press(arrow);
   await page.waitForTimeout(300);
   await page.keyboard.press("Space");
@@ -202,6 +209,50 @@ test("Enter opens a deal's detail page without starting a drag", async ({ page }
 
   await expect(page).toHaveURL(/\/deals\/[^/]+$/);
   await expect(page.getByRole("heading", { level: 1 })).toContainText("CS tooling");
+  // The document title is the first thing a screen reader announces after a
+  // navigation; "Deal · Nexus CRM" was one letter away from the board.
+  await expect(page).toHaveTitle(/CS tooling/);
+});
+
+test("an overdue expected close date is spelled out on the deal page", async ({ page }) => {
+  // The seed's "Exec briefing package" was expected to close three days ago
+  // and is still open. The card shows that in red; the page has to say it.
+  await page.goto("/deals");
+  await page.getByRole("button", { name: /Exec briefing package/ }).first().click();
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByText(/overdue/i)).toBeVisible();
+});
+
+test("deleting a deal from its page lands on the board", async ({ browser }) => {
+  // A fresh member, so the demo lock (DEMO_MODE) cannot interfere, and a deal
+  // of their own, so ownership cannot either — the same setup auth.spec uses.
+  // Its own context: the file's beforeEach signs the default page in as the
+  // demo user, and the proxy bounces a signed-in visitor off /register.
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const suffix = Date.now().toString().slice(-8);
+  await page.goto("/register");
+  await page.getByLabel("Full name").fill(`Playwright Deleter ${suffix}`);
+  await page.getByLabel("Email").fill(`e2e-deleter-${suffix}@example.com`);
+  await page.getByLabel("Password").fill("deleter-password-123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  await page.goto("/deals");
+  await page.getByRole("button", { name: "New deal" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Title").fill(`Disposable ${suffix}`);
+  await dialog.getByRole("button", { name: "Create deal" }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole("button", { name: new RegExp(`Disposable ${suffix}`) }).first().click();
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+
+  await expect(page).toHaveURL(/\/deals$/);
+  await expect(page.getByText(`Disposable ${suffix}`)).toHaveCount(0);
+  await context.close();
 });
 
 test("a deal card opens its detail page, which shows its relations and takes an activity", async ({

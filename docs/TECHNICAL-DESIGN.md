@@ -69,8 +69,8 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 297 unit tests across 24 files pass, the production build succeeds, and
-20 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
+passes, 304 unit tests across 25 files pass, the production build succeeds, and
+40 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
 Prisma 6, which is rejected.
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 297 unit tests,<br/>build, 38 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 304 unit tests,<br/>build, 40 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         REPO --> CI
         REPO --> RESET
@@ -1116,8 +1116,8 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 297 unit tests, 24 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
-| 20 e2e tests, 3 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts` |
+| 304 unit tests, 25 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 40 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog) |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
 because that package throws outside an RSC bundler and every interesting module
@@ -1536,22 +1536,27 @@ SHA-256 pre-hash.
 **No component tests exist.** `vitest.config.ts` sets `include: ["src/**/*.test.ts"]`
 and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
-covered only by the 20 e2e tests. *Acceptable because* the components are thin
+covered only by the 40 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"297 unit tests" means 297 tests of server modules and server actions — none of a rendered component.
+"304 unit tests" means 304 tests of server modules and server actions — none of a rendered component.
 
-**The kanban has no keyboard path.** `board.tsx` registers only a
-`PointerSensor`. dnd-kit ships a `KeyboardSensor`, and adding it plus
-`sortableKeyboardCoordinates` is a small change; without it, deal reordering is
-unavailable to keyboard-only users. Everything else in the app is
-keyboard-reachable, and the dark-mode accent tokens were retuned to pass WCAG AA
-in both roles, so this is the conspicuous gap rather than a general one.
+**The kanban keyboard path — resolved.** `board.tsx` registers a
+`KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
+getter (the stock `sortableKeyboardCoordinates` resolved a right-arrow to the
+next card *below*, never the next column): Space picks a card up, arrows move
+it between stages, Space drops, Escape cancels, Enter opens the deal's page —
+and Enter is ignored while a drag is in progress, so a keyboard user cannot
+navigate away mid-drag. The screen-reader instructions say all of this. A
+Playwright test moves a card with the keyboard alone and checks the stage
+persisted; an axe scan covers the board and the deal page. Everything else in
+the app was already keyboard-reachable, and the dark-mode accent tokens were
+retuned to pass WCAG AA in both roles.
 
 **The delete-refusal message may not survive production.** `delete-button.tsx`
 matches on `e.message.includes("FORBIDDEN")`, and Next.js redacts errors crossing
 the server/client boundary in production builds. Whether the raw prefix reaches
 the browser from a production build has not been verified — the delete-forbidden
-path is not among the 20 e2e tests, though the *edit*-forbidden path is. If it
+path is not among the 40 e2e tests, though the *edit*-forbidden path is. If it
 does not survive, the user sees "Something went wrong. Try again." instead of the
 specific reason, which is a degradation rather than a security failure.
 

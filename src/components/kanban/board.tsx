@@ -236,6 +236,14 @@ export function KanbanBoard({
         // climbing on the client — a hydration mismatch on every board render.
         id="nexus-kanban"
         sensors={sensors}
+        // dnd-kit's stock instructions describe only the drag; a screen-reader
+        // user would never learn that Enter opens the deal.
+        accessibility={{
+          screenReaderInstructions: {
+            draggable:
+              "To pick up a deal, press Space. Use the arrow keys to move it to another stage, then press Space again to drop it, or Escape to cancel. Press Enter to open the deal.",
+          },
+        }}
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
