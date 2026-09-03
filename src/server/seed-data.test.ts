@@ -4,8 +4,9 @@
  * in prisma/ but is tested here because vitest collects src/ and the seed runs
  * against the same real-migrations database the action tests use.
  */
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDatabase, makeUser, truncateAll, type TestUser } from "@/test/action-harness";
+import { lastSixMonths, monthKey } from "@/lib/months";
 import { seedDemoData } from "../../prisma/seed-data";
 
 const { prisma, destroy } = createTestDatabase();
@@ -78,37 +79,71 @@ describe("seeded lead scores", () => {
 });
 
 describe("seeded revenue history", () => {
-  // Mirrors the dashboard's bucketing: local calendar months, the current
-  // month and the five before it.
-  function monthKey(d: Date) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  }
-
-  it("lands won revenue in each of the last six months, growing month over month", async () => {
+  // The same bucketing the dashboard uses — imported, not copied, so this test
+  // cannot silently agree with a window the dashboard no longer draws.
+  async function wonSeries(): Promise<number[]> {
     const won = await prisma.deal.findMany({
       where: { stage: "WON" },
       select: { baseValue: true, closedAt: true },
     });
+    for (const d of won) expect(d.closedAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    return lastSixMonths().map((month) =>
+      won
+        .filter((d) => d.closedAt && monthKey(d.closedAt) === monthKey(month))
+        .reduce((s, d) => s + d.baseValue, 0),
+    );
+  }
 
-    const cursor = new Date();
-    cursor.setMonth(cursor.getMonth() - 5);
-    cursor.setDate(1);
-    const series: number[] = [];
-    for (let i = 0; i < 6; i++) {
-      const key = monthKey(cursor);
-      series.push(
-        won
-          .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
-          .reduce((s, d) => s + d.baseValue, 0),
-      );
-      cursor.setMonth(cursor.getMonth() + 1);
-    }
-
+  it("lands won revenue in each of the last six months, growing month over month", async () => {
+    const series = await wonSeries();
     expect(series.every((v) => v > 0)).toBe(true);
     for (let i = 1; i < series.length; i++) {
       expect(series[i]).toBeGreaterThan(series[i - 1]!);
     }
-    // Nothing closed in the future, whatever day of the month the seed runs.
-    for (const d of won) expect(d.closedAt!.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  describe("on July 31", () => {
+    // The day the dashboard's old window arithmetic overflowed February.
+    beforeEach(async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 6, 31, 12));
+      await truncateAll(prisma);
+      currentUser = await makeUser(prisma, { email: `july${++userSeq}@example.com`, name: "July" });
+      await seedDemoData(prisma, currentUser.id);
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it("still fills every bucket the dashboard draws", async () => {
+      const series = await wonSeries();
+      expect(series.every((v) => v > 0)).toBe(true);
+    });
+  });
+});
+
+describe("seeding into a workspace that already has data", () => {
+  it("never touches a contact it did not create", async () => {
+    const other = await makeUser(prisma, { email: "resident@example.com", name: "Resident" });
+    const theirs = await prisma.contact.create({
+      data: {
+        firstName: "Rae",
+        lastName: "Resident",
+        status: "LEAD",
+        ownerId: other.id,
+        aiScore: 91,
+        aiScoreReason: "Strong buying signals across three calls.",
+        aiScoredAt: new Date(2026, 7, 1),
+      },
+    });
+
+    // The seed's scoring pass has to be scoped to the rows it inserted. It
+    // used to select every contact except three seeded ids, so a self-hosted
+    // instance whose owner registered and scored contacts before running the
+    // seed had those model scores replaced with rule-based ones.
+    await seedDemoData(prisma, currentUser.id);
+
+    const after = await prisma.contact.findUniqueOrThrow({ where: { id: theirs.id } });
+    expect(after.aiScore).toBe(91);
+    expect(after.aiScoreReason).toBe("Strong buying signals across three calls.");
+    expect(after.aiScoredAt).toEqual(new Date(2026, 7, 1));
   });
 });

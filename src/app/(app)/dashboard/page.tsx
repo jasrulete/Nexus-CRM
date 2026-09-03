@@ -11,6 +11,7 @@ import {
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { OPEN_STAGES, STAGE_LABELS, weightedValue } from "@/lib/constants";
+import { lastSixMonths, monthKey } from "@/lib/months";
 import { formatCurrency } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -23,23 +24,17 @@ import { RevenueChart } from "@/components/charts/revenue-chart";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
-function monthKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 // Impure date math lives outside the component body (React purity rules).
 function timeWindows() {
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
-  sixMonthsAgo.setDate(1);
-  sixMonthsAgo.setHours(0, 0, 0, 0);
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000);
-  return { sixMonthsAgo, thirtyDaysAgo };
+  return {
+    monthStarts: lastSixMonths(),
+    thirtyDaysAgo: new Date(Date.now() - 30 * 86400_000),
+  };
 }
 
 export default async function DashboardPage() {
   const user = (await getCurrentUser())!;
-  const { sixMonthsAgo, thirtyDaysAgo } = timeWindows();
+  const { monthStarts, thirtyDaysAgo } = timeWindows();
 
   const [openDeals, closedDeals, newContacts, tasks, activities] =
     await Promise.all([
@@ -91,17 +86,15 @@ export default async function DashboardPage() {
     };
   });
 
-  const months: { month: string; value: number }[] = [];
-  const cursor = new Date(sixMonthsAgo);
-  for (let i = 0; i < 6; i++) {
-    const key = monthKey(cursor);
-    const label = cursor.toLocaleDateString("en-US", { month: "short" });
-    const value = wonDeals
-      .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
-      .reduce((s, d) => s + d.baseValue, 0);
-    months.push({ month: label, value });
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
+  const months = monthStarts.map((start) => {
+    const key = monthKey(start);
+    return {
+      month: start.toLocaleDateString("en-US", { month: "short" }),
+      value: wonDeals
+        .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
+        .reduce((s, d) => s + d.baseValue, 0),
+    };
+  });
 
   const taskItems: TaskItem[] = tasks.map((t) => ({
     id: t.id,

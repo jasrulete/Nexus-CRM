@@ -187,9 +187,12 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   // a reviewer checks. Three low-signal leads are left unscored so the Score
   // button has something to do in a demo. Before this, no seeded contact had a
   // score and the flagship feature rendered as a column of twelve dashes.
-  const unscored = [james!.id, luna!.id, marcus!.id];
+  // Scoped to the rows this function inserted, not "every contact but three":
+  // a self-hosted workspace whose owner registered and scored contacts before
+  // running the seed keeps their model scores.
+  const unscored = new Set([james!.id, luna!.id, marcus!.id]);
   const toScore = await prisma.contact.findMany({
-    where: { id: { notIn: unscored } },
+    where: { id: { in: contacts.map((c) => c.id).filter((id) => !unscored.has(id)) } },
     include: {
       deals: { select: { stage: true, baseValue: true } },
       // The action scores from the ten most recent activities; match it.
