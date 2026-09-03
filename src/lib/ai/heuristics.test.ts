@@ -148,8 +148,8 @@ describe("heuristicSummary", () => {
       status: "QUALIFIED",
       companyName: "Northwind Analytics",
       openDeals: [
-        { title: "Dashboard Replacement", value: 10_000, stage: "PROPOSAL" },
-        { title: "Support Add-on", value: 2_500, stage: "LEAD" },
+        { title: "Dashboard Replacement", baseValue: 10_000, stage: "PROPOSAL" },
+        { title: "Support Add-on", baseValue: 2_500, stage: "LEAD" },
       ],
       recentActivities: [],
     });

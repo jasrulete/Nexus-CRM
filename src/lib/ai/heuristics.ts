@@ -1,4 +1,5 @@
 import "server-only";
+import { formatCurrency } from "@/lib/utils";
 
 /**
  * Deterministic fallbacks used when no AI provider key is configured.
@@ -105,7 +106,10 @@ export function heuristicSummary(input: {
   name: string;
   status: string;
   companyName: string | null;
-  openDeals: { title: string; value: number; stage: string }[];
+  // baseValue, not value: the deals may be in different currencies, and the
+  // line below sums them. This rendered the raw entered amounts under a
+  // hardcoded "$" — EUR 9,600 and USD 48,000 became "$57,600".
+  openDeals: { title: string; baseValue: number; stage: string }[];
   recentActivities: { type: string; content: string; createdAt: Date }[];
 }): string {
   const lines: string[] = [];
@@ -113,9 +117,9 @@ export function heuristicSummary(input: {
     `${input.name} is a ${input.status.toLowerCase()}${input.companyName ? ` at ${input.companyName}` : ""}.`,
   );
   if (input.openDeals.length > 0) {
-    const total = input.openDeals.reduce((s, d) => s + d.value, 0);
+    const total = input.openDeals.reduce((s, d) => s + d.baseValue, 0);
     lines.push(
-      `Open pipeline: ${input.openDeals.length} deal(s) worth $${total.toLocaleString()} — ${input.openDeals
+      `Open pipeline: ${input.openDeals.length} deal(s) worth ${formatCurrency(total)} — ${input.openDeals
         .map((d) => `"${d.title}" (${d.stage.toLowerCase()})`)
         .join(", ")}.`,
     );

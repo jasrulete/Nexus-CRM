@@ -15,6 +15,7 @@ import { aiContextSchema, aiDraftSchema, idSchema } from "@/lib/validation";
 import { emailConfigured, sendEmail, splitDraft } from "@/lib/email";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { formatDealAmount } from "@/lib/money";
 import {
   extractPdfText,
   isPdf,
@@ -90,7 +91,7 @@ Status: ${fence(contact.status)}
 Source: ${fence(contact.source) || "unknown"}
 Company: ${fence(contact.company?.name) || "none"} (${fence(contact.company?.industry) || "n/a"}, size ${fence(contact.company?.size) || "n/a"})
 Notes: ${fence(contact.notes) || "none"}
-Open deals: ${openDeals.map((d) => `"${fence(d.title)}" $${d.value} (${fence(d.stage)})`).join("; ") || "none"}
+Open deals: ${openDeals.map((d) => `"${fence(d.title)}" ${formatDealAmount(d)} (${fence(d.stage)})`).join("; ") || "none"}
 Won deals: ${contact.deals.filter((d) => d.stage === "WON").length}
 Recent activity (newest first):
 ${contact.activities.map((a) => `- [${a.createdAt.toISOString().slice(0, 10)}] ${fence(a.type)}: ${fence(a.content).slice(0, 300)}`).join("\n") || "- none"}
@@ -150,7 +151,9 @@ Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one senten
       title: contact.title,
       source: contact.source,
       openDealCount: openDeals.length,
-      openDealValue: openDeals.reduce((s, d) => s + d.value, 0),
+      // baseValue, never value: this is a sum, and the deals may be in
+      // different currencies.
+      openDealValue: openDeals.reduce((s, d) => s + d.baseValue, 0),
       wonDealCount: contact.deals.filter((d) => d.stage === "WON").length,
       activityCount: contact.activities.length,
       daysSinceLastActivity: daysSince(contact.activities[0]?.createdAt),

@@ -524,3 +524,91 @@ describe("currentAiProvider", () => {
     expect(await currentAiProvider()).toBe("groq");
   });
 });
+
+describe("money in the AI layer", () => {
+  // The multi-currency work originally stopped at the edge of this layer. The
+  // prompt showed each deal's raw entered amount under a hardcoded "$", so a
+  // EUR 62,000 deal was presented to the model as "$62000"; the heuristic lead
+  // score and the heuristic summary both summed raw amounts across currencies.
+  async function addEuroDeal() {
+    return prisma.deal.create({
+      data: {
+        title: "European renewal",
+        value: 62_000,
+        currency: "EUR",
+        fxRate: 1.1699,
+        baseValue: 72_534,
+        stage: "PROPOSAL",
+        position: 0,
+        contactId,
+        ownerId: owner.id,
+      },
+    });
+  }
+
+  it("shows the model the converted amount with the original alongside", async () => {
+    await addEuroDeal();
+    model.reply = { text: "A summary.", provider: "gemini/test" };
+
+    await summarizeContact(contactId);
+
+    const [prompt] = model.prompts;
+    expect(prompt).toContain("$72,534 (EUR 62,000)");
+    // The raw amount with a bare dollar sign is exactly the mislabelling that
+    // was being sent before.
+    expect(prompt).not.toMatch(/\$62000\b/);
+    expect(prompt).not.toMatch(/\$62,000\b/);
+  });
+
+  it("feeds the lead-score heuristic a sum in the workspace currency", async () => {
+    // The heuristic awards a band at openDealValue >= 25,000. Build a deal
+    // whose *entered* amount is under that line but whose converted amount is
+    // over it, so the two possible sums land on different sides of the band:
+    // the old code (summing raw value) and the new code (summing baseValue)
+    // produce scores exactly ten points apart.
+    await prisma.deal.deleteMany({ where: { contactId } });
+    const deal = await prisma.deal.create({
+      data: {
+        title: "Strong euro deal",
+        value: 20_000,
+        currency: "EUR",
+        fxRate: 1.3,
+        baseValue: 26_000,
+        stage: "PROPOSAL",
+        position: 0,
+        contactId,
+        ownerId: owner.id,
+      },
+    });
+    model.reply = null; // heuristic path
+
+    const converted = await scoreContact(contactId);
+    expect(converted.ok).toBe(true);
+    expect(converted.provider).toBe("heuristic");
+
+    // Same deal, same entered amount, but now converting to under the line.
+    await prisma.deal.update({ where: { id: deal.id }, data: { baseValue: 20_000, fxRate: 1 } });
+    const control = await scoreContact(contactId);
+    expect(control.ok).toBe(true);
+
+    // Only baseValue changed between the two calls. If the heuristic were
+    // summing raw value the scores would be identical.
+    expect(converted.score! - control.score!).toBe(10);
+  });
+
+  it("sums the heuristic summary in the workspace currency", async () => {
+    await addEuroDeal();
+    model.reply = null;
+
+    const result = await summarizeContact(contactId);
+
+    expect(result.ok).toBe(true);
+    expect(result.provider).toBe("heuristic");
+    // The fixture already carries a USD 48,000 deal, so the pipeline line
+    // sums two deals. 72,534 + 48,000 in the workspace currency. The old code
+    // summed the raw amounts, 62,000 + 48,000, and printed "$110,000" — a
+    // number that was in no currency at all.
+    expect(result.text).toContain("$120,534");
+    expect(result.text).not.toContain("$110,000");
+  });
+});

@@ -1,11 +1,18 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { WORKSPACE_CURRENCY } from "./money";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number, currency = "USD") {
+// Both formatters default to the workspace currency, which is the only
+// currency an aggregate can be in — every sum in the app is over baseValue.
+// They defaulted to a literal "USD" while formatDealAmount in money.ts read
+// WORKSPACE_CURRENCY, which was two answers to "what currency is this number":
+// a self-hoster setting WORKSPACE_CURRENCY=EUR would have seen EUR on every deal
+// card and a dollar sign on every total.
+export function formatCurrency(value: number, currency = WORKSPACE_CURRENCY) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -13,7 +20,7 @@ export function formatCurrency(value: number, currency = "USD") {
   }).format(value);
 }
 
-export function formatCompactCurrency(value: number, currency = "USD") {
+export function formatCompactCurrency(value: number, currency = WORKSPACE_CURRENCY) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
