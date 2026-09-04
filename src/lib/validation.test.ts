@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  aiDraftSchema,
   companySchema,
   contactSchema,
   dealSchema,
   fieldErrors,
   loginSchema,
   registerSchema,
+  searchQuerySchema,
 } from "./validation";
+
+describe("searchQuerySchema", () => {
+  it("trims the query", () => {
+    expect(searchQuerySchema.parse(" ab ")).toBe("ab");
+  });
+
+  it("rejects a single character after trimming", () => {
+    expect(searchQuerySchema.safeParse(" a ").success).toBe(false);
+  });
+
+  it("rejects more than 100 characters", () => {
+    expect(searchQuerySchema.safeParse("x".repeat(101)).success).toBe(false);
+    expect(searchQuerySchema.safeParse("x".repeat(100)).success).toBe(true);
+  });
+});
 
 describe("registerSchema", () => {
   it("accepts a valid registration and lowercases the email", () => {
@@ -144,5 +161,24 @@ describe("fieldErrors", () => {
       email: "Enter a valid email address",
       password: "Password must be at least 8 characters",
     });
+  });
+});
+
+describe("aiDraftSchema", () => {
+  it("accepts a normal draft", () => {
+    const r = aiDraftSchema.safeParse("Subject: Hi\n\nGood to speak today.");
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects an empty or whitespace-only draft", () => {
+    expect(aiDraftSchema.safeParse("").success).toBe(false);
+    expect(aiDraftSchema.safeParse("   \n  ").success).toBe(false);
+  });
+
+  it("rejects a draft past the activity body cap", () => {
+    // sendFollowUp writes the draft into Activity.content and mails it. It was
+    // the one write path that took an unbounded client string.
+    expect(aiDraftSchema.safeParse("x".repeat(5000)).success).toBe(true);
+    expect(aiDraftSchema.safeParse("x".repeat(5001)).success).toBe(false);
   });
 });

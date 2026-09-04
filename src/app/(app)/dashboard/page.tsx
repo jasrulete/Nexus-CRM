@@ -4,12 +4,14 @@ import {
   CircleDollarSign,
   KanbanSquare,
   ListTodo,
+  Target,
   Trophy,
   UserPlus,
 } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { OPEN_STAGES, STAGE_LABELS } from "@/lib/constants";
+import { OPEN_STAGES, STAGE_LABELS, weightedValue } from "@/lib/constants";
+import { lastSixMonths, monthKey } from "@/lib/months";
 import { formatCurrency } from "@/lib/utils";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -22,33 +24,27 @@ import { RevenueChart } from "@/components/charts/revenue-chart";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
-function monthKey(d: Date) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
 // Impure date math lives outside the component body (React purity rules).
 function timeWindows() {
-  const sixMonthsAgo = new Date();
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
-  sixMonthsAgo.setDate(1);
-  sixMonthsAgo.setHours(0, 0, 0, 0);
-  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000);
-  return { sixMonthsAgo, thirtyDaysAgo };
+  return {
+    monthStarts: lastSixMonths(),
+    thirtyDaysAgo: new Date(Date.now() - 30 * 86400_000),
+  };
 }
 
 export default async function DashboardPage() {
   const user = (await getCurrentUser())!;
-  const { sixMonthsAgo, thirtyDaysAgo } = timeWindows();
+  const { monthStarts, thirtyDaysAgo } = timeWindows();
 
   const [openDeals, closedDeals, newContacts, tasks, activities] =
     await Promise.all([
       prisma.deal.findMany({
         where: { stage: { in: [...OPEN_STAGES] } },
-        select: { stage: true, value: true },
+        select: { stage: true, baseValue: true },
       }),
       prisma.deal.findMany({
         where: { stage: { in: ["WON", "LOST"] } },
-        select: { stage: true, value: true, closedAt: true },
+        select: { stage: true, baseValue: true, closedAt: true },
       }),
       prisma.contact.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
       prisma.task.findMany({
@@ -70,7 +66,10 @@ export default async function DashboardPage() {
       }),
     ]);
 
-  const pipelineValue = openDeals.reduce((s, d) => s + d.value, 0);
+  // baseValue, never value: every deal is already converted to the workspace
+  // currency, so these are the only numbers that may be added together.
+  const pipelineValue = openDeals.reduce((s, d) => s + d.baseValue, 0);
+  const forecast = weightedValue(openDeals);
   const wonDeals = closedDeals.filter((d) => d.stage === "WON");
   const winRate =
     closedDeals.length > 0
@@ -82,22 +81,20 @@ export default async function DashboardPage() {
     return {
       stage,
       label: STAGE_LABELS[stage],
-      value: deals.reduce((s, d) => s + d.value, 0),
+      value: deals.reduce((s, d) => s + d.baseValue, 0),
       count: deals.length,
     };
   });
 
-  const months: { month: string; value: number }[] = [];
-  const cursor = new Date(sixMonthsAgo);
-  for (let i = 0; i < 6; i++) {
-    const key = monthKey(cursor);
-    const label = cursor.toLocaleDateString("en-US", { month: "short" });
-    const value = wonDeals
-      .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
-      .reduce((s, d) => s + d.value, 0);
-    months.push({ month: label, value });
-    cursor.setMonth(cursor.getMonth() + 1);
-  }
+  const months = monthStarts.map((start) => {
+    const key = monthKey(start);
+    return {
+      month: start.toLocaleDateString("en-US", { month: "short" }),
+      value: wonDeals
+        .filter((d) => d.closedAt && monthKey(d.closedAt) === key)
+        .reduce((s, d) => s + d.baseValue, 0),
+    };
+  });
 
   const taskItems: TaskItem[] = tasks.map((t) => ({
     id: t.id,
@@ -120,7 +117,7 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label="Open pipeline"
           value={formatCurrency(pipelineValue)}
@@ -128,8 +125,14 @@ export default async function DashboardPage() {
           icon={CircleDollarSign}
         />
         <StatCard
+          label="Weighted forecast"
+          value={formatCurrency(forecast)}
+          hint="Open pipeline × stage probability"
+          icon={Target}
+        />
+        <StatCard
           label="Won (all time)"
-          value={formatCurrency(wonDeals.reduce((s, d) => s + d.value, 0))}
+          value={formatCurrency(wonDeals.reduce((s, d) => s + d.baseValue, 0))}
           hint={`${wonDeals.length} closed-won deal${wonDeals.length === 1 ? "" : "s"}`}
           icon={Trophy}
         />

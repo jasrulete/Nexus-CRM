@@ -1,77 +1,16 @@
 import "server-only";
+import { formatCurrency } from "@/lib/utils";
 
 /**
  * Deterministic fallbacks used when no AI provider key is configured.
  * Clearly labeled in the UI as "rule-based" so demos stay honest.
+ *
+ * The lead scorer lives in ./lead-score so the demo seed can import it
+ * without this file's `server-only` marker; it is re-exported here so every
+ * existing caller is unchanged.
  */
 
-type ScoringInput = {
-  status: string;
-  hasEmail: boolean;
-  hasPhone: boolean;
-  hasCompany: boolean;
-  title: string | null;
-  source: string | null;
-  openDealCount: number;
-  openDealValue: number;
-  wonDealCount: number;
-  activityCount: number;
-  daysSinceLastActivity: number | null;
-};
-
-export function heuristicLeadScore(input: ScoringInput): {
-  score: number;
-  reason: string;
-} {
-  let score = 20;
-  const reasons: string[] = [];
-
-  if (input.hasEmail) score += 8;
-  if (input.hasPhone) score += 6;
-  if (input.hasCompany) {
-    score += 10;
-    reasons.push("linked to a company");
-  }
-  if (input.title && /chief|vp|head|director|founder|owner|president/i.test(input.title)) {
-    score += 12;
-    reasons.push("senior decision-maker title");
-  }
-  if (input.source === "referral") {
-    score += 8;
-    reasons.push("came via referral");
-  }
-  if (input.openDealCount > 0) {
-    score += Math.min(20, input.openDealCount * 10);
-    reasons.push(`${input.openDealCount} open deal(s)`);
-  }
-  if (input.openDealValue >= 25_000) {
-    score += 10;
-    reasons.push("high open pipeline value");
-  }
-  if (input.wonDealCount > 0) {
-    score += 8;
-    reasons.push("existing customer relationship");
-  }
-  if (input.activityCount >= 3) {
-    score += 8;
-    reasons.push("actively engaged");
-  }
-  if (input.daysSinceLastActivity !== null && input.daysSinceLastActivity > 30) {
-    score -= 12;
-    reasons.push("gone quiet for 30+ days");
-  }
-  if (input.status === "CHURNED") {
-    score = Math.min(score, 25);
-    reasons.push("previously churned");
-  }
-
-  score = Math.max(0, Math.min(100, score));
-  const reason =
-    reasons.length > 0
-      ? `Rule-based score: ${reasons.join(", ")}.`
-      : "Rule-based score from profile completeness.";
-  return { score, reason };
-}
+export { heuristicLeadScore } from "./lead-score";
 
 export function heuristicEmailDraft(input: {
   contactFirstName: string;
@@ -105,7 +44,10 @@ export function heuristicSummary(input: {
   name: string;
   status: string;
   companyName: string | null;
-  openDeals: { title: string; value: number; stage: string }[];
+  // baseValue, not value: the deals may be in different currencies, and the
+  // line below sums them. This rendered the raw entered amounts under a
+  // hardcoded "$" — EUR 9,600 and USD 48,000 became "$57,600".
+  openDeals: { title: string; baseValue: number; stage: string }[];
   recentActivities: { type: string; content: string; createdAt: Date }[];
 }): string {
   const lines: string[] = [];
@@ -113,9 +55,9 @@ export function heuristicSummary(input: {
     `${input.name} is a ${input.status.toLowerCase()}${input.companyName ? ` at ${input.companyName}` : ""}.`,
   );
   if (input.openDeals.length > 0) {
-    const total = input.openDeals.reduce((s, d) => s + d.value, 0);
+    const total = input.openDeals.reduce((s, d) => s + d.baseValue, 0);
     lines.push(
-      `Open pipeline: ${input.openDeals.length} deal(s) worth $${total.toLocaleString()} — ${input.openDeals
+      `Open pipeline: ${input.openDeals.length} deal(s) worth ${formatCurrency(total)} — ${input.openDeals
         .map((d) => `"${d.title}" (${d.stage.toLowerCase()})`)
         .join(", ")}.`,
     );

@@ -96,8 +96,14 @@ model Contact {
 model Deal {
   id       String @id @default(cuid())
   title    String
-  value    Int    @default(0) // whole currency units
+  // The amount as the user entered it, in `currency`, in whole units.
+  value    Int    @default(0)
   currency String @default("USD")
+  // The same amount converted to the workspace currency, and the rate used.
+  // Frozen at write time so historical totals do not drift as rates move:
+  // every aggregate in the app sums baseValue, never value.
+  baseValue Int   @default(0)
+  fxRate    Float @default(1)
   stage    String @default("LEAD") // LEAD | QUALIFIED | PROPOSAL | NEGOTIATION | WON | LOST
   position Int    @default(0) // ordering within a stage column
 

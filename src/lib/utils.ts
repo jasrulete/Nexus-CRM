@@ -1,11 +1,18 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { WORKSPACE_CURRENCY } from "./money";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(value: number, currency = "USD") {
+// Both formatters default to the workspace currency, which is the only
+// currency an aggregate can be in — every sum in the app is over baseValue.
+// They defaulted to a literal "USD" while formatDealAmount in money.ts read
+// WORKSPACE_CURRENCY, which was two answers to "what currency is this number":
+// a self-hoster setting WORKSPACE_CURRENCY=EUR would have seen EUR on every deal
+// card and a dollar sign on every total.
+export function formatCurrency(value: number, currency = WORKSPACE_CURRENCY) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
@@ -13,11 +20,19 @@ export function formatCurrency(value: number, currency = "USD") {
   }).format(value);
 }
 
-export function formatCompactCurrency(value: number, currency = "USD") {
+export function formatCompactCurrency(value: number, currency = WORKSPACE_CURRENCY) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency,
     notation: "compact",
+    // minimumFractionDigits is load-bearing, not decoration. With only a
+    // maximum set, Node's ICU renders 61000 as "$61.0K" while Chrome renders
+    // "$61K" — the spec leaves the trailing zero to the implementation. The
+    // kanban column headers are server-rendered, so that disagreement was a
+    // hydration mismatch on every /deals load: React discarded the server HTML
+    // and rebuilt the whole board on the client, which also destroyed keyboard
+    // focus and made the board unusable without a mouse.
+    minimumFractionDigits: 0,
     maximumFractionDigits: 1,
   }).format(value);
 }
@@ -43,6 +58,34 @@ export function formatDateOnly(date: Date | string | null | undefined) {
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(date));
+}
+
+/**
+ * Is a date-only value in the past?
+ *
+ * Date-only fields (`Task.dueDate`, `Deal.expectedCloseDate`) are stored at UTC
+ * midnight and rendered with `formatDateOnly`, which pins timeZone: "UTC". The
+ * comparison has to use the same frame, or the label and the styling disagree:
+ * comparing against a raw `new Date()` made a task go red the moment UTC ticked
+ * past midnight, which is the *previous evening* anywhere west of Greenwich —
+ * so a task due "Aug 22, 2026" rendered as overdue from 8pm on the 21st, while
+ * still displaying Aug 22.
+ *
+ * Compares whole UTC days, so a date is overdue only once the UTC day is past.
+ */
+export function isOverdueDateOnly(
+  date: Date | string | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!date) return false;
+  const due = new Date(date);
+  if (Number.isNaN(due.getTime())) return false;
+  const todayUtcMidnight = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate(),
+  );
+  return due.getTime() < todayUtcMidnight;
 }
 
 const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

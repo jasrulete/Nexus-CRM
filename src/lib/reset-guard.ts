@@ -24,3 +24,37 @@ export function resolveResetTarget(
 
   return "remote";
 }
+
+/** How long an audit entry the reset does not own survives on the demo. */
+export const AUDIT_RETENTION_DAYS = 30;
+
+/**
+ * Which audit rows the nightly demo reset may delete.
+ *
+ * It used to delete all of them. AuditLog has no foreign key into the CRM
+ * tables — `entityId` is a plain string — so it never needed clearing for the
+ * ordered deletes around it to succeed, and wiping it gave the "full audit
+ * trail" the Settings page advertises a maximum retention of 24 hours. Real
+ * users' logins, changes and AI usage went with it, so any incident noticed
+ * the next morning had nothing left to investigate.
+ *
+ * Now: entries authored by the demo account go, because they describe records
+ * this reset is about to delete. Everything else ages out on a retention
+ * window, so the table still cannot grow without bound.
+ */
+export function auditPruneWhere({
+  demoUserId,
+  now,
+  retentionDays = AUDIT_RETENTION_DAYS,
+}: {
+  demoUserId: string | null;
+  now: Date;
+  retentionDays?: number;
+}) {
+  const cutoff = new Date(now.getTime() - retentionDays * 86400_000);
+  const clauses: Array<Record<string, unknown>> = [
+    { createdAt: { lt: cutoff } },
+  ];
+  if (demoUserId) clauses.push({ userId: demoUserId });
+  return { OR: clauses };
+}

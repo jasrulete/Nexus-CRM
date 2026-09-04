@@ -7,6 +7,8 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { companySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -55,8 +57,17 @@ export async function updateCompany(
 
   const existing = await prisma.company.findUnique({ where: { id } });
   if (!existing) return { message: "Company not found" };
+  // Returned, not thrown: this runs inside a useActionState form.
+  if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
 
-  await prisma.company.update({ where: { id }, data: parsed.data });
+  const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
+  if (!expectedVersion) return { message: STALE_RECORD };
+
+  const written = await prisma.company.updateMany({
+    where: { id, updatedAt: expectedVersion },
+    data: parsed.data,
+  });
+  if (written.count === 0) return { message: STALE_RECORD };
 
   await audit({
     action: "company.update",
@@ -76,17 +87,24 @@ export async function deleteCompany(companyId: string): Promise<void> {
 
   const company = await prisma.company.findUnique({ where: { id } });
   if (!company) return;
-  if (company.ownerId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(company.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 
-  await prisma.company.delete({ where: { id } });
-  await audit({
-    action: "company.delete",
-    entityType: "company",
-    entityId: id,
-    userId: user.id,
-    metadata: { name: company.name },
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.company.delete({ where: { id } });
+    await audit(
+      {
+        action: "company.delete",
+        entityType: "company",
+        entityId: id,
+        userId: user.id,
+        metadata: { name: company.name },
+      },
+      tx,
+    );
   });
   revalidatePath("/companies");
   revalidatePath("/contacts");

@@ -30,7 +30,10 @@ export default async function DealsPage() {
   const boardDeals: BoardDeal[] = deals.map((d) => ({
     id: d.id,
     title: d.title,
+    updatedAt: d.updatedAt.toISOString(),
     value: d.value,
+    currency: d.currency,
+    baseValue: d.baseValue,
     stage: d.stage,
     position: d.position,
     expectedCloseDate: d.expectedCloseDate?.toISOString() ?? null,
@@ -42,13 +45,13 @@ export default async function DealsPage() {
 
   const openValue = deals
     .filter((d) => (OPEN_STAGES as string[]).includes(d.stage))
-    .reduce((s, d) => s + d.value, 0);
+    .reduce((s, d) => s + d.baseValue, 0);
 
   return (
     <div className="mx-auto max-w-[1400px]">
       <PageHeader
         title="Deals"
-        subtitle={`${formatCurrency(openValue)} in open pipeline — drag cards to update stage`}
+        subtitle={`${formatCurrency(openValue)} in open pipeline — drag cards to update stage, open a card for its details`}
       />
       <KanbanBoard
         deals={boardDeals}

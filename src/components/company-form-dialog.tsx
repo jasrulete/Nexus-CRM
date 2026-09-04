@@ -11,6 +11,8 @@ import { FieldError, Input, Label, Select, Textarea } from "@/components/ui/inpu
 
 export type CompanyFormValues = {
   id: string;
+  /** Row version this form was rendered from, as an ISO string. */
+  updatedAt: string;
   name: string;
   domain: string | null;
   industry: string | null;
@@ -49,6 +51,9 @@ export function CompanyFormDialog({
         }
       >
         <form action={action} className="space-y-4">
+          {company ? (
+            <input type="hidden" name="updatedAt" value={company.updatedAt} />
+          ) : null}
           {state.message ? (
             <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2.5 text-[13px] text-danger">
               {state.message}

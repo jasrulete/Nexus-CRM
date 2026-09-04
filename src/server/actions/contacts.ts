@@ -7,6 +7,8 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate, NOT_YOURS } from "@/lib/authz";
+import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { contactSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -70,12 +72,21 @@ export async function updateContact(
 
   const existing = await prisma.contact.findUnique({ where: { id } });
   if (!existing) return { message: "Contact not found" };
+  // Returned, not thrown: this runs inside a useActionState form, and throwing
+  // would trip the error boundary and lose what the user typed.
+  if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
+
+  const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
+  if (!expectedVersion) return { message: STALE_RECORD };
 
   const { companyId, ...data } = parsed.data;
-  await prisma.contact.update({
-    where: { id },
+  const written = await prisma.contact.updateMany({
+    where: { id, updatedAt: expectedVersion },
     data: { ...data, companyId: await resolveCompanyId(companyId) },
   });
+  // Zero rows matched: someone saved this record between the form rendering
+  // and this submit. Refuse rather than overwrite their change.
+  if (written.count === 0) return { message: STALE_RECORD };
 
   await audit({
     action: "contact.update",
@@ -100,17 +111,24 @@ export async function deleteContact(contactId: string): Promise<void> {
 
   const contact = await prisma.contact.findUnique({ where: { id } });
   if (!contact) return;
-  if (contact.ownerId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(contact.ownerId, user)) {
     throw new Error("FORBIDDEN: only the owner or an admin can delete");
   }
 
-  await prisma.contact.delete({ where: { id } });
-  await audit({
-    action: "contact.delete",
-    entityType: "contact",
-    entityId: id,
-    userId: user.id,
-    metadata: { name: `${contact.firstName} ${contact.lastName}` },
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.contact.delete({ where: { id } });
+    await audit(
+      {
+        action: "contact.delete",
+        entityType: "contact",
+        entityId: id,
+        userId: user.id,
+        metadata: { name: `${contact.firstName} ${contact.lastName}` },
+      },
+      tx,
+    );
   });
   revalidatePath("/contacts");
   revalidatePath("/dashboard");

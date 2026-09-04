@@ -3,12 +3,19 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Building2, CalendarDays, User } from "lucide-react";
-import { cn, formatCurrency, formatDateOnly } from "@/lib/utils";
+import { cn, formatDateOnly, isOverdueDateOnly } from "@/lib/utils";
+import { formatDealAmount } from "@/lib/money";
 
 export type BoardDeal = {
   id: string;
   title: string;
+  /** Row version, ISO string — submitted back by the edit form. */
+  updatedAt: string;
+  /** As entered, in `currency`. */
   value: number;
+  currency: string;
+  /** Converted to the workspace currency — the only figure safe to sum. */
+  baseValue: number;
   stage: string;
   position: number;
   expectedCloseDate: string | null;
@@ -28,12 +35,31 @@ export function DealCard({
   onClick?: () => void;
 }) {
   const sortable = useSortable({ id: deal.id, disabled: overlay });
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging, active } =
     sortable;
+  // Any card being dragged, not only this one: while a keyboard drag is in
+  // progress, opening a deal would navigate away mid-drag and leave dnd-kit's
+  // document key listeners attached to the new page.
+  const dragInProgress = active !== null;
+
+  /**
+   * Space belongs to the drag sensor; Enter opens the card.
+   *
+   * dnd-kit supplies its own onKeyDown inside `listeners`, and spreading
+   * `listeners` after this handler would silently replace it — so call theirs
+   * first and only act on Enter if they did not already handle the event.
+   */
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    listeners?.onKeyDown?.(event);
+    if (event.defaultPrevented || !onClick || dragInProgress) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      onClick();
+    }
+  }
 
   const overdue =
-    deal.expectedCloseDate &&
-    new Date(deal.expectedCloseDate) < new Date() &&
+    isOverdueDateOnly(deal.expectedCloseDate) &&
     !["WON", "LOST"].includes(deal.stage);
 
   return (
@@ -46,17 +72,19 @@ export function DealCard({
       }
       {...(overlay ? {} : attributes)}
       {...(overlay ? {} : listeners)}
-      onClick={onClick}
+      onClick={dragInProgress ? undefined : onClick}
+      onKeyDown={overlay ? undefined : handleKeyDown}
       className={cn(
         "cursor-grab rounded-lg border border-edge bg-surface p-3 shadow-[0_1px_2px_rgb(0_0_0/0.05)] transition-shadow",
         "hover:border-edge-strong hover:shadow-md",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface-2",
         isDragging && "opacity-40",
         overlay && "rotate-2 shadow-xl ring-2 ring-accent/30 cursor-grabbing",
       )}
     >
       <p className="text-[13px] font-medium leading-5 text-ink">{deal.title}</p>
       <p className="mt-1 text-sm font-semibold tabular-nums text-ink">
-        {formatCurrency(deal.value)}
+        {formatDealAmount(deal)}
       </p>
       <div className="mt-2 space-y-1">
         {deal.contactName ? (

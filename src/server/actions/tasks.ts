@@ -6,11 +6,16 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate } from "@/lib/authz";
+import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
   if (task.contactId) revalidatePath(`/contacts/${task.contactId}`);
-  if (task.dealId) revalidatePath("/deals");
+  if (task.dealId) {
+    revalidatePath("/deals");
+    revalidatePath(`/deals/${task.dealId}`);
+  }
   revalidatePath("/dashboard");
 }
 
@@ -28,6 +33,12 @@ export async function createTask(
   if (!parsed.success) return { errors: fieldErrors(parsed.error) };
 
   const { dueDate, contactId, dealId, ...data } = parsed.data;
+
+  // Same guard as createActivity: an id from a stale form must not reach
+  // Prisma as a dangling foreign key.
+  const missing = await findMissingRelation({ contactId, dealId });
+  if (missing) return { message: missingRelationMessage(missing) };
+
   const task = await prisma.task.create({
     data: {
       ...data,
@@ -55,7 +66,7 @@ export async function toggleTask(taskId: string): Promise<void> {
 
   const task = await prisma.task.findUnique({ where: { id } });
   if (!task) return;
-  if (task.assigneeId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(task.assigneeId, user)) {
     throw new Error("FORBIDDEN: only the assignee or an admin can update");
   }
 
@@ -76,16 +87,23 @@ export async function deleteTask(taskId: string): Promise<void> {
 
   const task = await prisma.task.findUnique({ where: { id } });
   if (!task) return;
-  if (task.assigneeId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(task.assigneeId, user)) {
     throw new Error("FORBIDDEN: only the assignee or an admin can delete");
   }
 
-  await prisma.task.delete({ where: { id } });
-  await audit({
-    action: "task.delete",
-    entityType: "task",
-    entityId: id,
-    userId: user.id,
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.task.delete({ where: { id } });
+    await audit(
+      {
+        action: "task.delete",
+        entityType: "task",
+        entityId: id,
+        userId: user.id,
+      },
+      tx,
+    );
   });
   revalidateFor(task);
 }

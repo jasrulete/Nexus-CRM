@@ -17,6 +17,43 @@ export const STAGE_LABELS: Record<DealStage, string> = {
   LOST: "Lost",
 };
 
+/**
+ * Probability a deal in each stage eventually closes won, used for the
+ * weighted forecast on the dashboard and each kanban column.
+ *
+ * Deliberately a constant per stage rather than a column on Deal: a per-deal
+ * override is a real feature with a migration and a form field behind it, and
+ * nothing has asked for one. These are the conventional defaults a CRM ships
+ * with, and the number they produce is honest as long as it is labelled as
+ * stage-based rather than as a model's prediction.
+ */
+export const STAGE_PROBABILITY: Record<DealStage, number> = {
+  LEAD: 0.1,
+  QUALIFIED: 0.25,
+  PROPOSAL: 0.5,
+  NEGOTIATION: 0.75,
+  WON: 1,
+  LOST: 0,
+};
+
+/**
+ * Expected value of a set of deals, weighted by each one's stage.
+ *
+ * Takes `baseValue` — the amount converted to the workspace currency — because
+ * this is a sum, and amounts in different currencies cannot be added.
+ */
+export function weightedValue(
+  deals: { stage: string; baseValue: number }[],
+): number {
+  return Math.round(
+    deals.reduce(
+      (sum, d) =>
+        sum + d.baseValue * (STAGE_PROBABILITY[d.stage as DealStage] ?? 0),
+      0,
+    ),
+  );
+}
+
 /** Open (in-play) stages shown as kanban columns, in order. */
 export const OPEN_STAGES: DealStage[] = [
   "LEAD",

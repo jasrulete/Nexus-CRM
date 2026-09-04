@@ -2,7 +2,7 @@
 
 import { useDroppable } from "@dnd-kit/core";
 import { formatCompactCurrency, cn } from "@/lib/utils";
-import type { DealStage } from "@/lib/constants";
+import { STAGE_PROBABILITY, type DealStage } from "@/lib/constants";
 import { DealCard, type BoardDeal } from "./deal-card";
 
 const stageDot: Record<DealStage, string> = {
@@ -26,7 +26,16 @@ export function KanbanColumn({
   onCardClick: (deal: BoardDeal) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-  const total = deals.reduce((s, d) => s + d.value, 0);
+  // baseValue: the column footer is a sum, so it must use the converted
+  // amount. The card itself shows the entered currency alongside.
+  const total = deals.reduce((s, d) => s + d.baseValue, 0);
+  const probability = STAGE_PROBABILITY[stage];
+  // Every card in a column shares a stage, so the column weight is one
+  // multiply rather than a per-deal sum. Only worth showing while a deal
+  // is still in play: at 100% it just repeats the total, and at 0% it is
+  // always zero — both read as a bug rather than a forecast.
+  const weighted = Math.round(total * probability);
+  const showWeighted = probability > 0 && probability < 1;
 
   return (
     <div className="flex w-64 shrink-0 flex-col">
@@ -36,12 +45,32 @@ export function KanbanColumn({
         <span className="text-[12px] tabular-nums text-ink-faint">
           {deals.length}
         </span>
-        <span className="ml-auto text-[12px] font-medium tabular-nums text-ink-faint">
+        <span
+          className="ml-auto text-[12px] font-medium tabular-nums text-ink-muted"
+          title={
+            showWeighted
+              ? `${formatCompactCurrency(total)} in ${label} · ${formatCompactCurrency(weighted)} weighted at ${Math.round(probability * 100)}%`
+              : `${formatCompactCurrency(total)} in ${label}`
+          }
+        >
           {formatCompactCurrency(total)}
+          {/* Hierarchy is total-then-weighted, expressed with two real tokens.
+              The weighted figure was `text-ink-faint/70` — 70% opacity stacked
+              on the faintest text token already available, which put it under
+              AA. Caught by the axe check in e2e, not by eye. */}
+          {showWeighted ? (
+            <span className="ml-1.5 text-ink-faint">
+              {formatCompactCurrency(weighted)}
+            </span>
+          ) : null}
         </span>
       </div>
       <div
         ref={setNodeRef}
+        // Named so a screen-reader user knows which stage they are in — which
+        // matters now that a card can be carried between columns by keyboard.
+        role="group"
+        aria-label={`${label} deals`}
         className={cn(
           "flex min-h-40 flex-1 flex-col gap-2 rounded-xl border border-edge/70 bg-surface-2/50 p-2 transition-colors",
           isOver && "border-accent/40 bg-accent-soft/50",

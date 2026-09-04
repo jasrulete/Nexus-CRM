@@ -12,10 +12,15 @@
   --edge: #e4e4e7;
   --edge-strong: #d4d4d8;
 
-  /* ink */
+  /* ink
+     Every text token below is held to WCAG 2.2 AA (4.5:1) against the *worst*
+     surface it can sit on — canvas, surface and surface-2 — and, for the
+     semantic colours, against their own -soft background too. The ratios in the
+     comments were computed, not estimated; utils has no formatter for this, so
+     re-measure before changing any of them. */
   --ink: #18181b;
   --ink-muted: #52525b;
-  --ink-faint: #8e8e98;
+  --ink-faint: #6b6b75; /* AA: 4.79:1 worst surface (was #8e8e98, 2.95:1) */
 
   /* brand */
   --accent: #7c3aed;
@@ -24,17 +29,17 @@
   --on-accent: #ffffff;
 
   /* semantic */
-  --danger: #dc2626;
+  --danger: #b91c1c; /* AA: 5.89:1 (was #dc2626, 4.39:1) */
   --danger-soft: #fef2f2;
-  --success: #16a34a;
+  --success: #137a38; /* AA: 4.94:1 (was #16a34a, 3.00:1) */
   --success-soft: #f0fdf4;
-  --warn: #d97706;
+  --warn: #9a5305; /* AA: 5.29:1 (was #d97706, 2.90:1) */
   --warn-soft: #fffbeb;
 
   /* data-viz (validated reference palette, light) */
   --chart-1: #2a78d6;
   --chart-grid: #e1e0d9;
-  --chart-axis: #898781;
+  --chart-axis: #6b6963; /* AA: 4.99:1 (was #898781, 3.27:1) */
   --ramp-1: #86b6ef;
   --ramp-2: #5598e7;
   --ramp-3: #2a78d6;
@@ -52,7 +57,7 @@
 
   --ink: #f4f4f5;
   --ink-muted: #a1a1aa;
-  --ink-faint: #6f6f78;
+  --ink-faint: #8e8e98; /* AA: 4.95:1 worst surface (was #6f6f78, 3.22:1) */
 
   /* Light purple with dark text: the same token serves link text on dark
      surfaces (6.5:1) and button fills (5.9:1). A mid purple with white text
@@ -62,7 +67,7 @@
   --accent-soft: #2e1065;
   --on-accent: #1e1b4b;
 
-  --danger: #ef4444;
+  --danger: #f87171; /* AA: 5.80:1 (was #ef4444, 4.26:1) */
   --danger-soft: #2a1414;
   --success: #22c55e;
   --success-soft: #10231a;
@@ -72,7 +77,7 @@
   /* data-viz (validated reference palette, dark) */
   --chart-1: #3987e5;
   --chart-grid: #2c2c2a;
-  --chart-axis: #898781;
+  --chart-axis: #9e9c95; /* AA: 5.84:1 (was #898781, 4.47:1) */
   --ramp-1: #184f95;
   --ramp-2: #256abf;
   --ramp-3: #3987e5;

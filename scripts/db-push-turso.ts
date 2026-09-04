@@ -7,6 +7,7 @@ import "dotenv/config";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createClient } from "@libsql/client";
+import { planMigrations } from "../src/lib/migration-ledger";
 
 const url = process.env.TURSO_DATABASE_URL;
 if (!url) {
@@ -26,8 +27,9 @@ async function main() {
   await client.execute(
     "CREATE TABLE IF NOT EXISTS _turso_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
   );
-  const { rows } = await client.execute("SELECT name FROM _turso_migrations");
-  const applied = new Set(rows.map((r) => String(r.name)));
+  const { rows } = await client.execute(
+    "SELECT name, applied_at FROM _turso_migrations",
+  );
 
   const migrationsDir = join(process.cwd(), "prisma", "migrations");
   const all = readdirSync(migrationsDir, { withFileTypes: true })
@@ -35,31 +37,51 @@ async function main() {
     .map((d) => d.name)
     .sort();
 
-  // Adopting the ledger on a database that predates it: the schema is already
-  // there, so record the first migration as applied instead of replaying it.
-  if (applied.size === 0) {
-    const existing = await client.execute(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='User'",
-    );
-    if (existing.rows.length > 0 && all.length > 0) {
-      console.log(`Baselining existing database at ${all[0]}…`);
-      await client.execute({
-        sql: "INSERT INTO _turso_migrations (name, applied_at) VALUES (?, ?)",
-        args: [all[0], new Date().toISOString()],
-      });
-      applied.add(all[0]);
-    }
+  const existing = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name='User'",
+  );
+
+  const plan = planMigrations({
+    ledger: rows.map((r) => ({
+      name: String(r.name),
+      applied_at: String(r.applied_at ?? ""),
+    })),
+    all,
+    hasExistingSchema: existing.rows.length > 0,
+  });
+
+  if (plan.kind === "interrupted") {
+    throw new Error(plan.message);
   }
 
-  const pending = all.filter((name) => !applied.has(name));
+  if (plan.kind === "baseline") {
+    console.log(`Baselining existing database at ${plan.migration}…`);
+    await client.execute({
+      sql: "INSERT INTO _turso_migrations (name, applied_at) VALUES (?, ?)",
+      args: [plan.migration, new Date().toISOString()],
+    });
+  }
+
+  const pending = plan.pending;
 
   for (const dir of pending) {
     const sql = readFileSync(join(migrationsDir, dir, "migration.sql"), "utf8");
     console.log(`Applying ${dir}…`);
+
+    // Claim the migration *before* running it, with no timestamp. The SQL and
+    // the ledger row cannot be made atomic — Prisma's table-rebuild migrations
+    // toggle PRAGMA foreign_keys, which SQLite ignores inside a transaction —
+    // so instead an interruption leaves a row that says "started, never
+    // finished", and the next run refuses to guess rather than silently
+    // baselining a half-built schema.
+    await client.execute({
+      sql: "INSERT INTO _turso_migrations (name, applied_at) VALUES (?, '')",
+      args: [dir],
+    });
     await client.executeMultiple(sql);
     await client.execute({
-      sql: "INSERT INTO _turso_migrations (name, applied_at) VALUES (?, ?)",
-      args: [dir, new Date().toISOString()],
+      sql: "UPDATE _turso_migrations SET applied_at = ? WHERE name = ?",
+      args: [new Date().toISOString(), dir],
     });
   }
 

@@ -1,18 +1,22 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { Loader2, Trash2 } from "lucide-react";
-import { createDeal, deleteDeal, updateDeal } from "@/server/actions/deals";
+import { useActionState } from "react";
+import { Loader2 } from "lucide-react";
+import { createDeal, updateDeal } from "@/server/actions/deals";
 import { idle, type ActionState } from "@/lib/action-state";
 import { DEAL_STAGES, STAGE_LABELS } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { FieldError, Input, Label, Select } from "@/components/ui/input";
+import { SUPPORTED_CURRENCIES, WORKSPACE_CURRENCY } from "@/lib/money";
 
 export type DealFormValues = {
   id: string;
+  /** Row version this form was rendered from, as an ISO string. */
+  updatedAt: string;
   title: string;
   value: number;
+  currency: string;
   stage: string;
   expectedCloseDate: string | null;
   contactId: string | null;
@@ -41,7 +45,6 @@ export function DealFormDialog({
     },
     idle,
   );
-  const [deleting, setDeleting] = useState(false);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -52,6 +55,9 @@ export function DealFormDialog({
         }
       >
         <form action={action} className="space-y-4" key={deal?.id ?? "new"}>
+          {deal ? (
+            <input type="hidden" name="updatedAt" value={deal.updatedAt} />
+          ) : null}
           {state.message ? (
             <div className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2.5 text-[13px] text-danger">
               {state.message}
@@ -70,16 +76,36 @@ export function DealFormDialog({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label htmlFor="d-value">Value (USD)</Label>
-              <Input
-                id="d-value"
-                name="value"
-                type="number"
-                min={0}
-                step={1}
-                defaultValue={deal?.value ?? 0}
-                required
-              />
+              <Label htmlFor="d-value">Amount</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="d-value"
+                  name="value"
+                  type="number"
+                  min={0}
+                  step={1}
+                  defaultValue={deal?.value ?? 0}
+                  required
+                  className="flex-1"
+                />
+                <Select
+                  id="d-currency"
+                  name="currency"
+                  defaultValue={deal?.currency ?? WORKSPACE_CURRENCY}
+                  aria-label="Currency"
+                  className="w-24 shrink-0"
+                >
+                  {SUPPORTED_CURRENCIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <p className="mt-1 text-[12px] text-ink-faint">
+                Totals show in {WORKSPACE_CURRENCY}, converted at the rate on the
+                day the deal is saved.
+              </p>
               <FieldError message={state.errors?.value} />
             </div>
             <div>
@@ -135,46 +161,22 @@ export function DealFormDialog({
             />
             <FieldError message={state.errors?.expectedCloseDate} />
           </div>
-          <div className="flex items-center justify-between gap-2 pt-1">
-            {deal ? (
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                disabled={deleting}
-                onClick={async () => {
-                  setDeleting(true);
-                  try {
-                    await deleteDeal(deal.id);
-                    onOpenChange(false);
-                  } finally {
-                    setDeleting(false);
-                  }
-                }}
-              >
-                {deleting ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
-                Delete
-              </Button>
-            ) : (
-              <span />
-            )}
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => onOpenChange(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={pending}>
-                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {deal ? "Save changes" : "Create deal"}
-              </Button>
-            </div>
+          {/* Deleting lives on the deal page's DeleteButton, which confirms and
+              explains the demo lock. The unconfirmed Delete that used to sit
+              here was the only way to delete a deal when the board opened this
+              dialog; now it would be a second, less careful path. */}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {deal ? "Save changes" : "Create deal"}
+            </Button>
           </div>
         </form>
       </DialogContent>

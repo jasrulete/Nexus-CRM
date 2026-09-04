@@ -7,6 +7,8 @@
  */
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../src/generated/prisma/client";
+import { heuristicLeadScore } from "../src/lib/ai/lead-score";
+import { OPEN_STAGES } from "../src/lib/constants";
 import { DEMO_EMAIL } from "../src/lib/demo-guard";
 
 function daysAgo(n: number) {
@@ -17,6 +19,19 @@ function daysAgo(n: number) {
 // matching what the app's <input type="date"> forms produce.
 function dateOnly(d: Date) {
   return new Date(d.toISOString().slice(0, 10));
+}
+
+// Closed-won history is placed by calendar month, not by day offset. The
+// dashboard buckets revenue into the current month plus the five before it,
+// and the demo is reseeded nightly, so "n days ago" drifted across month
+// boundaries and left a bucket empty on some runs. The 15th keeps a past
+// month's deal well inside it in any timezone; the current month gets the
+// 1st, which is never in the future. "Month" here is the seeding process's
+// local month, which is also how the dashboard buckets — and both run in UTC
+// in production (GitHub Actions for the reset, Vercel for the app).
+function monthsAgo(n: number) {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() - n, n === 0 ? 1 : 15);
 }
 
 /**
@@ -72,34 +87,51 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   for (const c of contactData) {
     contacts.push(await prisma.contact.create({ data: { ...c, ownerId } }));
   }
-  const [maya, daniel, ingrid, tomas, aisha, sofia, , priya, henrik, , marcus, elena] = contacts;
+  const [maya, daniel, ingrid, tomas, aisha, sofia, james, priya, henrik, luna, marcus, elena] = contacts;
 
   const dealData: {
     title: string; value: number; stage: string; position: number;
+    // Seeded amounts carry an explicit currency and rate rather than calling a
+    // rate provider: a seed must work offline and produce the same numbers
+    // every run, and the demo is reset nightly.
+    currency?: string; fxRate?: number;
     contactId?: string; companyId?: string;
     expectedCloseDate?: Date; closedAt?: Date; createdDaysAgo: number;
   }[] = [
     { title: "Northwind — Analytics platform (annual)", value: 48000, stage: "PROPOSAL", position: 0, contactId: maya!.id, companyId: northwind!.id, expectedCloseDate: dateOnly(daysAgo(-21)), createdDaysAgo: 34 },
     { title: "Brightline — Claims team expansion", value: 62000, stage: "NEGOTIATION", position: 0, contactId: priya!.id, companyId: brightline!.id, expectedCloseDate: dateOnly(daysAgo(-10)), createdDaysAgo: 41 },
     { title: "Forge & Field — Plant ops pilot", value: 25000, stage: "LEAD", position: 0, contactId: ingrid!.id, companyId: forge!.id, expectedCloseDate: dateOnly(daysAgo(-75)), createdDaysAgo: 12 },
-    { title: "Lumen Studio — Team plan", value: 9600, stage: "QUALIFIED", position: 0, contactId: tomas!.id, companyId: lumen!.id, expectedCloseDate: dateOnly(daysAgo(-14)), createdDaysAgo: 19 },
+    { title: "Lumen Studio — Team plan", value: 9600, currency: "EUR", fxRate: 1.1699, stage: "QUALIFIED", position: 0, contactId: tomas!.id, companyId: lumen!.id, expectedCloseDate: dateOnly(daysAgo(-14)), createdDaysAgo: 19 },
     { title: "Harbor Logistics — CS tooling", value: 36000, stage: "LEAD", position: 1, contactId: aisha!.id, companyId: harbor!.id, expectedCloseDate: dateOnly(daysAgo(-45)), createdDaysAgo: 8 },
     { title: "Elena Vasquez — Partner program", value: 15000, stage: "QUALIFIED", position: 1, contactId: elena!.id, expectedCloseDate: dateOnly(daysAgo(-30)), createdDaysAgo: 16 },
     { title: "Harbor — Exec briefing package", value: 5000, stage: "PROPOSAL", position: 1, contactId: marcus!.id, companyId: harbor!.id, expectedCloseDate: dateOnly(daysAgo(3)), createdDaysAgo: 27 },
-    // Closed-won history for the revenue chart (spread over ~5 months)
-    { title: "Brightline — Pilot program", value: 18000, stage: "WON", position: 0, contactId: daniel!.id, companyId: brightline!.id, closedAt: daysAgo(112), createdDaysAgo: 150 },
-    { title: "Petal & Stem — Starter plan", value: 3600, stage: "WON", position: 1, contactId: sofia!.id, companyId: petal!.id, closedAt: daysAgo(96), createdDaysAgo: 120 },
-    { title: "Northwind — Data audit", value: 12000, stage: "WON", position: 2, contactId: maya!.id, companyId: northwind!.id, closedAt: daysAgo(64), createdDaysAgo: 92 },
-    { title: "Lumen — Brand site retainer", value: 7500, stage: "WON", position: 3, contactId: tomas!.id, companyId: lumen!.id, closedAt: daysAgo(38), createdDaysAgo: 66 },
-    { title: "Brightline — Training add-on", value: 9000, stage: "WON", position: 4, contactId: daniel!.id, companyId: brightline!.id, closedAt: daysAgo(11), createdDaysAgo: 30 },
+    // Closed-won history for the revenue chart: one deal in each month of the
+    // dashboard's six-month window, amounts rising, so the seeded business is
+    // visibly growing rather than flat with a hole in it. The data is invented
+    // either way; it may as well invent a business worth looking at. Created
+    // dates sit safely before the earliest day each closedAt can land on.
+    { title: "Petal & Stem — Starter plan", value: 3600, stage: "WON", position: 0, contactId: sofia!.id, companyId: petal!.id, closedAt: monthsAgo(5), createdDaysAgo: 185 },
+    { title: "Lumen — Brand site retainer", value: 7500, stage: "WON", position: 1, contactId: tomas!.id, companyId: lumen!.id, closedAt: monthsAgo(4), createdDaysAgo: 150 },
+    { title: "Brightline — Pilot program", value: 12000, stage: "WON", position: 2, contactId: daniel!.id, companyId: brightline!.id, closedAt: monthsAgo(3), createdDaysAgo: 120 },
+    { title: "Northwind — Data audit", value: 15000, stage: "WON", position: 3, contactId: maya!.id, companyId: northwind!.id, closedAt: monthsAgo(2), createdDaysAgo: 90 },
+    { title: "Brightline — Ops team rollout", value: 18000, stage: "WON", position: 4, contactId: daniel!.id, companyId: brightline!.id, closedAt: monthsAgo(1), createdDaysAgo: 60 },
+    { title: "Northwind — Reporting API add-on", value: 21000, stage: "WON", position: 5, contactId: maya!.id, companyId: northwind!.id, closedAt: monthsAgo(0), createdDaysAgo: 40 },
     { title: "Forge & Field — Legacy renewal", value: 22000, stage: "LOST", position: 0, contactId: henrik!.id, companyId: forge!.id, closedAt: daysAgo(80), createdDaysAgo: 130 },
   ];
   const deals = [];
   for (const d of dealData) {
-    const { createdDaysAgo, ...rest } = d;
+    const { createdDaysAgo, fxRate = 1, ...rest } = d;
     deals.push(
       await prisma.deal.create({
-        data: { ...rest, ownerId, createdAt: daysAgo(createdDaysAgo) },
+        data: {
+          ...rest,
+          fxRate,
+          // Same rounding the actions use, so a seeded row is indistinguishable
+          // from one a user created.
+          baseValue: Math.round(d.value * fxRate),
+          ownerId,
+          createdAt: daysAgo(createdDaysAgo),
+        },
       }),
     );
   }
@@ -145,6 +177,47 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
         dueDate: dateOnly(daysAgo(-dueDaysFromNow)),
         assigneeId: ownerId,
       },
+    });
+  }
+
+  // Lead scores, from the same rule-based scorer scoreContact falls back to,
+  // run over the rows just written. A seeded score is therefore exactly what
+  // the app would compute offline, and its reason text says "Rule-based" — a
+  // hand-typed number presented as a model's output would be the kind of claim
+  // a reviewer checks. Three low-signal leads are left unscored so the Score
+  // button has something to do in a demo. Before this, no seeded contact had a
+  // score and the flagship feature rendered as a column of twelve dashes.
+  // Scoped to the rows this function inserted, not "every contact but three":
+  // a self-hosted workspace whose owner registered and scored contacts before
+  // running the seed keeps their model scores.
+  const unscored = new Set([james!.id, luna!.id, marcus!.id]);
+  const toScore = await prisma.contact.findMany({
+    where: { id: { in: contacts.map((c) => c.id).filter((id) => !unscored.has(id)) } },
+    include: {
+      deals: { select: { stage: true, baseValue: true } },
+      // The action scores from the ten most recent activities; match it.
+      activities: { orderBy: { createdAt: "desc" }, take: 10, select: { createdAt: true } },
+    },
+  });
+  for (const c of toScore) {
+    const open = c.deals.filter((d) => (OPEN_STAGES as readonly string[]).includes(d.stage));
+    const last = c.activities[0]?.createdAt;
+    const { score, reason } = heuristicLeadScore({
+      status: c.status,
+      hasEmail: !!c.email,
+      hasPhone: !!c.phone,
+      hasCompany: !!c.companyId,
+      title: c.title,
+      source: c.source,
+      openDealCount: open.length,
+      openDealValue: open.reduce((s, d) => s + d.baseValue, 0),
+      wonDealCount: c.deals.filter((d) => d.stage === "WON").length,
+      activityCount: c.activities.length,
+      daysSinceLastActivity: last ? Math.floor((Date.now() - last.getTime()) / 86400_000) : null,
+    });
+    await prisma.contact.update({
+      where: { id: c.id },
+      data: { aiScore: score, aiScoreReason: reason, aiScoredAt: daysAgo(1) },
     });
   }
 

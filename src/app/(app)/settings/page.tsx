@@ -21,13 +21,16 @@ const securityFeatures = [
   "Passwords hashed with bcrypt (cost 12) — never stored in plain text",
   "Sessions stored server-side as SHA-256 hashes in httpOnly, SameSite cookies",
   "Every mutation validated with zod and authorized on the server",
-  "Login and AI endpoints rate-limited",
+  "Login, AI and search actions rate-limited",
   "Full audit trail of logins, changes and AI usage",
 ];
 
 export default async function SettingsPage() {
   const user = (await getCurrentUser())!;
   const provider = aiProviderName();
+  // The card used to say "AI features are using the gemini API" — false for
+  // most of any day Gemini's quota is exhausted and Groq is serving.
+  const fallback = provider === "gemini" && process.env.GROQ_API_KEY ? "groq" : null;
   const isAdmin = user.role === "ADMIN";
 
   const [members, auditEntries] = await Promise.all([
@@ -43,6 +46,16 @@ export default async function SettingsPage() {
         })
       : Promise.resolve([]),
   ]);
+
+  // Registration is open, so without this a MEMBER could register a throwaway
+  // account and read every address that has ever signed up. Names and roles
+  // stay visible as team context; an address is PII and does not.
+  const roster = members.map((m) => ({
+    id: m.id,
+    name: m.name,
+    role: m.role,
+    email: isAdmin || m.id === user.id ? m.email : null,
+  }));
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -77,8 +90,12 @@ export default async function SettingsPage() {
                     Connected: <span className="capitalize">{provider}</span>
                   </p>
                   <p className="mt-0.5 text-[13px] leading-5 text-ink-faint">
-                    AI features are using the {provider} API. Change providers by
-                    editing <code className="font-mono text-[12px]">.env</code>.
+                    AI features try the {provider} API first
+                    {fallback
+                      ? ` and fall back to ${fallback} when it fails — with a free-tier daily quota, that is routine`
+                      : ""}
+                    . Change providers by editing{" "}
+                    <code className="font-mono text-[12px]">.env</code>.
                   </p>
                 </div>
               ) : (
@@ -104,12 +121,14 @@ export default async function SettingsPage() {
         <Card>
           <CardHeader title="Team" subtitle="Everyone in this workspace" />
           <ul className="divide-y divide-edge/60">
-            {members.map((m) => (
+            {roster.map((m) => (
               <li key={m.id} className="flex items-center gap-3 px-5 py-3">
                 <Avatar name={m.name} size="sm" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-ink">{m.name}</p>
-                  <p className="truncate text-[12px] text-ink-faint">{m.email}</p>
+                  {m.email ? (
+                    <p className="truncate text-[12px] text-ink-faint">{m.email}</p>
+                  ) : null}
                 </div>
                 {m.role === "ADMIN" ? (
                   <Badge className="border-accent/25 bg-accent-soft text-accent">

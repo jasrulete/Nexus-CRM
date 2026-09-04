@@ -21,9 +21,9 @@ jobs:
       # Prisma config and driver adapter expect a URL to be present.
       DATABASE_URL: "file:./ci.db"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -32,14 +32,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Two steps on purpose, because "fail the build on any advisory" is not
+      # honest here. Three high advisories are open right now — prisma,
+      # @prisma/config and deepmerge-ts — and npm's only offered fix is a
+      # downgrade to Prisma 6, which is rejected. (--omit=dev does *not* drop
+      # them: npm keeps `prisma` in the audited graph even though package.json
+      # lists it as a devDependency. Verified, not assumed.)
+      #
+      # So: a critical advisory blocks, because that should stop a release and
+      # nothing is critical today. Anything lower is printed for a human without
+      # holding the build hostage to a fix that does not exist. Dependabot is
+      # what actually chases these now; this step is just the view from CI.
+      - name: Audit dependencies (blocking on critical)
+        run: npm audit --audit-level=critical
+
+      - name: Audit dependencies (report high and below)
+        continue-on-error: true
+        run: npm audit --audit-level=high
+
       - name: Lint
         run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests
-        run: npm test
+      # Runs the same suite, and fails if coverage drops below the floor in
+      # vitest.config.ts — so deleting a test file, or adding a module with
+      # none, is caught here rather than noticed months later.
+      - name: Unit tests with coverage
+        run: npm run test:coverage
 
       - name: Build
         run: npm run build
@@ -56,7 +77,7 @@ jobs:
       - name: End-to-end tests
         run: npm run test:e2e
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
         with:
           name: playwright-report

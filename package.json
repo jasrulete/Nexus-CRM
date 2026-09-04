@@ -2,6 +2,15 @@
   "name": "nexus-crm",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jasrulete/Nexus-CRM.git"
+  },
+  "homepage": "https://nexus-crm-jer2x.vercel.app",
+  "bugs": {
+    "url": "https://github.com/jasrulete/Nexus-CRM/issues"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,6 +23,7 @@
     "db:migrate": "prisma migrate dev",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "playwright test",
     "postinstall": "prisma generate",
     "db:push:turso": "tsx scripts/db-push-turso.ts",
@@ -35,7 +45,7 @@
     "bcryptjs": "^3.0.3",
     "clsx": "^2.1.1",
     "lucide-react": "^1.24.0",
-    "next": "16.2.11",
+    "next": "16.3.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.9.2",
@@ -44,15 +54,19 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.0",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
+    "better-sqlite3": "^12.11.1",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.3.1",
     "prisma": "^7.8.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.1",

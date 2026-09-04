@@ -3,13 +3,14 @@ import Link from "next/link";
 import { Plus, Search, Users } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { CONTACT_STATUSES, CONTACT_STATUS_LABELS } from "@/lib/constants";
-import { cn, fullName, timeAgo } from "@/lib/utils";
+import { fullName, timeAgo } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ContactStatusBadge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { FilterChip } from "@/components/ui/filter-chip";
 import { Input } from "@/components/ui/input";
 import { Table, THead, Th, TRow, Td } from "@/components/ui/table";
 import { ContactFormDialog } from "@/components/contact-form-dialog";
@@ -182,28 +183,4 @@ function buildHref(q: string | undefined, status: string | undefined) {
   if (status) params.set("status", status);
   const qs = params.toString();
   return qs ? `/contacts?${qs}` : "/contacts";
-}
-
-function FilterChip({
-  href,
-  active,
-  children,
-}: {
-  href: string;
-  active: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className={cn(
-        "rounded-full border px-3 py-1.5 text-[13px] font-medium transition-colors",
-        active
-          ? "border-accent/40 bg-accent-soft text-accent"
-          : "border-edge-strong/60 bg-surface text-ink-muted hover:bg-surface-2",
-      )}
-    >
-      {children}
-    </Link>
-  );
 }

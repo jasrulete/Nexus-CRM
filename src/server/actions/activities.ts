@@ -6,6 +6,8 @@ import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
+import { canMutate } from "@/lib/authz";
+import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { activitySchema, fieldErrors, idSchema } from "@/lib/validation";
 
 export async function createActivity(
@@ -27,6 +29,12 @@ export async function createActivity(
     return { message: "Activity must be attached to a record" };
   }
 
+  // Without this a stale tab whose contact was just deleted throws Prisma
+  // P2003 out of the create, and the user gets the error boundary instead
+  // of a message — losing what they typed.
+  const missing = await findMissingRelation({ contactId, dealId, companyId });
+  if (missing) return { message: missingRelationMessage(missing) };
+
   const activity = await prisma.activity.create({
     data: {
       ...data,
@@ -47,6 +55,7 @@ export async function createActivity(
 
   if (contactId) revalidatePath(`/contacts/${contactId}`);
   if (companyId) revalidatePath(`/companies/${companyId}`);
+  if (dealId) revalidatePath(`/deals/${dealId}`);
   revalidatePath("/deals");
   revalidatePath("/dashboard");
   return { success: true };
@@ -59,20 +68,28 @@ export async function deleteActivity(activityId: string): Promise<void> {
 
   const activity = await prisma.activity.findUnique({ where: { id } });
   if (!activity) return;
-  if (activity.userId !== user.id && user.role !== "ADMIN") {
+  if (!canMutate(activity.userId, user)) {
     throw new Error("FORBIDDEN: only the author or an admin can delete");
   }
 
-  await prisma.activity.delete({ where: { id } });
-  await audit({
-    action: "activity.delete",
-    entityType: "activity",
-    entityId: id,
-    userId: user.id,
+  // A delete and its record commit together: afterwards the entry is the only
+  // evidence the row existed at all.
+  await prisma.$transaction(async (tx) => {
+    await tx.activity.delete({ where: { id } });
+    await audit(
+      {
+        action: "activity.delete",
+        entityType: "activity",
+        entityId: id,
+        userId: user.id,
+      },
+      tx,
+    );
   });
 
   if (activity.contactId) revalidatePath(`/contacts/${activity.contactId}`);
   if (activity.companyId) revalidatePath(`/companies/${activity.companyId}`);
+  if (activity.dealId) revalidatePath(`/deals/${activity.dealId}`);
   revalidatePath("/deals");
   revalidatePath("/dashboard");
 }

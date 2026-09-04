@@ -13,6 +13,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { formatCurrency, fullName, timeAgo } from "@/lib/utils";
+import { formatDealAmount } from "@/lib/money";
 import { deleteCompany } from "@/server/actions/companies";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,7 @@ export default async function CompanyDetailPage({
 
   const openValue = company.deals
     .filter((d) => !["WON", "LOST"].includes(d.stage))
-    .reduce((s, d) => s + d.value, 0);
+    .reduce((s, d) => s + d.baseValue, 0);
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -96,6 +97,7 @@ export default async function CompanyDetailPage({
           <CompanyFormDialog
             company={{
               id: company.id,
+              updatedAt: company.updatedAt.toISOString(),
               name: company.name,
               domain: company.domain,
               industry: company.industry,
@@ -199,7 +201,7 @@ export default async function CompanyDetailPage({
                     </div>
                     <div className="flex shrink-0 items-center gap-3">
                       <span className="text-sm font-semibold tabular-nums text-ink">
-                        {formatCurrency(d.value)}
+                        {formatDealAmount(d)}
                       </span>
                       <StageBadge stage={d.stage} />
                     </div>

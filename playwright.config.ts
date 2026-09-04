@@ -33,5 +33,15 @@ export default defineConfig({
     url: process.env.CI ? `${baseURL}/api/health` : baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
+    // The AI tests assert UI behaviour — that a draft appears, that sending
+    // logs an activity — never the wording a model produced. Left to reach a
+    // real provider they inherit GEMINI_API_KEY from .env and fail whenever the
+    // free tier's 20-requests-per-day quota is spent, which has already made
+    // the suite flake. Blanking the keys puts the app in its own deterministic
+    // heuristic mode, which is a code path worth covering anyway, and removes a
+    // network round trip per test.
+    //
+    // Set E2E_LIVE_AI=1 to run the same suite against a real provider.
+    env: process.env.E2E_LIVE_AI ? {} : { GEMINI_API_KEY: "", GROQ_API_KEY: "" },
   },
 });

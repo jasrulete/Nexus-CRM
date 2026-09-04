@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { openPaletteWithKeyboard } from "./palette";
 
 // Every test in this file starts signed in as the seeded demo user.
 test.beforeEach(async ({ page }) => {
@@ -60,8 +61,9 @@ test("a drafted follow-up can be sent to yourself and lands in the feed", async 
   await page.waitForURL(/\/contacts\/.+/);
 
   await page.getByRole("button", { name: "Draft a follow-up email" }).click();
-  // Waits on a real model call when an AI key is configured, so this needs more
-  // than the 5s budget a local UI interaction gets.
+  // The suite runs with the AI keys blanked (see playwright.config.ts), so this
+  // is the deterministic heuristic path. The generous budget stays for
+  // E2E_LIVE_AI runs, which do wait on a real model call.
   await expect(page.getByText("Follow-up draft")).toBeVisible({ timeout: 30_000 });
 
   await page
@@ -137,6 +139,246 @@ test("the pipeline board renders its stage columns", async ({ page }) => {
   for (const stage of ["Lead", "Qualified", "Proposal"]) {
     await expect(page.getByText(stage, { exact: false }).first()).toBeVisible();
   }
+});
+
+test("a deal can be moved between stages with the keyboard alone", async ({
+  page,
+}) => {
+  // The board is this CRM's signature interaction and was entirely mouse-only:
+  // dnd-kit gives each card role="button" and a tabIndex, so it focused, but no
+  // KeyboardSensor was registered and nothing responded to a key. WCAG 2.1.1.
+  const STAGES = ["Lead", "Qualified", "Proposal", "Negotiation", "Won", "Lost"];
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /Plant ops pilot/ }).first();
+  await expect(card).toBeVisible();
+
+  // Read the starting column rather than assuming it: this test moves a real
+  // row, so a repeat run against the same database starts somewhere else.
+  const startStage = await card.evaluate((el) =>
+    el.closest('[role="group"]')?.getAttribute("aria-label") ?? "",
+  );
+  const startIndex = STAGES.indexOf(startStage.replace(" deals", ""));
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+
+  // This test moves a real row and does not move it back, so consecutive runs
+  // walk the card along the board until it reaches an end. Pick the direction
+  // from where the card actually is rather than assuming there is room to the
+  // right — otherwise the suite passes until the day it doesn't.
+  const goRight = startIndex < STAGES.length - 1;
+  const arrow = goRight ? "ArrowRight" : "ArrowLeft";
+  const expected = `${STAGES[startIndex + (goRight ? 1 : -1)]} deals`;
+
+  await card.focus();
+  await expect(card).toBeFocused();
+
+  // Space picks the card up, arrows move it, Space drops it. Enter is
+  // deliberately not an activator so it stays free to open the card. dnd-kit
+  // needs a frame between each step, so the presses are not back to back.
+  await page.keyboard.press("Space");
+  await expect(card).toHaveAttribute("aria-pressed", "true");
+
+  // Enter while a card is picked up must not open it: that navigated away
+  // mid-drag and left dnd-kit's document key listeners behind on the new page.
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/deals$/);
+  await expect(card).toHaveAttribute("aria-pressed", "true");
+
+  await page.keyboard.press(arrow);
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Space");
+
+  // The move is optimistic then persisted; a reload proves it reached the
+  // database rather than only the client state.
+  await page.waitForTimeout(1500);
+  await page.reload();
+
+  await expect(
+    page.getByRole("group", { name: expected }).getByText(/Plant ops pilot/),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByRole("group", { name: startStage }).getByText(/Plant ops pilot/),
+  ).toHaveCount(0);
+});
+
+test("Enter opens a deal's detail page without starting a drag", async ({ page }) => {
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /CS tooling/ }).first();
+  await card.focus();
+  await page.keyboard.press("Enter");
+
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("CS tooling");
+  // The document title is the first thing a screen reader announces after a
+  // navigation; "Deal · Nexus CRM" was one letter away from the board.
+  await expect(page).toHaveTitle(/CS tooling/);
+});
+
+test("an overdue expected close date is spelled out on the deal page", async ({ page }) => {
+  // The seed's "Exec briefing package" was expected to close three days ago
+  // and is still open. The card shows that in red; the page has to say it.
+  await page.goto("/deals");
+  await page.getByRole("button", { name: /Exec briefing package/ }).first().click();
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByText(/overdue/i)).toBeVisible();
+});
+
+test("deleting a deal from its page lands on the board", async ({ browser }) => {
+  // A fresh member, so the demo lock (DEMO_MODE) cannot interfere, and a deal
+  // of their own, so ownership cannot either — the same setup auth.spec uses.
+  // Its own context: the file's beforeEach signs the default page in as the
+  // demo user, and the proxy bounces a signed-in visitor off /register.
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const suffix = Date.now().toString().slice(-8);
+  await page.goto("/register");
+  await page.getByLabel("Full name").fill(`Playwright Deleter ${suffix}`);
+  await page.getByLabel("Email").fill(`e2e-deleter-${suffix}@example.com`);
+  await page.getByLabel("Password").fill("deleter-password-123");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  await page.goto("/deals");
+  await page.getByRole("button", { name: "New deal" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Title").fill(`Disposable ${suffix}`);
+  await dialog.getByRole("button", { name: "Create deal" }).click();
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole("button", { name: new RegExp(`Disposable ${suffix}`) }).first().click();
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await page.getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+
+  await expect(page).toHaveURL(/\/deals$/);
+  await expect(page.getByText(`Disposable ${suffix}`)).toHaveCount(0);
+  await context.close();
+});
+
+test("a deal card opens its detail page, which shows its relations and takes an activity", async ({
+  page,
+}) => {
+  // Deals used to exist only as kanban cards and an edit dialog: the seed
+  // attaches activities to deals that no page could show. The detail page is
+  // where a deal's company, contact, timeline and tasks come together.
+  await page.goto("/deals");
+  await page.getByRole("button", { name: /Analytics platform/ }).first().click();
+
+  await expect(page).toHaveURL(/\/deals\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Analytics platform");
+  await expect(page.getByText("$48,000").first()).toBeVisible();
+  // `.first()`: the contact is linked from the details card and again from
+  // every timeline entry that names her.
+  await expect(page.getByRole("link", { name: "Northwind Analytics" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Maya Okafor" }).first()).toBeVisible();
+  // A seeded activity that was, until now, reachable from nowhere.
+  await expect(page.getByText(/Sent proposal v2/)).toBeVisible();
+
+  const note = `Deal note ${Date.now()}`;
+  await page.getByPlaceholder("Write a note…").fill(note);
+  await page.getByRole("button", { name: "Log note" }).click();
+  await expect(page.getByText(note)).toBeVisible({ timeout: 15_000 });
+});
+
+test("the search palette opens with the keyboard and lands on a record", async ({ page }) => {
+  // "Pull up Acme" used to mean guessing the entity type, navigating, then
+  // searching — and only contacts and companies had search at all.
+  await page.goto("/dashboard");
+  const dialog = await openPaletteWithKeyboard(page);
+  const box = dialog.getByRole("combobox", { name: "Search contacts, companies, deals and notes" });
+  await expect(box).toBeFocused();
+
+  await page.keyboard.type("brightline");
+  const company = dialog.getByRole("option", { name: /^Brightline Health/ });
+  await expect(company).toBeVisible();
+  await expect(box).toHaveAttribute("aria-expanded", "true");
+  await expect(dialog.getByRole("status")).toHaveText(/\d+ results?/);
+
+  // Groups are in a fixed order, so the seed's two brightline.health contacts
+  // precede the company. Arrow until it is highlighted rather than assuming
+  // how many; the assertion below fails loudly if it never is.
+  for (let i = 0; i < 8; i++) {
+    if ((await company.getAttribute("aria-selected")) === "true") break;
+    await page.keyboard.press("ArrowDown");
+  }
+  await expect(company).toHaveAttribute("aria-selected", "true");
+  // Attribute comparison, never a "#id" selector — React 19 ids contain «».
+  await expect(box).toHaveAttribute("aria-activedescendant", (await company.getAttribute("id"))!);
+
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/companies\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Brightline Health");
+  await expect(dialog).toBeHidden();
+});
+
+test("a note is searchable from the header button and opens the record it belongs to", async ({
+  page,
+}) => {
+  await page.goto("/dashboard");
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await page.keyboard.type("procurement window");
+
+  // The seed logs "Ingrid's procurement window opens next quarter" as a note;
+  // notes were searchable nowhere before.
+  await expect(page.getByRole("option", { name: /^Note on Ingrid Svensson/ })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/\/contacts\/[^/]+$/);
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Ingrid Svensson");
+});
+
+test("Escape closes the palette, reports no matches honestly, and returns focus", async ({
+  page,
+}) => {
+  await page.goto("/dashboard");
+  const home = page.getByRole("link", { name: "Nexus CRM home" }).first();
+  await home.focus();
+  const dialog = await openPaletteWithKeyboard(page);
+
+  await page.keyboard.type("zzqx-no-such-record");
+  await expect(dialog.getByRole("status")).toContainText("No matches");
+  await expect(dialog.getByRole("listbox")).toHaveCount(0);
+  await expect(dialog.getByRole("combobox")).toHaveAttribute("aria-expanded", "false");
+
+  // Opened by the shortcut: focus goes back to what had it (WCAG 2.4.3).
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(home).toBeFocused();
+
+  // Opened from the header button: focus goes back to the button.
+  const trigger = page.getByRole("button", { name: "Search", exact: true });
+  await trigger.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
+});
+
+test("a missing deal renders the branded 404, not a crash", async ({ page }) => {
+  await page.goto("/deals/this-id-does-not-exist");
+  await expect(page.getByText("Not found")).toBeVisible();
+});
+
+test("a deal in another currency shows both amounts, and totals convert", async ({
+  page,
+}) => {
+  // Deal.currency used to be written on every row and read nowhere, so a
+  // non-USD amount would have been summed into the totals as if it were
+  // dollars. The seed carries one EUR deal specifically to keep this honest.
+  await page.goto("/deals");
+
+  const card = page.getByRole("button", { name: /Team plan/ }).first();
+  await expect(card).toBeVisible();
+
+  // Converted amount first, the amount actually entered in parentheses.
+  await expect(card).toContainText("(EUR 9,600)");
+  await expect(card).toContainText("$11,231");
+
+  // A deal already in the workspace currency gets no parenthetical. Matched on
+  // the currency-code pattern, not a bare "(" — this deal is titled
+  // "Analytics platform (annual)".
+  const domestic = page.getByRole("button", { name: /Analytics platform/ }).first();
+  await expect(domestic).toContainText("$48,000");
+  expect(await domestic.textContent()).not.toMatch(/\([A-Z]{3}\s[\d,]+\)/);
 });
 
 test("a missing record renders the branded 404, not a crash", async ({

@@ -4,7 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { Check, Trash2 } from "lucide-react";
 import { deleteTask, toggleTask } from "@/server/actions/tasks";
-import { cn, formatDateOnly } from "@/lib/utils";
+import { cn, formatDateOnly, isOverdueDateOnly } from "@/lib/utils";
 
 export type TaskItem = {
   id: string;
@@ -40,8 +40,7 @@ export function TaskList({ tasks }: { tasks: TaskItem[] }) {
     ) : null}
     <ul className="divide-y divide-edge/60">
       {tasks.map((task) => {
-        const overdue =
-          !task.done && task.dueDate && new Date(task.dueDate) < new Date();
+        const overdue = !task.done && isOverdueDateOnly(task.dueDate);
         return (
           <li key={task.id} className="group flex items-center gap-3 px-5 py-2.5">
             <button

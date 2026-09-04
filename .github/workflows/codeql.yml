@@ -1,0 +1,54 @@
+name: CodeQL
+
+# Static analysis for security bugs the test suite cannot see — injection,
+# unsafe deserialisation, path traversal, hard-coded credentials, unvalidated
+# redirects. Free and unlimited on public repositories.
+#
+# Written as a workflow rather than enabled through GitHub's default setup so
+# the configuration is version-controlled and visible in the repo, and so the
+# action can be pinned by commit SHA like every other action here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, because most of the value is in queries published *after* a commit
+    # lands: a scan only ever runs against the rules that existed at the time.
+    # Monday morning UTC, away from the 19:00 demo reset.
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze JavaScript/TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Required to upload results to the Security tab.
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
+        with:
+          languages: javascript-typescript
+          # JS/TS needs no compilation step, so nothing is built here — this is
+          # a separate concern from CI, which already builds and tests.
+          build-mode: none
+          # security-extended adds lower-severity and lower-precision rules on
+          # top of the default set. Worth the extra noise on a codebase this
+          # size, where a human reads every result.
+          queries: security-extended
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@42947a340483f03ba47bb1a039b2c519aab3df85 # v3
+        with:
+          category: "/language:javascript-typescript"

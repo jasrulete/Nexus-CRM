@@ -1,9 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   closestCorners,
   useSensor,
@@ -11,16 +13,18 @@ import {
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
+  type KeyboardCoordinateGetter,
 } from "@dnd-kit/core";
 import {
   SortableContext,
+  sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { Plus } from "lucide-react";
 import { moveDeal } from "@/server/actions/deals";
 import { DEAL_STAGES, STAGE_LABELS, type DealStage } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
-import { DealFormDialog, type DealFormValues } from "@/components/deal-form-dialog";
+import { DealFormDialog } from "@/components/deal-form-dialog";
 import { KanbanColumn } from "./column";
 import { DealCard, type BoardDeal } from "./deal-card";
 
@@ -40,6 +44,53 @@ function groupDeals(deals: BoardDeal[]): Columns {
   return cols;
 }
 
+
+/**
+ * Left/right moves between stage columns; up/down reorders within one.
+ *
+ * dnd-kit's stock `sortableKeyboardCoordinates` filters candidate droppables by
+ * raw geometry, which on this board resolves a right-arrow to the next card
+ * *below* rather than the next column — so a keyboard user could reorder a
+ * column but never change a deal's stage, which is the entire point of the
+ * page. Columns are the droppables whose id is a stage, so they can be found by
+ * name and stepped through in visual order.
+ */
+const boardKeyboardCoordinates: KeyboardCoordinateGetter = (event, args) => {
+  const horizontal = event.code === "ArrowLeft" || event.code === "ArrowRight";
+  if (!horizontal) return sortableKeyboardCoordinates(event, args);
+
+  const { active, collisionRect, droppableContainers } = args.context;
+  if (!active || !collisionRect) return;
+  event.preventDefault();
+
+  const columns = droppableContainers
+    .getEnabled()
+    .filter((c) => (DEAL_STAGES as readonly string[]).includes(String(c.id)))
+    .map((c) => ({ id: String(c.id), rect: c.rect.current }))
+    .filter((c): c is { id: string; rect: NonNullable<typeof c.rect> } => c.rect != null)
+    .sort((a, b) => a.rect.left - b.rect.left);
+  if (columns.length === 0) return;
+
+  // The column the card is currently over: the nearest by horizontal centre,
+  // which stays correct even mid-transition between two columns.
+  const cardCentre = collisionRect.left + collisionRect.width / 2;
+  let nearest = 0;
+  for (let i = 1; i < columns.length; i++) {
+    const centre = columns[i]!.rect.left + columns[i]!.rect.width / 2;
+    const bestCentre = columns[nearest]!.rect.left + columns[nearest]!.rect.width / 2;
+    if (Math.abs(centre - cardCentre) < Math.abs(bestCentre - cardCentre)) nearest = i;
+  }
+
+  const target = columns[nearest + (event.code === "ArrowRight" ? 1 : -1)];
+  if (!target) return; // already at the first or last stage
+
+  // Aim just inside the target column so collision detection resolves to it.
+  return {
+    x: target.rect.left + target.rect.width / 2 - collisionRect.width / 2,
+    y: target.rect.top + 8,
+  };
+};
+
 export function KanbanBoard({
   deals,
   contacts,
@@ -49,9 +100,9 @@ export function KanbanBoard({
   contacts: { id: string; name: string }[];
   companies: { id: string; name: string }[];
 }) {
+  const router = useRouter();
   const [columns, setColumns] = useState<Columns>(() => groupDeals(deals));
   const [activeDeal, setActiveDeal] = useState<BoardDeal | null>(null);
-  const [editing, setEditing] = useState<DealFormValues | null>(null);
   const [creating, setCreating] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
 
@@ -65,6 +116,20 @@ export function KanbanBoard({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    // Without this the board is mouse-only: cards already receive role="button"
+    // and a tabIndex from dnd-kit's attributes, so they focus — but nothing
+    // responds to a key, and moving a deal between stages is the whole point of
+    // the page. Space picks a card up, arrows move it, Space drops, Escape
+    // cancels. Enter is deliberately left out of the activator set so it stays
+    // free to open the card (see DealCard).
+    useSensor(KeyboardSensor, {
+      coordinateGetter: boardKeyboardCoordinates,
+      keyboardCodes: {
+        start: ["Space"],
+        cancel: ["Escape"],
+        end: ["Space"],
+      },
+    }),
   );
 
   const dealIndex = useMemo(() => {
@@ -165,7 +230,20 @@ export function KanbanBoard({
       </div>
 
       <DndContext
+        // Stable id, not decoration: dnd-kit derives the cards'
+        // aria-describedby from this, and without it falls back to a
+        // module-level counter that starts at 0 on the server and continues
+        // climbing on the client — a hydration mismatch on every board render.
+        id="nexus-kanban"
         sensors={sensors}
+        // dnd-kit's stock instructions describe only the drag; a screen-reader
+        // user would never learn that Enter opens the deal.
+        accessibility={{
+          screenReaderInstructions: {
+            draggable:
+              "To pick up a deal, press Space. Use the arrow keys to move it to another stage, then press Space again to drop it, or Escape to cancel. Press Enter to open the deal.",
+          },
+        }}
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
@@ -182,17 +260,12 @@ export function KanbanBoard({
                 stage={stage}
                 label={STAGE_LABELS[stage]}
                 deals={columns[stage]}
-                onCardClick={(deal) =>
-                  setEditing({
-                    id: deal.id,
-                    title: deal.title,
-                    value: deal.value,
-                    stage: deal.stage,
-                    expectedCloseDate: deal.expectedCloseDate?.slice(0, 10) ?? null,
-                    contactId: deal.contactId,
-                    companyId: deal.companyId,
-                  })
-                }
+                // Click and Enter open the deal's page, where editing lives.
+                // A link nested inside the draggable card would have been the
+                // alternative, but an interactive element inside a
+                // role="button" is exactly what axe's nested-interactive rule
+                // flags, and the accessibility suite runs on this page.
+                onCardClick={(deal) => router.push(`/deals/${deal.id}`)}
               />
             </SortableContext>
           ))}
@@ -205,15 +278,6 @@ export function KanbanBoard({
       <DealFormDialog
         open={creating}
         onOpenChange={setCreating}
-        contacts={contacts}
-        companies={companies}
-      />
-      <DealFormDialog
-        open={editing !== null}
-        onOpenChange={(open) => {
-          if (!open) setEditing(null);
-        }}
-        deal={editing}
         contacts={contacts}
         companies={companies}
       />
