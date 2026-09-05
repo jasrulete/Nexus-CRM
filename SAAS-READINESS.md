@@ -211,6 +211,13 @@ silently reaching production. Because `src/lib/db.ts` builds the adapter at
 module scope, that failure lands at **build** time, so a preview PR check goes
 red until Preview is given its own database — see §4a.
 
+Dependabot branches are the exception: `vercel.json`'s `ignoreCommand` exits 0 for any
+`dependabot/*` ref, which tells Vercel to skip the build instead of running it to
+its designed failure — ten such PRs arrived in the first hour after #10 merged, each
+spending a build on a preview nobody would open. Your own branches still build (and
+still fail until §4a is done), so the by-design signal is preserved where a human
+might look at it. Remove the rule when Dependabot previews become useful.
+
 ---
 
 ## 4. Deploy checklist
