@@ -11,6 +11,9 @@
   "bugs": {
     "url": "https://github.com/jasrulete/Nexus-CRM/issues"
   },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
