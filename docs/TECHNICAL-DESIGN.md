@@ -1038,7 +1038,13 @@ explaining why the path cannot simply be added to `PUBLIC_PATHS`.
 
 `next.config.ts` sets `output: "standalone"`, which makes `next build` emit a
 self-contained `.next/standalone/server.js` with only the traced dependencies.
-Vercel ignores this; the Docker image is built on it.
+The Docker image is built on it. It is set only when no deployment adapter is
+driving the build: since Next 16.3 Vercel builds through an adapter (it sets
+`NEXT_ADAPTER_PATH`), Turbopack then no longer writes the root server trace,
+and the standalone writer fails the whole build looking for it (`ENOENT
+.next/next-server.js.nft.json` — every Vercel production build after the 16.3
+upgrade, until 2026-09-05). The adapter packages the app itself, so standalone
+has nothing to add there.
 
 `Dockerfile` is three stages on `node:22-alpine`:
 

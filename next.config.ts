@@ -26,8 +26,12 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  // Self-contained server bundle for the Docker image; ignored by Vercel.
-  output: "standalone",
+  // Self-contained server bundle for the Docker image. Not under a deployment
+  // adapter: Vercel drives builds through one since Next 16.3 (it sets
+  // NEXT_ADAPTER_PATH), Turbopack then no longer writes the root server trace,
+  // and the standalone writer fails the whole build looking for it
+  // (ENOENT .next/next-server.js.nft.json). The adapter packages the app itself.
+  output: process.env.NEXT_ADAPTER_PATH ? undefined : "standalone",
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];
   },
