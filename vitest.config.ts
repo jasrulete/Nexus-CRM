@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -15,6 +15,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // The AI evaluation harness has its own config (vitest.eval.config.ts) and
+    // its own script; it may talk to real providers and is not a unit test.
+    exclude: [...configDefaults.exclude, "src/eval/**"],
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "lcov"],

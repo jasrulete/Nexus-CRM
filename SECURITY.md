@@ -61,7 +61,11 @@ script/connect sources — AI providers are called **server-side only**),
 - **Prompt injection**: CRM notes/activities are user-controlled text that
   gets embedded in prompts. They are fenced inside `<record>` tags and the
   system prompt instructs the model to treat that content strictly as data.
-  Outputs are rendered as plain text (never HTML/markdown-executed).
+  Outputs are rendered as plain text (never HTML/markdown-executed). The fence
+  and three named injection payloads are checked on every PR by the evaluation
+  harness (`npm run eval`, `src/eval`), on the prompt itself and on the output;
+  the honest limit remains that labelling reduces instruction-following, it does
+  not prevent it.
 - **Score integrity**: model responses are requested as JSON and must parse
   whole with a numeric 0–100 score (rounded to an integer) and a string reason,
   or they're discarded in favor of the deterministic heuristic, with the reason

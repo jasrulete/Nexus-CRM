@@ -1,0 +1,76 @@
+name: AI evaluation (live providers)
+
+# The same harness that runs keyless in CI on every PR (src/eval), pointed at
+# the real providers once a night. Informational by design: it never gates a
+# merge, because a provider having a bad day is information, not a regression.
+#
+# Uses its own keys (EVAL_GEMINI_API_KEY / EVAL_GROQ_API_KEY) so evaluation
+# never spends the production key's free-tier quota. With neither secret set
+# the job says so and stops.
+
+on:
+  schedule:
+    # 20:00 UTC = 04:00 in Manila. GitHub may delay scheduled runs under load.
+    - cron: "0 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-live
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Not a secret — a dummy path so `prisma generate` has a URL to read.
+      # The harness builds its own throwaway SQLite database.
+      DATABASE_URL: "file:./unused.db"
+    steps:
+      # Pinned to commit SHAs, like every workflow here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # A plain install, as in ci.yml: postinstall runs `prisma generate`, and
+      # better-sqlite3's install script fetches the native binding the harness
+      # needs to open its throwaway database (reset-demo.yml can skip scripts
+      # because it only ever talks to Turso). The provider keys are scoped to
+      # the eval step below, so nothing at install time can see them either way.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check for evaluation keys
+        id: keys
+        env:
+          EVAL_GEMINI_API_KEY: ${{ secrets.EVAL_GEMINI_API_KEY }}
+          EVAL_GROQ_API_KEY: ${{ secrets.EVAL_GROQ_API_KEY }}
+        run: |
+          if [ -z "${EVAL_GEMINI_API_KEY}" ] && [ -z "${EVAL_GROQ_API_KEY}" ]; then
+            echo "::notice::No EVAL_GEMINI_API_KEY or EVAL_GROQ_API_KEY secret is set; skipping the live run."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the harness against the real providers
+        if: steps.keys.outputs.present == 'true'
+        env:
+          EVAL_LIVE: "1"
+          GEMINI_API_KEY: ${{ secrets.EVAL_GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.EVAL_GROQ_API_KEY }}
+        run: npm run eval -- --reporter=default --reporter=json --outputFile=eval-report.json
+
+      - name: Upload the report
+        if: always() && steps.keys.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: eval-report
+          path: eval-report.json
+          retention-days: 30

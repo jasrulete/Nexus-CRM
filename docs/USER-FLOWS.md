@@ -435,7 +435,7 @@ consistent with the shared-workspace design).
 - **Company detail** loads contacts (all, ordered by `updatedAt`), deals (all), and 15 recent
   activities, plus three stat cards: open pipeline value (deals not in `WON`/`LOST`), contact
   count, deal count. No AI panel exists on companies — AI is contact-scoped only, since every
-  `recordBlock()` prompt in `src/server/actions/ai.ts` is built from a single contact plus its
+  `recordBlock()` prompt in `src/lib/ai/prompt.ts` is built from a single contact plus its
   related deals/activities.
 - Both pages compute `demoLocked = isLockedDemoAccount(currentUser)` once, server-side, and pass a
   `disabledReason` string into `DeleteButton` when true — so a demo-account visitor sees the

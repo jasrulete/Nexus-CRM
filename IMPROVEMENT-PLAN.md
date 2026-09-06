@@ -379,11 +379,16 @@ The highest-signal item in this entire document per the hiring research, and it 
 a day of work. 10–20 fixture records with property assertions (score in range,
 subject present, name mentioned), 3 injection payloads asserted **not** to redirect
 the output, and a pure unit test on `recordBlock`. Fixtures in CI on every PR; live
-runs nightly behind a flag, reusing the demo-reset scheduling pattern.
+runs nightly behind a flag, reusing the demo-reset scheduling pattern. **Done
+2026-09-06:** `npm run eval` (`src/eval`: 13 fixtures, three named injection
+payloads, the fence asserted on the recorded prompts) runs keyless on every PR,
+and `eval-live.yml` runs it nightly against the real providers behind its own
+secrets — spec in `docs/superpowers/specs/2026-09-06-ai-eval-harness-design.md`.
 
 The parrot test from SAAS-READINESS §3 is already your first test case — it exists
 as prose in a document rather than as an executable test that fails when the
-mitigation regresses.
+mitigation regresses. **Done 2026-09-06:** it is the `parrot` fixture now,
+known-open live until the nonce fence (W13).
 
 ### 4.5 Instrument it
 
