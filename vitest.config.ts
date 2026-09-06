@@ -17,7 +17,9 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // The AI evaluation harness has its own config (vitest.eval.config.ts) and
     // its own script; it may talk to real providers and is not a unit test.
-    exclude: [...configDefaults.exclude, "src/eval/**"],
+    // Only that file is excluded: the pure helpers beside it (outcome.ts) are
+    // ordinary units and belong in the fast suite that gates every PR.
+    exclude: [...configDefaults.exclude, "src/eval/**/*.eval.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text-summary", "lcov"],
