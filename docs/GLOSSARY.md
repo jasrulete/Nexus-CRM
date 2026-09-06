@@ -1274,15 +1274,16 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 374 tests across 30 files.** Pure modules in `src/lib/`
+**Unit — vitest, 393 tests across 31 files.** Pure modules in `src/lib/`
 (`ai/heuristics`, `ai/label`, `ai/prompt`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
 `file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
-`fx`, `months`, `search`, `concurrency`, `migration-ledger`) plus, under `src/server/`, the server actions
+`fx`, `months`, `search`, `concurrency`, `migration-ledger`), the evaluation harness's own
+verdict rules (`eval/outcome`), plus, under `src/server/`, the server actions
 and the demo seed run against a real migrations-built SQLite through
 [`src/test/action-harness.ts`](../src/test/action-harness.ts) — which fakes only the database
 handle, the session, `revalidatePath` and `redirect`.
 
-**AI evaluation harness — vitest, `npm run eval`, 45 checks.** `src/eval/ai.eval.test.ts`
+**AI evaluation harness — vitest, `npm run eval`, 58 checks.** `src/eval/ai.eval.test.ts`
 runs the 13 fixture contacts in `src/eval/fixtures/contacts.json` (three of them adversarial:
 `fence-escape`, `parrot`, `operator-impersonation`) through the real score / summarise /
 draft actions on the same migrations-built SQLite, with the provider chain real and the keys
@@ -1290,6 +1291,19 @@ blank, so the heuristic path, the fence and the parsing are exercised at zero co
 records every prompt the chain was asked and asserts the fence on it. `EVAL_LIVE=1` calls the
 real providers; `.github/workflows/eval-live.yml` does that nightly behind `EVAL_GEMINI_API_KEY`
 / `EVAL_GROQ_API_KEY` and never gates a merge.
+
+**What red means there.** A live run separates two things that used to fail identically
+([`src/eval/outcome.ts`](../src/eval/outcome.ts)). A provider that errored, timed out or
+rate-limited us is *unreachable*: the call is retried once, and if it fails again the test is
+reported as **skipped**, because it is evidence about Google's afternoon and not about the
+model. A provider that answered with something unusable is a **failure**, and so is a live run
+that found no key. The first real run made the distinction worth building: five of eighteen
+calls were lost to two HTTP 503s and three 30-second timeouts, and under the old rule that was
+indistinguishable from a genuine regression. Two guards keep the skips honest — the
+prompt-side assertions need no provider at all and therefore never skip, and a run in which
+*nothing* was answered fails outright rather than presenting a green wall of skips. The retry
+budget (`EVAL_LIVE_RETRY_BUDGET`, default 6) is announced in the log when it runs out, so a
+truncated run never passes for a complete one.
 
 One config detail is load-bearing.
 [`vitest.config.ts`](../vitest.config.ts) aliases the `server-only` package to a local stub:
@@ -1622,9 +1636,9 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 374 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test` | `vitest run` | The 393 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 44 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
-| `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. |
+| `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. Live knobs: `EVAL_LIVE_ORDINARY`, `EVAL_LIVE_PACE_MS`, `EVAL_LIVE_RETRY_MS`, `EVAL_LIVE_RETRY_BUDGET`. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
 | `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |
 | `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the MEMBER demo account. Touches nothing else. | Once, when you want the member view available. |
