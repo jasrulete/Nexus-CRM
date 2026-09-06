@@ -38,13 +38,13 @@ jobs:
           node-version: 22
           cache: npm
 
-      # --ignore-scripts, then generate explicitly: the provider keys are scoped
-      # to the eval step below, not to every lifecycle script in the tree.
+      # A plain install, as in ci.yml: postinstall runs `prisma generate`, and
+      # better-sqlite3's install script fetches the native binding the harness
+      # needs to open its throwaway database (reset-demo.yml can skip scripts
+      # because it only ever talks to Turso). The provider keys are scoped to
+      # the eval step below, so nothing at install time can see them either way.
       - name: Install dependencies
-        run: npm ci --ignore-scripts
-
-      - name: Generate the Prisma client
-        run: npx prisma generate
+        run: npm ci
 
       - name: Check for evaluation keys
         id: keys
