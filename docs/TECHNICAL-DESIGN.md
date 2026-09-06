@@ -650,24 +650,35 @@ already broke production once, and neither script is covered by CI.
 
 ## 9. The AI layer
 
-`src/lib/ai/` is two files and about 250 lines. The server actions that use it
-are in `src/server/actions/ai.ts`.
+`src/lib/ai/` is four files — the provider chain, the heuristics, the import-free
+lead-score rules the seed also uses, and the panel label — and about 400 lines.
+The server actions that use it are in `src/server/actions/ai.ts`.
 
 ### Provider abstraction — `src/lib/ai/provider.ts`
 
-One entry point, `generateText(prompt): Promise<AiResult | null>`, and one
-selection rule:
+Two entry points over one chain: `generateText(prompt): Promise<AiTextResult>`
+for free text, and `generateJson(prompt, { schema, jsonSchema }): Promise<AiJsonResult<T>>`
+for a validated object. A success is `{ ok: true, text | data, provider }`; a
+failure is `{ ok: false, reason }` with `not_configured`, `rate_limited`, `error`
+or `malformed`:
 
 ```ts
-if (process.env.GEMINI_API_KEY) return await gemini(prompt);
-if (process.env.GROQ_API_KEY)   return await groq(prompt);
-return null;
+for (const [index, provider] of configuredProviders().entries()) {
+  const attempt = await provider.run(prompt, index === 0 ? AI_MODEL : undefined, json);
+  if (attempt.kind === "ok") {
+    const value = accept(attempt.text); // identity for text; parse + zod for JSON
+    if (value !== undefined) return { ok: true, value, provider: attempt.provider };
+  }
+  failures.push(/* rate_limited | error | malformed */);
+}
+// rate_limited only if every attempt was a 429; error if any attempt errored;
+// otherwise malformed — independent of the order the providers were tried
 ```
 
 Both providers are called with plain `fetch` — no SDK, matching how
 `src/lib/email.ts` talks to Resend. Both use `AbortSignal.timeout(30_000)`, both
-send `temperature: 0.4` and a 1024-token cap, and both return
-`{ text, provider }` where `provider` is the model string that actually answered
+send `temperature: 0.4` and a 1024-token cap, and a success carries
+`provider` as the model string that actually answered
 (`gemini/gemini-flash-latest`, `groq/llama-3.3-70b-versatile`). That string is
 rendered in the UI under every generated block, so the reader always knows what
 produced the text.
@@ -806,10 +817,9 @@ the next provider.
 by both, and a Gemini model name forwarded to Groq is a `404` that would turn a
 working fallback into a second failure; a fallback always uses its own default.
 
-Still open: from the outside, "never configured" and "every provider failing"
-produce the identical UI label, because the result is `AiResult | null` rather
-than a discriminated `{ ok, reason }`. A rejected fetch reaches Sentry; a
-`429` from every provider only reaches `console.error`.
+A rejected fetch reaches Sentry. A `429` from every provider does not: it is
+reported to the caller as `rate_limited`, shown in the panel and recorded in the
+audit entry as `degraded`, which is where a quiet quota exhaustion is noticed.
 
 ### Rate limiting — `src/lib/rate-limit.ts`
 
@@ -1523,9 +1533,9 @@ filename with no file attached defeats the cap sitting beside it.
 
 **The AI provider fails over — resolved** (§9). An exhausted Gemini free tier
 now hands off to Groq instead of degrading every AI feature to rule-based
-output for the rest of the day. Still open from the same item: the result is
-`AiResult | null`, not a discriminated `{ ok, reason }`, so callers and the UI
-cannot tell "no key configured" from "every provider failing".
+output for the rest of the day. The result has been a discriminated
+`{ ok, reason }` since 2026-09-06, so callers, the panel and the audit log can
+tell "no key configured" from "every provider failing".
 
 **No backups runbook.** Turso takes its own snapshots, so data exists somewhere;
 what does not exist is a written, tested restore procedure. *Acceptable because*

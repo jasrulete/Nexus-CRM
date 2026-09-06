@@ -122,7 +122,8 @@ reasoning:
    discriminated result. The failover half is done — `generateText()` now tries
    every configured provider in order, so an exhausted Gemini free tier (20
    requests/day, observed) hands off to Groq instead of silently degrading every
-   AI feature for the rest of the day. The discriminated result is still open.
+   AI feature for the rest of the day. The discriminated result shipped on
+   2026-09-06 with native structured output (W10 below).
 
 8. **Packaging last, but not optional.** The audience is a hiring manager who
    spends minutes, not hours. Packaging converts finished engineering into
@@ -364,7 +365,7 @@ unit-tested deterministic fallback that is honestly labelled — stays.
 second key read as a fallback and was not one. **Done:** providers are tried in
 order on any failure, and `AI_MODEL` applies to the primary only.
 **Dropped:** the `Retry-After` retry — Gemini's quota resets daily, so waiting is
-pointless and the next provider is the right move. **Done (2026-09-07):**
+pointless and the next provider is the right move. **Done (2026-09-06):**
 `generateText` returns `{ ok: true, text, provider }` or
 `{ ok: false, reason: 'not_configured' | 'rate_limited' | 'error' }`, every
 action carries the reason as `degraded`, and lead scoring goes through
@@ -446,9 +447,9 @@ a test distinguish degradation from a wrong answer).
 **Scope.** A note beginning `</record>` closes the block early, putting attacker
 text at the same nesting level as the real task — use a per-request random nonce
 in the tag name so the delimiter is unforgeable, and strip stray delimiters from
-interpolated fields. Then instrumentation: record provider, latency and the
-token counts both APIs already return in the audit metadata, so an expired key
-is distinguishable from "never configured" from the outside.
+interpolated fields. Then instrumentation: record latency and the token counts
+both APIs already return in the audit metadata (the provider and the reason a
+rule ran are already there since W10).
 
 Also restate the accepted-risk paragraph in `SAAS-READINESS.md` §3. Its
 precondition — "the content is the user's own, with no other user's data in the

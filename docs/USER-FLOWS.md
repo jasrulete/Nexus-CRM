@@ -216,20 +216,20 @@ flowchart TD
     Load -->|not found| NF["ok:false 'Contact not found'"]
     Load -->|found| Prompt[Build prompt from recordBlock]
 
-    Prompt --> Provider{generateText prompt<br/>providers with a key, in order}
-    Provider -->|no key set| NullProvider[returns null immediately]
-    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies to whichever<br/>provider is first in the chain]
-    Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout]
+    Prompt --> Provider{generateText, or generateJson for Score<br/>providers with a key, in order}
+    Provider -->|no key set| NotConfigured["{ ok:false, reason:'not_configured' }"]
+    Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies to whichever<br/>provider is first in the chain · Score adds<br/>responseMimeType + responseJsonSchema]
+    Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout · Score adds response_format json_object]
 
-    Gemini -->|res.ok, text extracted| AIResult[AiResult text + provider]
-    Gemini -->|"non-2xx (e.g. 429 quota), or 200 with no text"| GeminiFailed["null from inside gemini()<br/>console.error only — nothing reaches Sentry"]
-    Gemini -->|"fetch rejects: timeout / DNS / reset"| GeminiCaught["caught in generateText,<br/>Sentry.captureException"]
+    Gemini -->|res.ok, reply usable| AIResult["{ ok:true, text or data, provider }"]
+    Gemini -->|"non-2xx (429 → rate_limited, else error), 200 with no text (error),<br/>or JSON that fails the schema (malformed)"| GeminiFailed["attempt recorded<br/>console.error only — nothing reaches Sentry"]
+    Gemini -->|"fetch rejects: timeout / DNS / reset"| GeminiCaught["caught in runChain,<br/>Sentry.captureException"]
     GeminiFailed --> Next{GROQ_API_KEY set?}
     GeminiCaught --> Next
     Next -->|yes| Groq
-    Next -->|no| AllFailed[returns null]
-    Groq -->|res.ok| AIResult
-    Groq -->|"non-2xx, or no text"| AllFailed
+    Next -->|no| AllFailed["{ ok:false, reason }<br/>rate_limited only if every attempt was 429,<br/>else error if any attempt errored, else malformed"]
+    Groq -->|res.ok, reply usable| AIResult
+    Groq -->|"non-2xx, no text, unusable JSON,<br/>or 400 json_validate_failed (malformed)"| AllFailed
     Groq -->|"fetch rejects → Sentry"| AllFailed
 
     AIResult --> UseAI[Use model output]
@@ -259,22 +259,23 @@ Branch-by-branch, in prose:
   shared across score/summarize/draft/send/file-extract — one bucket, `ai:{userId}`. Hitting it
   returns `{ ok: false, message: "AI rate limit reached — try again later." }`, rendered by
   `AiPanel` in a warning-styled paragraph; no partial UI state changes.
-- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()` tries Gemini if
-  `GEMINI_API_KEY` is set, else Groq if `GROQ_API_KEY` is set, else returns `null` synchronously
-  — there is no fail-over between the two if one is configured and fails; whichever key exists is
-  the only provider tried. Every provider call has a **30-second `AbortSignal.timeout`**.
+- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()` and `generateJson()`
+  try every provider that has a key, in order — Gemini, then Groq — and move to the next on
+  any failure; with no key at all they return `{ ok: false, reason: "not_configured" }`
+  without calling out. Every provider call has a **30-second `AbortSignal.timeout`**.
 - **Timeout / network failure branch:** if `fetch` itself rejects (DNS failure, timeout,
   connection reset — as opposed to a valid HTTP error response), the `try/catch` in
-  `generateText()` catches it, reports to Sentry with `tags: { subsystem: "ai-provider" }`, logs
-  to console, and returns `null` — which every caller (`scoreContact`, `summarizeContact`,
-  `draftFollowUp`) treats identically to "no key configured": fall back to the heuristic. Before
+  the chain catches it, reports to Sentry with `tags: { subsystem: "ai-provider" }`, logs to
+  console, and tries the next provider; when none is left the result is
+  `{ ok: false, reason: "error" }`, and every caller (`scoreContact`, `summarizeContact`,
+  `draftFollowUp`) falls back to the heuristic while carrying that reason as `degraded`. Before
   this branch existed (per its comment), that rejection would have escaped into the error
   boundary and blanked the page instead.
 - **Heuristic fallback (`src/lib/ai/heuristics.ts`):** deterministic, no network call — computes a
   score from signals like status, has-email, has-phone, open deal count/value, days since last
   activity; a canned-but-parameterized summary and email draft. `AiPanel` labels this by
   the reason the action reports (`providerLabel` in `src/lib/ai/label.ts`): "rule-based
-  mode (no AI key configured)", or "rule-based fallback (AI provider rate-limited)",
+  mode (no API key configured)", or "rule-based fallback (AI provider rate-limited)",
   "(AI provider error)" or "(AI reply was not usable)" — never the raw string `"heuristic"`.
 - **Score is persisted** (`prisma.contact.update({ data: { aiScore, aiScoreReason, aiScoredAt }
   })`); summarize and draft are **not** — they render once in the panel and vanish on navigation.

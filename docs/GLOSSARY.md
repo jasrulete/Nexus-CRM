@@ -1039,10 +1039,13 @@ features without any model:
   since the last activity, and names the open deal if there is one.
 - `heuristicSummary()` — assembles status, open pipeline total and latest touchpoint.
 
-**When it fires.** Three distinct situations, which is the part to be precise about:
+**When it fires.** Four distinct situations, which is the part to be precise about (the
+fourth — a reply that arrived but failed the schema, `malformed`, Score only — is described
+with `generateJson` in the reference table below):
 
 1. **No key configured.** `generateText` returns `{ ok: false, reason: "not_configured" }` immediately.
-2. **The provider answered with an error.** `!res.ok` → logged → `null`.
+2. **The provider answered with an error.** `!res.ok` → logged → `rate_limited` on a 429,
+   `error` otherwise; the chain moves to the next provider.
 3. **The request never completed** — timeout, DNS failure, connection reset. This one is the
    fix on this branch, and it is worth understanding why it was a real bug: `!res.ok` only
    covers a provider that *answered*. A timeout **rejects out of `fetch`**, and before the
@@ -1070,7 +1073,7 @@ loud failure into an invisible one.
 **Honesty is the design constraint.** The file's docblock: *"Clearly labeled in the UI as
 'rule-based' so demos stay honest."* `heuristicLeadScore` returns reasons prefixed
 *"Rule-based score:"*, the AI panel renders the reason the action reports — `"rule-based
-mode (no AI key configured)"`, or `"rule-based fallback (AI provider rate-limited)"`,
+mode (no API key configured)"`, or `"rule-based fallback (AI provider rate-limited)"`,
 `"(AI provider error)"` or `"(AI reply was not usable)"` — when `result.provider ===
 "heuristic"`, and `/settings` says *"Rule-based mode (no API key configured)"*. A rule-based score presented as AI would be the kind of
 claim a reviewer checks.
@@ -1079,19 +1082,22 @@ claim a reviewer checks.
 
 ```ts
 for (const [index, provider] of configuredProviders().entries()) {
-  // any failure — error status, empty reply, rejected fetch — moves on to the next
-  const result = await provider.run(prompt, index === 0 ? process.env.AI_MODEL : undefined);
-  if (result) return result;
+  // any failure — error status, empty or unusable reply, rejected fetch — moves on
+  const attempt = await provider.run(prompt, index === 0 ? process.env.AI_MODEL : undefined, json);
+  if (attempt.kind === "ok" && accept(attempt.text) !== undefined) return { ok: true, ... };
+  failures.push(attempt.kind); // rate_limited | error | malformed
 }
-return null; // every provider failed → the caller uses heuristics
+// every provider failed → { ok: false, reason }: rate_limited only when every attempt
+// was a 429, error when any attempt errored, otherwise malformed
 ```
 
 With both keys set, an exhausted Gemini free tier (20 requests/day has been observed) hands off
 to Groq instead of degrading every AI feature to heuristics for the rest of the day. `AI_MODEL`
 goes to the primary only, because a Gemini model name sent to Groq is a 404. It used to be
 `if (GEMINI_API_KEY) return gemini(); if (GROQ_API_KEY) return groq();` — a fallback in name
-only. Still on the backlog: a discriminated result, so the UI can tell "no key configured" from
-"every provider failing"; today both render the rule-based label.
+only. The result is discriminated, so the panel and the audit log can tell "no key configured"
+from "every provider failing": the four reasons above become the four labels the panel
+renders, and for Score they also appear as a "Scored by …" line under the pill.
 
 ---
 
@@ -1491,7 +1497,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `SYSTEM_PREAMBLE` | same file | The system instruction sent with every request, telling the model to treat `<record>` content strictly as data. |
 | `generateJson(prompt, { schema, jsonSchema })` | same file | The entry point for a structured reply. Sends the JSON Schema to the vendor (Gemini `responseJsonSchema`, Groq JSON mode), parses the whole reply and validates it with the zod `schema`. Returns `{ ok: true, data, provider }` or `{ ok: false, reason }`, where an unusable reply is `malformed` and moves the chain to the next provider first. Replaced the regex `extractJson` scan. |
 | **heuristic fallback** | [`src/lib/ai/heuristics.ts`](../src/lib/ai/heuristics.ts) | `heuristicLeadScore`, `heuristicEmailDraft`, `heuristicSummary` — deterministic rule-based implementations of all three AI features. Their output is labelled "rule-based" in the UI so a demo never passes rules off as a model. |
-| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`, and the panel renders it so the user always knows what produced the text. |
+| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
 | `aiRateLimited(userId)` | same file | 30 AI calls per user per hour. Guards the free-tier quota. |
 | `splitDraft(draft)` | [`src/lib/email.ts`](../src/lib/email.ts) | Splits `"Subject: x\n\nbody"` — the shape `draftFollowUp` asks the model for — falling back to subject `"Following up"` if the pattern does not match. |
 | `emailConfigured()` | same file | `Boolean(RESEND_API_KEY && EMAIL_FROM)`. When false, `sendFollowUp` takes the simulated path. |

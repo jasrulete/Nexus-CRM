@@ -364,14 +364,14 @@ unused. The second key reads as a fallback chain but is not one.
 **Status:** failover done — providers are tried in order on any failure, and
 `AI_MODEL` applies to the primary only. The `Retry-After` retry was dropped on
 purpose: the Gemini quota that causes the 429 resets daily, so the next provider
-is the right move, not waiting. Still open: return a discriminated result
-(`{ ok: false, reason: 'rate_limited' | 'error' }`) so callers can tell
-degradation from absence.
+is the right move, not waiting. **Done 2026-09-06:** the result is discriminated
+(`{ ok: false, reason: 'not_configured' | 'rate_limited' | 'error' | 'malformed' }`)
+so callers, the panel and the audit log can tell degradation from absence.
 
-Ask for JSON directly (Gemini `responseMimeType` + `responseSchema`, Groq
-`response_format`) and zod-parse it, instead of a greedy `/\{[\s\S]*\}/` scan that
-a chatty reply defeats — silently writing a heuristic score to the DB as if the
-model had been consulted.
+**Done 2026-09-06:** Score asks for JSON directly (Gemini `responseMimeType` +
+`responseJsonSchema`, Groq `response_format: json_object`) and zod-parses the
+whole reply, instead of a greedy `/\{[\s\S]*\}/` scan that a chatty reply defeated —
+silently writing a heuristic score to the DB as if the model had been consulted.
 
 ### 4.4 Ship an eval harness
 
@@ -387,10 +387,10 @@ mitigation regresses.
 
 ### 4.5 Instrument it
 
-Provider failures are currently invisible: an expired key degrades every AI feature
-to heuristics indefinitely, and from outside you cannot distinguish "never
-configured" from "broken since Tuesday" — the UI label is identical. Capture
-provider failures to Sentry with status and provider name, and record latency plus
+Provider failures used to be invisible: an expired key degraded every AI feature
+to heuristics indefinitely, and from outside you could not distinguish "never
+configured" from "broken since Tuesday". Since 2026-09-06 the panel label and
+the audit entry carry the reason (`degraded`). Still to do: record latency plus
 the token counts both APIs already return in the audit metadata.
 
 Then put the number in the README: *"cost per lead score: ~$0.0002."* Quantified
