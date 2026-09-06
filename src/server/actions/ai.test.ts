@@ -161,12 +161,12 @@ describe("scoreContact", () => {
   it("persists a model score and records which provider produced it", async () => {
     model.reply = {
       text: '{"score": 82, "reason": "Senior title, live proposal, recent contact."}',
-      provider: "gemini/gemini-flash-latest",
+      provider: "gemini/gemini-3.6-flash",
     };
 
     const result = await scoreContact(contactId);
 
-    expect(result).toMatchObject({ ok: true, score: 82, provider: "gemini/gemini-flash-latest" });
+    expect(result).toMatchObject({ ok: true, score: 82, provider: "gemini/gemini-3.6-flash" });
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBe(82);
     expect(after.aiScoreReason).toContain("Senior title");

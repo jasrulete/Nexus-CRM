@@ -679,14 +679,17 @@ Both providers are called with plain `fetch` — no SDK, matching how
 `src/lib/email.ts` talks to Resend. Both use `AbortSignal.timeout(30_000)`, both
 send `temperature: 0.4` and a 1024-token cap, and a success carries
 `provider` as the model string that actually answered
-(`gemini/gemini-flash-latest`, `groq/llama-3.3-70b-versatile`). That string is
+(`gemini/gemini-3.6-flash`, `groq/llama-3.3-70b-versatile`). That string is
 rendered in the UI under every generated block, so the reader always knows what
 produced the text.
 
-The Gemini default model is `gemini-flash-latest`, a rolling alias. The comment
-explains why: pinned snapshots such as `gemini-2.5-flash` get gated for new API
-keys. (Note: `.env.example` still documents the default as `gemini-2.5-flash`.
-That comment is stale; the code is the truth.)
+The Gemini default model is `gemini-3.6-flash`, the current model by name. It
+was the rolling `gemini-flash-latest` alias until 2026-09-06, when that alias
+returned 503 "high demand" for hours while the named model answered every
+time; the older pinned names (`gemini-2.0-flash`, `gemini-2.5-flash`) are gone,
+and Google's 404 for them names the successor. When this name retires the same
+way, the logged 404 says what to change it to, and the chain falls back to Groq
+meanwhile. `AI_MODEL` overrides it.
 
 **The try/catch is the interesting part.** `!res.ok` only covers a provider that
 *answered*. A timeout, DNS failure or connection reset rejects out of `fetch` —
