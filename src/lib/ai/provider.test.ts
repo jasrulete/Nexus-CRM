@@ -202,6 +202,37 @@ describe("generateText failover", () => {
     await expect(generateText("prompt")).resolves.toMatchObject({ ok: true, text: "from gemini" });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  // Free-text features (summary, draft) must not be forced into JSON mode: a
+  // vendor asked for JSON returns JSON, and the panel would print braces.
+  it("does not ask either vendor for JSON", async () => {
+    const fetchSpy = routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () => groqReply("from groq"),
+    });
+
+    await generateText("prompt");
+
+    const [geminiCall, groqCall] = fetchSpy.mock.calls;
+    const geminiBody = JSON.parse(String((geminiCall[1] as RequestInit).body)) as {
+      generationConfig: Record<string, unknown>;
+    };
+    const groqBody = JSON.parse(String((groqCall[1] as RequestInit).body)) as Record<string, unknown>;
+    expect(geminiBody.generationConfig).not.toHaveProperty("responseMimeType");
+    expect(geminiBody.generationConfig).not.toHaveProperty("responseJsonSchema");
+    expect(groqBody).not.toHaveProperty("response_format");
+  });
+
+  // "Every attempt was a 429" is the rule, not "the last one was": a provider
+  // outage followed by a quota hit is degradation, and the order must not matter.
+  it("reports error when an outage precedes a rate limit", async () => {
+    routeFetch({
+      gemini: () => new Response("boom", { status: 500 }),
+      groq: () => new Response("rate limited", { status: 429 }),
+    });
+
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+  });
 });
 
 // Lead scoring used to pull the first {...} out of whatever the model said with
@@ -297,6 +328,8 @@ describe("generateJson", () => {
 
   it.each([
     ["prose with no JSON at all", "I could not score this contact."],
+    // The old regex would have pulled the object out of this one.
+    ["prose that merely contains JSON", 'Sure! {"score": 82, "reason": "hot"} — hope this helps.'],
     ["a score above the range", '{"score": 250, "reason": "very hot"}'],
     ["a non-numeric score", '{"score": "eighty", "reason": "hot"}'],
     ["a missing reason", '{"score": 80}'],

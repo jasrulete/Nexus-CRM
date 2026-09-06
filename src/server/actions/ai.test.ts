@@ -34,6 +34,7 @@ const model = vi.hoisted(() => ({
   // configured provider failed, or when none is configured at all.
   failure: "not_configured" as "not_configured" | "rate_limited" | "error" | "malformed",
   prompts: [] as string[],
+  jsonRequests: [] as { schema: { safeParse: (v: unknown) => { success: boolean } }; jsonSchema: Record<string, unknown> }[],
 }));
 vi.mock("@/lib/ai/provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/provider")>();
@@ -47,8 +48,9 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     // Only the transport is faked: the reply text goes through the same
     // whole-reply parse and schema the real provider applies, so a test can
     // hand the model a prose answer and see what the action does with it.
-    generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } } }) => {
+    generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } }; jsonSchema: Record<string, unknown> }) => {
       model.prompts.push(prompt);
+      model.jsonRequests.push(request);
       if (!model.reply) return { ok: false, reason: model.failure };
       let parsed: unknown;
       try {
@@ -143,6 +145,7 @@ beforeEach(async () => {
   model.reply = null;
   model.failure = "not_configured";
   model.prompts = [];
+  model.jsonRequests = [];
   mail.configured = false;
   mail.sent = [];
   mail.result = { sent: true };
@@ -222,6 +225,25 @@ describe("scoreContact", () => {
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScore).toBeLessThanOrEqual(100);
+  });
+
+  // The JSON Schema is what Gemini shapes its reply with; the zod schema is
+  // what we accept. If they drift apart, one side rejects what the other asks
+  // for, so the two are pinned to each other here.
+  it("sends a JSON schema that agrees with what it will accept", async () => {
+    model.reply = { text: '{"score": 82, "reason": "hot"}', provider: "gemini/test" };
+
+    await scoreContact(contactId);
+
+    const [request] = model.jsonRequests;
+    expect(request.jsonSchema).toMatchObject({
+      type: "object",
+      required: ["score", "reason"],
+      properties: { score: { type: "integer", minimum: 0, maximum: 100 }, reason: { type: "string" } },
+    });
+    expect(Object.keys(request.jsonSchema.properties as object).sort()).toEqual(["reason", "score"]);
+    expect(request.schema.safeParse({ score: 50, reason: "x" }).success).toBe(true);
+    expect(request.schema.safeParse({ score: 50 }).success).toBe(false);
   });
 
   // The old regex scan pulled the first {...} out of prose, so a model that
