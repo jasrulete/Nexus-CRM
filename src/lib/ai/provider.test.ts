@@ -193,6 +193,20 @@ describe("generateText failover", () => {
     expect(requestedModel(groqCall)).toBe(GROQ_DEFAULT_MODEL);
   });
 
+  // The rolling "-latest" alias answered 503 "high demand" for hours on
+  // 2026-09-06 while the current model name answered every time, and Google's
+  // own 404 for retired names points at this one. A pinned current name it is.
+  it("uses gemini-3.6-flash when AI_MODEL is unset", async () => {
+    const fetchSpy = routeFetch({
+      gemini: () => geminiReply("from gemini"),
+      groq: () => groqReply("unused"),
+    });
+
+    await generateText("prompt");
+
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/models/gemini-3.6-flash:generateContent");
+  });
+
   it("does not call groq when gemini succeeds", async () => {
     const fetchSpy = routeFetch({
       gemini: () => geminiReply("from gemini"),
@@ -319,7 +333,7 @@ describe("generateJson", () => {
 
     const result = await generateJson("prompt", request);
 
-    expect(result).toMatchObject({ ok: true, provider: "gemini/gemini-flash-latest" });
+    expect(result).toMatchObject({ ok: true, provider: "gemini/gemini-3.6-flash" });
     if (result.ok) {
       expect(result.data.score).toBe(72);
       expect(result.data.reason).toHaveLength(500);

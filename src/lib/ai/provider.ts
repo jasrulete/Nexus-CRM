@@ -160,9 +160,13 @@ function isJsonValidationFailure(errorBody: string): boolean {
 }
 
 async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
-  // "-latest" is Google's rolling alias for the newest stable Flash model —
-  // pinned snapshots (e.g. gemini-2.5-flash) get gated for new API keys.
-  const model = modelOverride || "gemini-flash-latest";
+  // The current Flash model by name. The rolling "gemini-flash-latest" alias
+  // answered 503 "high demand" for hours on 2026-09-06 while this name answered
+  // every time, and older pinned names (2.0, 2.5) are gone: Google's 404 for
+  // them says "use gemini-3.6-flash". When this one retires the same way, that
+  // 404 (logged below) names the successor, and the chain falls back to Groq
+  // meanwhile. AI_MODEL overrides it.
+  const model = modelOverride || "gemini-3.6-flash";
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {

@@ -6,8 +6,8 @@ import { providerLabel } from "./label";
 // fresh install with no key at all, which is not unavailability.
 describe("providerLabel", () => {
   it("names the model that answered", () => {
-    expect(providerLabel({ provider: "gemini/gemini-flash-latest" })).toBe(
-      "gemini/gemini-flash-latest",
+    expect(providerLabel({ provider: "gemini/gemini-3.6-flash" })).toBe(
+      "gemini/gemini-3.6-flash",
     );
   });
 
