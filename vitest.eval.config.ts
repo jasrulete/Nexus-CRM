@@ -25,7 +25,11 @@ export default defineConfig({
     // the heuristic path finishes in milliseconds.
     testTimeout: live ? 180_000 : 30_000,
     // All fixtures are seeded and run in one beforeAll. Live, that is up to six
-    // fixtures times three paced calls of up to 30 s each.
-    hookTimeout: live ? 900_000 : 60_000,
+    // fixtures times three paced calls of up to 30 s each, plus the retry
+    // budget (6 more calls, each with its own backoff). Worst case is a night
+    // where every call times out and every retry is spent: 18x30s + 6x30s of
+    // calls, 18 paces and 6 backoffs. That lands near 16 minutes, so the hook
+    // gets 25 and the job (eval-live.yml) gets 30.
+    hookTimeout: live ? 1_500_000 : 60_000,
   },
 });

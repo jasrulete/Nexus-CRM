@@ -98,7 +98,7 @@ label says that instead, so a quiet outage never reads like a fresh install.
 | `npm run typecheck` | TypeScript check |
 | `npm test` | Unit tests (vitest) — scoring heuristics, validation, rate limiting |
 | `npm run test:e2e` | End-to-end tests (Playwright) — auth, CRM flows, health |
-| `npm run eval` | AI evaluation harness — fixture contacts through the real actions with property assertions and three prompt-injection payloads; keyless by default, `EVAL_LIVE=1` for the real providers |
+| `npm run eval` | AI evaluation harness — fixture contacts through the real actions with property assertions and three prompt-injection payloads; keyless by default, `EVAL_LIVE=1` for the real providers (live, an unreachable provider is retried once then skipped, so only the model misbehaving turns it red) |
 | `npm run lint` | ESLint |
 
 ## Architecture notes
