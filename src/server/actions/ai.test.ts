@@ -30,16 +30,38 @@ vi.mock("@/lib/auth/session", () => ({
 // The model. Tests drive its answers directly; nothing here reaches a network.
 const model = vi.hoisted(() => ({
   reply: null as { text: string; provider: string } | null,
+  // Why the model gave no reply: what the provider layer reports when every
+  // configured provider failed, or when none is configured at all.
+  failure: "not_configured" as "not_configured" | "rate_limited" | "error" | "malformed",
   prompts: [] as string[],
+  jsonRequests: [] as { schema: { safeParse: (v: unknown) => { success: boolean } }; jsonSchema: Record<string, unknown> }[],
 }));
 vi.mock("@/lib/ai/provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/provider")>();
   return {
-    ...actual, // extractJson is pure and worth exercising for real
+    ...actual,
     aiProviderName: () => (model.reply ? model.reply.provider.split("/")[0] : null),
     generateText: async (prompt: string) => {
       model.prompts.push(prompt);
-      return model.reply;
+      return model.reply ? { ok: true, ...model.reply } : { ok: false, reason: model.failure };
+    },
+    // Only the transport is faked: the reply text goes through the same
+    // whole-reply parse and schema the real provider applies, so a test can
+    // hand the model a prose answer and see what the action does with it.
+    generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } }; jsonSchema: Record<string, unknown> }) => {
+      model.prompts.push(prompt);
+      model.jsonRequests.push(request);
+      if (!model.reply) return { ok: false, reason: model.failure };
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(model.reply.text);
+      } catch {
+        return { ok: false, reason: "malformed" };
+      }
+      const checked = request.schema.safeParse(parsed);
+      return checked.success
+        ? { ok: true, data: checked.data, provider: model.reply.provider }
+        : { ok: false, reason: "malformed" };
     },
   };
 });
@@ -121,7 +143,9 @@ beforeEach(async () => {
   });
 
   model.reply = null;
+  model.failure = "not_configured";
   model.prompts = [];
+  model.jsonRequests = [];
   mail.configured = false;
   mail.sent = [];
   mail.result = { sent: true };
@@ -161,11 +185,26 @@ describe("scoreContact", () => {
 
     expect(result.ok).toBe(true);
     expect(result.provider).toBe("heuristic");
+    // The panel used to say "AI provider unavailable" here, which is untrue
+    // when there is simply no key; the reason lets it say the right thing.
+    expect(result.degraded).toBe("not_configured");
     // Still persisted: the feature works with no API key at all, which is the
     // whole point of the fallback.
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScoreReason).toMatch(/rule-based/i);
+  });
+
+  it("says when it fell back because every provider was rate-limited", async () => {
+    model.reply = null;
+    model.failure = "rate_limited";
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "rate_limited" });
+    // The audit trail is where a quiet degradation is noticed the next day.
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.score_contact" } });
+    expect(entry.metadata).toContain("rate_limited");
   });
 
   it.each([
@@ -182,9 +221,45 @@ describe("scoreContact", () => {
     // The important half: a malformed reply must not reach the database as a
     // score, and must not be reported as if the model had produced it.
     expect(result.provider).toBe("heuristic");
+    expect(result.degraded).toBe("malformed");
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScore).toBeLessThanOrEqual(100);
+  });
+
+  // The JSON Schema is what Gemini shapes its reply with; the zod schema is
+  // what we accept. If they drift apart, one side rejects what the other asks
+  // for, so the two are pinned to each other here.
+  it("sends a JSON schema that agrees with what it will accept", async () => {
+    model.reply = { text: '{"score": 82, "reason": "hot"}', provider: "gemini/test" };
+
+    await scoreContact(contactId);
+
+    const [request] = model.jsonRequests;
+    expect(request.jsonSchema).toMatchObject({
+      type: "object",
+      required: ["score", "reason"],
+      properties: { score: { type: "integer", minimum: 0, maximum: 100 }, reason: { type: "string" } },
+    });
+    expect(Object.keys(request.jsonSchema.properties as object).sort()).toEqual(["reason", "score"]);
+    expect(request.schema.safeParse({ score: 50, reason: "x" }).success).toBe(true);
+    expect(request.schema.safeParse({ score: 50 }).success).toBe(false);
+  });
+
+  // The old regex scan pulled the first {...} out of prose, so a model that
+  // chatted around its answer was scored as if it had answered cleanly. A
+  // JSON request is answered with JSON or not at all.
+  it("rejects a chatty reply that merely contains JSON", async () => {
+    model.reply = {
+      text: 'Sure! Here is my assessment: {"score": 82, "reason": "hot"} — hope this helps.',
+      provider: "gemini/test",
+    };
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toMatchObject({ provider: "heuristic", degraded: "malformed" });
+    const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
+    expect(after.aiScore).not.toBe(82);
   });
 
   it("rounds a fractional score and truncates a long reason", async () => {
@@ -316,6 +391,41 @@ describe("the prompt sent to the model", () => {
 });
 
 // ---------------------------------------------------------------- sending
+
+describe("heuristic summaries and drafts", () => {
+  it("labels a heuristic summary with the provider failure", async () => {
+    model.reply = null;
+    model.failure = "error";
+
+    const result = await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    // Summaries are read-only, but a day of degraded ones is still something
+    // the audit trail should show, the same as drafts.
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.summarize_contact" } });
+    expect(entry.metadata).toContain("error");
+  });
+
+  it("labels a heuristic draft with the provider failure", async () => {
+    model.reply = null;
+    model.failure = "rate_limited";
+
+    const result = await draftFollowUp(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "rate_limited" });
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.draft_email" } });
+    expect(entry.metadata).toContain("rate_limited");
+  });
+
+  it("carries no degraded reason when the model answered", async () => {
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+
+    const result = await summarizeContact(contactId);
+
+    expect(result.ok).toBe(true);
+    expect(result.degraded).toBeUndefined();
+  });
+});
 
 describe("sendFollowUp", () => {
   const draft = "Subject: Following up\n\nGood speaking today.";

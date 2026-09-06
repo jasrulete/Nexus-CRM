@@ -9,7 +9,13 @@ import {
   heuristicLeadScore,
   heuristicSummary,
 } from "@/lib/ai/heuristics";
-import { aiProviderName, extractJson, generateText } from "@/lib/ai/provider";
+import { z } from "zod";
+import {
+  aiProviderName,
+  generateJson,
+  generateText,
+  type AiDegradedReason,
+} from "@/lib/ai/provider";
 import { rateLimit } from "@/lib/rate-limit";
 import { aiContextSchema, aiDraftSchema, idSchema } from "@/lib/validation";
 import { emailConfigured, sendEmail, splitDraft } from "@/lib/email";
@@ -30,10 +36,30 @@ export type AiActionResult = {
   score?: number;
   reason?: string;
   provider: string;
+  /** Set when `provider` is "heuristic": why the model was not used. */
+  degraded?: AiDegradedReason;
   message?: string;
 };
 
 const OPEN_STAGES = ["LEAD", "QUALIFIED", "PROPOSAL", "NEGOTIATION"];
+
+// What a lead-score reply must look like. The reply is requested as JSON and
+// parsed whole; a model that chats around its answer is not scored. Tolerant
+// where it costs nothing: a fractional score is rounded and a long reason cut.
+const leadScoreReply = {
+  schema: z.object({
+    score: z.number().min(0).max(100).transform(Math.round),
+    reason: z.string().transform((r) => r.slice(0, 500)),
+  }),
+  jsonSchema: {
+    type: "object",
+    properties: {
+      score: { type: "integer", minimum: 0, maximum: 100 },
+      reason: { type: "string" },
+    },
+    required: ["score", "reason"],
+  },
+};
 
 function aiRateLimited(userId: string) {
   // Protects free-tier API quotas: 30 AI calls per user per hour.
@@ -119,30 +145,23 @@ export async function scoreContact(contactId: string): Promise<AiActionResult> {
   let score: number;
   let reason: string;
   let provider = "heuristic";
+  let degraded: AiDegradedReason | undefined;
 
-  const ai = await generateText(
+  const ai = await generateJson(
     `${recordBlock(contact)}
 
 Score this contact as a sales lead from 0 (cold) to 100 (hot).
 Consider seniority, engagement recency, open pipeline, and fit signals in the notes.
 Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one sentence>"}`,
+    leadScoreReply,
   );
 
-  const parsed = ai
-    ? extractJson<{ score: number; reason: string }>(ai.text)
-    : null;
-
-  if (
-    parsed &&
-    typeof parsed.score === "number" &&
-    parsed.score >= 0 &&
-    parsed.score <= 100 &&
-    typeof parsed.reason === "string"
-  ) {
-    score = Math.round(parsed.score);
-    reason = parsed.reason.slice(0, 500);
-    provider = ai!.provider;
+  if (ai.ok) {
+    score = ai.data.score;
+    reason = ai.data.reason;
+    provider = ai.provider;
   } else {
+    degraded = ai.reason;
     const h = heuristicLeadScore({
       status: contact.status,
       hasEmail: !!contact.email,
@@ -171,12 +190,12 @@ Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one senten
     entityType: "contact",
     entityId: contact.id,
     userId: user.id,
-    metadata: { score, provider },
+    metadata: { score, provider, ...(degraded && { degraded }) },
   });
 
   revalidatePath(`/contacts/${contact.id}`);
   revalidatePath("/contacts");
-  return { ok: true, score, reason, provider };
+  return { ok: true, score, reason, provider, ...(degraded && { degraded }) };
 }
 
 export async function draftFollowUp(
@@ -240,7 +259,7 @@ Subject: <subject line>
 <email body>`,
   );
 
-  if (ai) {
+  if (ai.ok) {
     await audit({
       action: "ai.draft_email",
       entityType: "contact",
@@ -263,9 +282,9 @@ Subject: <subject line>
     entityType: "contact",
     entityId: contact.id,
     userId: user.id,
-    metadata: { provider: "heuristic" },
+    metadata: { provider: "heuristic", degraded: ai.reason },
   });
-  return { ok: true, text, provider: "heuristic" };
+  return { ok: true, text, provider: "heuristic", degraded: ai.reason };
 }
 
 export async function summarizeContact(contactId: string): Promise<AiActionResult> {
@@ -285,7 +304,7 @@ current state, open pipeline, engagement trend, and the single best next step.
 Use 3-4 short bullet points.`,
   );
 
-  if (ai) {
+  if (ai.ok) {
     await audit({
       action: "ai.summarize_contact",
       entityType: "contact",
@@ -304,7 +323,16 @@ Use 3-4 short bullet points.`,
     openDeals,
     recentActivities: contact.activities,
   });
-  return { ok: true, text, provider: "heuristic" };
+  // Read-only, but a day of degraded summaries is still something the audit
+  // trail should show, the same as drafts.
+  await audit({
+    action: "ai.summarize_contact",
+    entityType: "contact",
+    entityId: contact.id,
+    userId: user.id,
+    metadata: { provider: "heuristic", degraded: ai.reason },
+  });
+  return { ok: true, text, provider: "heuristic", degraded: ai.reason };
 }
 
 /**

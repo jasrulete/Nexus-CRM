@@ -84,7 +84,8 @@ GROQ_API_KEY=...     # https://console.groq.com/keys
 
 Restart the dev server. The Settings page shows which provider is tried first and which takes over.
 Without a key, AI features run in deterministic rule-based mode and are labeled
-as such in the UI.
+as such in the UI; when a key is set but its provider is rate-limited or down, the
+label says that instead, so a quiet outage never reads like a fresh install.
 
 ## Scripts
 
@@ -106,8 +107,9 @@ as such in the UI.
 - **Auth is hand-built on purpose** (portfolio project): DB-backed sessions
   with hashed tokens and sliding expiry. The proxy (`src/proxy.ts`) does
   optimistic cookie checks; real validation happens next to the data.
-- **AI provider abstraction** (`src/lib/ai/provider.ts`): one `generateText()`
-  entry point; swapping providers is an env var, not a refactor.
+- **AI provider abstraction** (`src/lib/ai/provider.ts`): two entry points,
+  `generateText()` for text and `generateJson()` for a schema-validated object,
+  over one fallback chain; swapping providers is an env var, not a refactor.
 - **SQLite by design** — zero-dependency local dev; the same schema runs on
   Turso (libSQL) in production via a driver-adapter switch in
   `src/lib/db-adapter.ts`. For heavy multi-instance use, also move the

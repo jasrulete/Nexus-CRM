@@ -187,7 +187,7 @@ The busiest model: it is the only one the AI layer writes to.
 | `source` | `String?` / TEXT | yes | — | `website` / `referral` / `outbound` / `event` / `other`. Enum-like, zod-only |
 | `notes` | `String?` / TEXT | yes | — | ≤5000. Also fed to the AI as fit signal |
 | `aiScore` | `Int?` / INTEGER | yes | — | 0–100. Null until somebody clicks Score |
-| `aiScoreReason` | `String?` / TEXT | yes | — | One sentence. Sliced to 500 chars on the LLM path (`ai.ts:107`); the heuristic path produces a bounded string of its own |
+| `aiScoreReason` | `String?` / TEXT | yes | — | One sentence. Sliced to 500 chars on the LLM path (the `leadScoreReply` zod schema in `ai.ts`); the heuristic path produces a bounded string of its own |
 | `aiScoredAt` | `DateTime?` / DATETIME | yes | — | When the score was last computed. **Written but never read** by any page — the score pill shows the number, not its age |
 | `companyId` | `String?` / TEXT | yes | — | FK → `Company.id`, **SetNull** |
 | `ownerId` | `String` / TEXT | no | — | FK → `User.id`, Cascade |
@@ -196,8 +196,9 @@ The busiest model: it is the only one the AI layer writes to.
 The three `ai*` columns are cached results, not source data. `scoreContact()` in
 `src/server/actions/ai.ts` writes all three in one update whether the number came from Gemini/Groq
 or from the deterministic heuristic in `src/lib/ai/heuristics.ts` — the table does not record
-*which*, only the audit log does (`metadata: { score, provider }`). That is a small gap: you
-cannot tell from the row whether a score is a model's opinion or a rule's.
+*which*, only the audit log does (`metadata: { score, provider, degraded? }`, where
+`degraded` says why a rule ran instead of a model). That is a small gap: you cannot tell
+from the row whether a score is a model's opinion or a rule's.
 
 ### Deal
 

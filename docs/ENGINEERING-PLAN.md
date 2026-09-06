@@ -122,7 +122,8 @@ reasoning:
    discriminated result. The failover half is done — `generateText()` now tries
    every configured provider in order, so an exhausted Gemini free tier (20
    requests/day, observed) hands off to Groq instead of silently degrading every
-   AI feature for the rest of the day. The discriminated result is still open.
+   AI feature for the rest of the day. The discriminated result shipped on
+   2026-09-06 with native structured output (W10 below).
 
 8. **Packaging last, but not optional.** The audience is a hiring manager who
    spends minutes, not hours. Packaging converts finished engineering into
@@ -364,21 +365,20 @@ unit-tested deterministic fallback that is honestly labelled — stays.
 second key read as a fallback and was not one. **Done:** providers are tried in
 order on any failure, and `AI_MODEL` applies to the primary only.
 **Dropped:** the `Retry-After` retry — Gemini's quota resets daily, so waiting is
-pointless and the next provider is the right move. **Still open:** return a
-discriminated result (`{ ok: false, reason: 'rate_limited' | 'error' | 'not_configured' }`)
-so callers can tell degradation from absence. Also replace the greedy
-`extractJson` regex `/\{[\s\S]*\}/` with a real structured-output request —
-Gemini's `responseMimeType` + `responseSchema`, Groq's `response_format` — and
-zod-parse the result. Today a chatty reply defeats the scan and a heuristic
-score is written to the database as if the model had been consulted.
+pointless and the next provider is the right move. **Done (2026-09-06):**
+`generateText` returns `{ ok: true, text, provider }` or
+`{ ok: false, reason: 'not_configured' | 'rate_limited' | 'error' }`, every
+action carries the reason as `degraded`, and lead scoring goes through
+`generateJson` — Gemini `responseMimeType` + `responseJsonSchema`, Groq JSON
+mode — with the whole reply parsed and zod-validated; an unusable reply is
+`malformed` and the chain moves on. The regex scan is gone.
 
 **Acceptance.** ✅ A test where Gemini returns 429 and Groq answers, asserting the
 Groq text is used — it failed against the old code (`provider.test.ts`,
-"generateText failover"). Still to do: a test that a
-non-JSON reply is rejected rather than silently heuristic-scored, and a UI that
-can distinguish "no key configured" from "provider failing" — it cannot yet; the
-Settings card now at least names the fallback, but a live failure still renders
-the rule-based label.
+"generateText failover"). ✅ A chatty reply that merely contains JSON is rejected
+and the action reports `degraded: "malformed"` (`ai.test.ts`, failed against the
+regex scan). ✅ The panel label names the reason, so "no key configured" and
+"provider failing" read differently.
 
 **Risk.** Low. Both free tiers stay free; retries must not multiply the daily
 quota, so cap at one.
@@ -447,9 +447,9 @@ a test distinguish degradation from a wrong answer).
 **Scope.** A note beginning `</record>` closes the block early, putting attacker
 text at the same nesting level as the real task — use a per-request random nonce
 in the tag name so the delimiter is unforgeable, and strip stray delimiters from
-interpolated fields. Then instrumentation: record provider, latency and the
-token counts both APIs already return in the audit metadata, so an expired key
-is distinguishable from "never configured" from the outside.
+interpolated fields. Then instrumentation: record latency and the token counts
+both APIs already return in the audit metadata (the provider and the reason a
+rule ran are already there since W10).
 
 Also restate the accepted-risk paragraph in `SAAS-READINESS.md` §3. Its
 precondition — "the content is the user's own, with no other user's data in the
@@ -962,7 +962,7 @@ makes a claim true.
 |---|---|---|---|
 | 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | ✅ Shipped. The flagship feature rendered as twelve em-dashes on the page a reviewer opens second; nothing else in this document changed so much for so little. |
 | 2 | **W2 — `PRAGMA foreign_keys` on production** | 0.5 | One query. If the answer is 0, it changes what you believe about every delete path in the app, and you would rather know before spending the other nine hours. |
-| 3 | **W10 — provider fallback chain + structured output** | 2.0 | Failover half ✅ shipped: an exhausted Gemini free tier now hands off to Groq. Still open: a chatty reply defeats the JSON scan so a heuristic score is written as if the model had answered — *observable in the demo*. |
+| 3 | **W10 — provider fallback chain + structured output** | 2.0 | ✅ Shipped in full: failover, a discriminated result with the reason carried to the panel and the audit log, and native JSON requests validated with zod. |
 | 4 | **W12 — minimal eval harness in CI** | 3.0 | The single highest-signal artifact for the stated goal. 10 fixtures with property assertions plus three injection payloads, running with no API key so it costs nothing and runs on every PR. The parrot test stops being a paragraph and becomes a test that goes red. |
 | 5 | **W6 — `isOverdueDateOnly()` + fixed-clock tests** | 1.0 | ✅ Shipped. Was a wrong number a human acts on, in the UI: "due Aug 22" rendered in red on Aug 21. The 24-hour test is a good interview story about why the formatter passing was not enough. |
 | 6 | **W3 — ~~atomic migrations~~ interrupted-migration detection + tests** | 1.5 | ✅ Shipped, though not as a transaction — see W3 for why that cannot work. This bug class already broke production once; it was the cheapest insurance in the document. |

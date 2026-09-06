@@ -62,8 +62,10 @@ script/connect sources — AI providers are called **server-side only**),
   gets embedded in prompts. They are fenced inside `<record>` tags and the
   system prompt instructs the model to treat that content strictly as data.
   Outputs are rendered as plain text (never HTML/markdown-executed).
-- **Score integrity**: model responses must parse as JSON with a 0–100
-  integer or they're discarded in favor of the deterministic heuristic.
+- **Score integrity**: model responses are requested as JSON and must parse
+  whole with a numeric 0–100 score (rounded to an integer) and a string reason,
+  or they're discarded in favor of the deterministic heuristic, with the reason
+  recorded in the audit entry.
 - **Quota abuse**: per-user hourly rate limit on all AI actions; per-user per-minute
   limit on global search, whose results are capped at five per record type so a
   query can never pull a whole table.
