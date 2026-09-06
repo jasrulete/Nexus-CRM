@@ -1282,6 +1282,15 @@ and the demo seed run against a real migrations-built SQLite through
 [`src/test/action-harness.ts`](../src/test/action-harness.ts) — which fakes only the database
 handle, the session, `revalidatePath` and `redirect`.
 
+**AI evaluation harness — vitest, `npm run eval`, 45 checks.** `src/eval/ai.eval.test.ts`
+runs the 13 fixture contacts in `src/eval/fixtures/contacts.json` (three of them adversarial:
+`fence-escape`, `parrot`, `operator-impersonation`) through the real score / summarise /
+draft actions on the same migrations-built SQLite, with the provider chain real and the keys
+blank, so the heuristic path, the fence and the parsing are exercised at zero cost. It
+records every prompt the chain was asked and asserts the fence on it. `EVAL_LIVE=1` calls the
+real providers; `.github/workflows/eval-live.yml` does that nightly behind `EVAL_GEMINI_API_KEY`
+/ `EVAL_GROQ_API_KEY` and never gates a merge.
+
 One config detail is load-bearing.
 [`vitest.config.ts`](../vitest.config.ts) aliases the `server-only` package to a local stub:
 
@@ -1607,6 +1616,7 @@ Every script from [`package.json`](../package.json):
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
 | `test` | `vitest run` | The 331 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 44 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
+| `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI runs it keyless on every PR, `eval-live.yml` nightly. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
 | `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |
 | `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the MEMBER demo account. Touches nothing else. | Once, when you want the member view available. |

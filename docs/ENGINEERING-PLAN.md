@@ -433,8 +433,13 @@ path and the parsing, and cost nothing). Live provider runs go nightly behind a
 flag, reusing the scheduling pattern already proven by
 `.github/workflows/reset-demo.yml`.
 
-**Acceptance.** `npm run eval` exists and is wired into `ci.yml`. Each injection
-payload has a named test. A regression in the fencing turns CI red.
+**Acceptance.** ✅ Shipped 2026-09-07 (`docs/superpowers/specs/2026-09-07-ai-eval-harness-design.md`):
+`npm run eval` runs `src/eval/ai.eval.test.ts` over `src/eval/fixtures/contacts.json`
+(13 fixtures, 3 adversarial) and is a CI step; each injection payload has a named
+test; the harness records the prompts the real chain was asked and asserts the
+fence on them, so neutering `fence()` fails it (proven by mutation, 2 harness
+tests and 8 `prompt.test.ts` tests go red). `eval-live.yml` runs the same file
+nightly against the real providers behind separate `EVAL_*` secrets.
 
 **Risk.** Low technically; the risk is scope creep into a general eval
 framework. Keep it a directory of fixtures and a vitest file.
@@ -963,7 +968,7 @@ makes a claim true.
 | 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | ✅ Shipped. The flagship feature rendered as twelve em-dashes on the page a reviewer opens second; nothing else in this document changed so much for so little. |
 | 2 | **W2 — `PRAGMA foreign_keys` on production** | 0.5 | One query. If the answer is 0, it changes what you believe about every delete path in the app, and you would rather know before spending the other nine hours. |
 | 3 | **W10 — provider fallback chain + structured output** | 2.0 | ✅ Shipped in full: failover, a discriminated result with the reason carried to the panel and the audit log, and native JSON requests validated with zod. |
-| 4 | **W12 — minimal eval harness in CI** | 3.0 | The single highest-signal artifact for the stated goal. 10 fixtures with property assertions plus three injection payloads, running with no API key so it costs nothing and runs on every PR. The parrot test stops being a paragraph and becomes a test that goes red. |
+| 4 | **W12 — minimal eval harness in CI** | 3.0 | ✅ Shipped: 13 fixtures with property assertions plus three named injection payloads, keyless on every PR, live nightly behind its own secrets. The parrot test is a test now (known-open live until W13). |
 | 5 | **W6 — `isOverdueDateOnly()` + fixed-clock tests** | 1.0 | ✅ Shipped. Was a wrong number a human acts on, in the UI: "due Aug 22" rendered in red on Aug 21. The 24-hour test is a good interview story about why the formatter passing was not enough. |
 | 6 | **W3 — ~~atomic migrations~~ interrupted-migration detection + tests** | 1.5 | ✅ Shipped, though not as a transaction — see W3 for why that cannot work. This bug class already broke production once; it was the cheapest insurance in the document. |
 | 7 | **W23 (partial) — Mermaid architecture diagram + decision log pointer** | 1.5 | Converts nine hours of engineering into something a reviewer can absorb in two minutes. Check `docs/` first — if a companion document already covers the decisions, spend this hour and a half on **W7** (deal-ordering transactions) instead. |

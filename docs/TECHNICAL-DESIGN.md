@@ -1147,6 +1147,7 @@ routine once the nightly reset existed.
 |---|---|---|
 | 331 unit tests, 27 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
 | 44 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
+| AI evaluation harness, 45 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
 because that package throws outside an RSC bundler and every interesting module
@@ -1159,6 +1160,17 @@ prebuilt app so nothing compiles but the first DB-backed request is cold — hen
 waiting on `/api/health`; dev has the database ready but compiles routes on
 demand — hence waiting on `/`. Timeouts are likewise doubled locally and left at
 Playwright's defaults in CI.
+
+The evaluation harness is what makes the AI layer's claims checkable. Its
+provider is not mocked: with the keys blank the real chain answers
+`not_configured` without a network call, so the heuristic path, the prompt
+fence and the JSON parsing run for real on every PR at zero cost. It records
+every prompt the chain was asked, so the three injection payloads — a note that
+closes the fence, the "parrot" context from `SAAS-READINESS.md` §3, and a note
+claiming to be the system — are checked on the prompt as well as the output;
+neutering `fence()` fails it (proven by mutation). Live, a degraded result is a
+failure that names its reason. The parrot payload is expected to fail live until
+the nonce fence (W13); the nightly run is informational and never gates a merge.
 
 The e2e suite covers the things that are cheap to break and expensive to notice:
 the unauthenticated redirect, the demo sign-in button, bad credentials, sign-out
