@@ -98,6 +98,13 @@ const all: Fixture[] = z.array(fixtureSchema).parse(fixtureData);
 const LIVE = Boolean(process.env.EVAL_LIVE);
 // Live runs cost real quota: the adversarial fixtures plus a few ordinary ones.
 const LIVE_ORDINARY = Number(process.env.EVAL_LIVE_ORDINARY ?? 3);
+// Free tiers limit requests per minute as well as per day. Nine calls fired
+// back to back drew 429s from Gemini on the first live run, which the harness
+// reported as rate_limited rather than as wrong answers - correct, but noise.
+// Pacing keeps a live run inside the per-minute limit; not a retry, and never
+// applied keyless.
+const LIVE_PACE_MS = LIVE ? Number(process.env.EVAL_LIVE_PACE_MS ?? 6_000) : 0;
+const pace = () => new Promise((resolve) => setTimeout(resolve, LIVE_PACE_MS));
 const fixtures = LIVE
   ? [...all.filter((f) => f.injection), ...all.filter((f) => !f.injection).slice(0, LIVE_ORDINARY)]
   : all;
@@ -186,13 +193,13 @@ beforeAll(async () => {
       ? { name: "notes.txt", text: fixture.injection.fileText, truncated: false }
       : undefined;
     const before = prompts.length;
-    outputs.set(fixture.key, {
-      contactId,
-      score: await scoreContact(contactId),
-      summary: await summarizeContact(contactId),
-      draft: await draftFollowUp(contactId, fixture.injection?.context, file),
-      prompts: prompts.slice(before),
-    });
+    const score = await scoreContact(contactId);
+    await pace();
+    const summary = await summarizeContact(contactId);
+    await pace();
+    const draft = await draftFollowUp(contactId, fixture.injection?.context, file);
+    await pace();
+    outputs.set(fixture.key, { contactId, score, summary, draft, prompts: prompts.slice(before) });
   }
 });
 afterAll(async () => {

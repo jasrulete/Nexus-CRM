@@ -24,6 +24,8 @@ export default defineConfig({
     // A live call is bounded at 30 s per provider and a fixture makes three;
     // the heuristic path finishes in milliseconds.
     testTimeout: live ? 180_000 : 30_000,
-    hookTimeout: 60_000,
+    // All fixtures are seeded and run in one beforeAll. Live, that is up to six
+    // fixtures times three paced calls of up to 30 s each.
+    hookTimeout: live ? 900_000 : 60_000,
   },
 });
