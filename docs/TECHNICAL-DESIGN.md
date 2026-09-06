@@ -770,17 +770,18 @@ or — for scoring specifically — the model's reply failed validation. Each
 action reports which one as `degraded` (`not_configured`, `rate_limited`,
 `error` or `malformed`) on its result and in its audit entry, so the panel
 label and the audit trail can tell absence from degradation.
-`scoreContact` only accepts the model's number if `extractJson` finds an object
-with a numeric `score` in `[0, 100]` and a string `reason`; otherwise it falls
-through to the heuristic. The reason is written into `Contact.aiScoreReason` and
-shown next to the score, and heuristic reasons are prefixed *"Rule-based score:"*
-so the UI never passes off a rule for a model.
-
-Two honest weaknesses in that validation path: `extractJson` uses a greedy
-`/\{[\s\S]*\}/` scan, which a chatty reply can defeat — and when it does, a
-heuristic score is written to the database as if the model had been consulted.
-Neither provider is asked for structured output (`responseSchema` /
-`response_format`) even though both support it.
+`scoreContact` asks for JSON natively through `generateJson` — Gemini with
+`responseMimeType: "application/json"` and `responseJsonSchema`, Groq with
+`response_format: { type: "json_object" }` (JSON mode; the Llama model there
+does not support Groq's schema mode) — parses the whole reply, and validates it
+with a zod schema that rounds a fractional score and cuts a long reason. A reply
+that fails is `malformed`: the next provider is tried, and if none answers
+usably the action falls through to the heuristic with `degraded: "malformed"`.
+A model that chats around its answer is therefore never scored, where the old
+greedy `/\{[\s\S]*\}/` scan would have pulled a number out of the prose. The
+reason is written into `Contact.aiScoreReason` and shown next to the score, and
+heuristic reasons are prefixed *"Rule-based score:"* so the UI never passes off a
+rule for a model.
 
 ### The provider chain
 

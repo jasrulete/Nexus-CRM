@@ -9,9 +9,10 @@ import {
   heuristicLeadScore,
   heuristicSummary,
 } from "@/lib/ai/heuristics";
+import { z } from "zod";
 import {
   aiProviderName,
-  extractJson,
+  generateJson,
   generateText,
   type AiDegradedReason,
 } from "@/lib/ai/provider";
@@ -41,6 +42,24 @@ export type AiActionResult = {
 };
 
 const OPEN_STAGES = ["LEAD", "QUALIFIED", "PROPOSAL", "NEGOTIATION"];
+
+// What a lead-score reply must look like. The reply is requested as JSON and
+// parsed whole; a model that chats around its answer is not scored. Tolerant
+// where it costs nothing: a fractional score is rounded and a long reason cut.
+const leadScoreReply = {
+  schema: z.object({
+    score: z.number().min(0).max(100).transform(Math.round),
+    reason: z.string().transform((r) => r.slice(0, 500)),
+  }),
+  jsonSchema: {
+    type: "object",
+    properties: {
+      score: { type: "integer", minimum: 0, maximum: 100 },
+      reason: { type: "string" },
+    },
+    required: ["score", "reason"],
+  },
+};
 
 function aiRateLimited(userId: string) {
   // Protects free-tier API quotas: 30 AI calls per user per hour.
@@ -128,30 +147,21 @@ export async function scoreContact(contactId: string): Promise<AiActionResult> {
   let provider = "heuristic";
   let degraded: AiDegradedReason | undefined;
 
-  const ai = await generateText(
+  const ai = await generateJson(
     `${recordBlock(contact)}
 
 Score this contact as a sales lead from 0 (cold) to 100 (hot).
 Consider seniority, engagement recency, open pipeline, and fit signals in the notes.
 Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one sentence>"}`,
+    leadScoreReply,
   );
 
-  const parsed = ai.ok ? extractJson<{ score: number; reason: string }>(ai.text) : null;
-
-  if (
-    parsed &&
-    typeof parsed.score === "number" &&
-    parsed.score >= 0 &&
-    parsed.score <= 100 &&
-    typeof parsed.reason === "string"
-  ) {
-    score = Math.round(parsed.score);
-    reason = parsed.reason.slice(0, 500);
-    provider = ai.ok ? ai.provider : provider;
+  if (ai.ok) {
+    score = ai.data.score;
+    reason = ai.data.reason;
+    provider = ai.provider;
   } else {
-    // A reply that came back but could not be used is its own reason: the
-    // provider was reachable, the model just did not answer the question.
-    degraded = ai.ok ? "malformed" : ai.reason;
+    degraded = ai.reason;
     const h = heuristicLeadScore({
       status: contact.status,
       hasEmail: !!contact.email,

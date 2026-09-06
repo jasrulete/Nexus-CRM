@@ -32,17 +32,34 @@ const model = vi.hoisted(() => ({
   reply: null as { text: string; provider: string } | null,
   // Why the model gave no reply: what the provider layer reports when every
   // configured provider failed, or when none is configured at all.
-  failure: "not_configured" as "not_configured" | "rate_limited" | "error",
+  failure: "not_configured" as "not_configured" | "rate_limited" | "error" | "malformed",
   prompts: [] as string[],
 }));
 vi.mock("@/lib/ai/provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/provider")>();
   return {
-    ...actual, // extractJson is pure and worth exercising for real
+    ...actual,
     aiProviderName: () => (model.reply ? model.reply.provider.split("/")[0] : null),
     generateText: async (prompt: string) => {
       model.prompts.push(prompt);
       return model.reply ? { ok: true, ...model.reply } : { ok: false, reason: model.failure };
+    },
+    // Only the transport is faked: the reply text goes through the same
+    // whole-reply parse and schema the real provider applies, so a test can
+    // hand the model a prose answer and see what the action does with it.
+    generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } } }) => {
+      model.prompts.push(prompt);
+      if (!model.reply) return { ok: false, reason: model.failure };
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(model.reply.text);
+      } catch {
+        return { ok: false, reason: "malformed" };
+      }
+      const checked = request.schema.safeParse(parsed);
+      return checked.success
+        ? { ok: true, data: checked.data, provider: model.reply.provider }
+        : { ok: false, reason: "malformed" };
     },
   };
 });
@@ -205,6 +222,22 @@ describe("scoreContact", () => {
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScore).toBeLessThanOrEqual(100);
+  });
+
+  // The old regex scan pulled the first {...} out of prose, so a model that
+  // chatted around its answer was scored as if it had answered cleanly. A
+  // JSON request is answered with JSON or not at all.
+  it("rejects a chatty reply that merely contains JSON", async () => {
+    model.reply = {
+      text: 'Sure! Here is my assessment: {"score": 82, "reason": "hot"} — hope this helps.',
+      provider: "gemini/test",
+    };
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toMatchObject({ provider: "heuristic", degraded: "malformed" });
+    const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
+    expect(after.aiScore).not.toBe(82);
   });
 
   it("rounds a fractional score and truncates a long reason", async () => {

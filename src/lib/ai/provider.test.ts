@@ -1,33 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { aiProviderName, extractJson, generateText } from "./provider";
-
-describe("extractJson", () => {
-  it("parses a clean JSON object", () => {
-    expect(extractJson('{"score": 82, "reason": "strong pipeline"}')).toEqual({
-      score: 82,
-      reason: "strong pipeline",
-    });
-  });
-
-  it("parses JSON wrapped in a markdown code fence", () => {
-    const reply = '```json\n{"score": 55, "reason": "ok"}\n```';
-    expect(extractJson(reply)).toEqual({ score: 55, reason: "ok" });
-  });
-
-  it("parses JSON buried in prose, including nested objects", () => {
-    const reply =
-      'Sure! Here is the result: {"summary": {"deals": 2}, "score": 70} — hope that helps.';
-    expect(extractJson(reply)).toEqual({ summary: { deals: 2 }, score: 70 });
-  });
-
-  it("returns null for malformed JSON", () => {
-    expect(extractJson("{score: not-valid}")).toBeNull();
-  });
-
-  it("returns null when there is no JSON object at all", () => {
-    expect(extractJson("I could not produce a score.")).toBeNull();
-  });
-});
+import { z } from "zod";
+import { aiProviderName, generateJson, generateText } from "./provider";
 
 describe("aiProviderName", () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -228,5 +201,150 @@ describe("generateText failover", () => {
 
     await expect(generateText("prompt")).resolves.toMatchObject({ ok: true, text: "from gemini" });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Lead scoring used to pull the first {...} out of whatever the model said with
+// a regex. Both vendors can be asked for JSON natively; the reply is then
+// parsed whole and validated, and a reply that fails is a reason of its own.
+describe("generateJson", () => {
+  const GEMINI_HOST = "generativelanguage.googleapis.com";
+  const schema = z.object({
+    score: z.number().min(0).max(100).transform(Math.round),
+    reason: z.string().transform((r) => r.slice(0, 500)),
+  });
+  const jsonSchema = {
+    type: "object",
+    properties: {
+      score: { type: "integer", minimum: 0, maximum: 100 },
+      reason: { type: "string" },
+    },
+    required: ["score", "reason"],
+  };
+  const request = { schema, jsonSchema };
+
+  function json(body: unknown) {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const geminiReply = (text: string) =>
+    json({ candidates: [{ content: { parts: [{ text }] } }] });
+  const groqReply = (text: string) => json({ choices: [{ message: { content: text } }] });
+  type Answer = () => Response | Promise<Response>;
+  function routeFetch(handlers: { gemini: Answer; groq: Answer }) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return new URL(url).hostname === GEMINI_HOST ? handlers.gemini() : handlers.groq();
+    });
+  }
+  function body(call: unknown[]): Record<string, unknown> {
+    return JSON.parse(String((call[1] as RequestInit).body)) as Record<string, unknown>;
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "gemini-key");
+    vi.stubEnv("GROQ_API_KEY", "groq-key");
+    vi.stubEnv("AI_MODEL", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("asks gemini for JSON natively, with the schema", async () => {
+    const fetchSpy = routeFetch({
+      gemini: () => geminiReply('{"score": 82, "reason": "strong pipeline"}'),
+      groq: () => groqReply("unused"),
+    });
+
+    await generateJson("prompt", request);
+
+    const sent = body(fetchSpy.mock.calls[0]).generationConfig as Record<string, unknown>;
+    expect(sent.responseMimeType).toBe("application/json");
+    expect(sent.responseJsonSchema).toEqual(jsonSchema);
+  });
+
+  it("asks groq for JSON mode", async () => {
+    const fetchSpy = routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () => groqReply('{"score": 82, "reason": "strong pipeline"}'),
+    });
+
+    await generateJson("prompt", request);
+
+    const groqCall = fetchSpy.mock.calls[1];
+    expect(body(groqCall).response_format).toEqual({ type: "json_object" });
+  });
+
+  it("parses and validates the reply, applying the schema transforms", async () => {
+    routeFetch({
+      gemini: () => geminiReply('{"score": 71.6, "reason": "' + "x".repeat(900) + '"}'),
+      groq: () => groqReply("unused"),
+    });
+
+    const result = await generateJson("prompt", request);
+
+    expect(result).toMatchObject({ ok: true, provider: "gemini/gemini-flash-latest" });
+    if (result.ok) {
+      expect(result.data.score).toBe(72);
+      expect(result.data.reason).toHaveLength(500);
+    }
+  });
+
+  it.each([
+    ["prose with no JSON at all", "I could not score this contact."],
+    ["a score above the range", '{"score": 250, "reason": "very hot"}'],
+    ["a non-numeric score", '{"score": "eighty", "reason": "hot"}'],
+    ["a missing reason", '{"score": 80}'],
+  ])("moves to the next provider on %s and reports malformed when every reply was", async (_label, text) => {
+    const fetchSpy = routeFetch({
+      gemini: () => geminiReply(text),
+      groq: () => groqReply(text),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: "malformed",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the next provider when the first reply was malformed", async () => {
+    routeFetch({
+      gemini: () => geminiReply("Sure! I would rate this contact highly."),
+      groq: () => groqReply('{"score": 64, "reason": "steady engagement"}'),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toMatchObject({
+      ok: true,
+      data: { score: 64, reason: "steady engagement" },
+      provider: "groq/llama-3.3-70b-versatile",
+    });
+  });
+
+  it("still distinguishes an all-429 chain from a malformed one", async () => {
+    routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () => new Response("rate limited", { status: 429 }),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: "rate_limited",
+    });
+  });
+
+  it("reports not_configured with no key", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "");
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: "not_configured",
+    });
   });
 });
