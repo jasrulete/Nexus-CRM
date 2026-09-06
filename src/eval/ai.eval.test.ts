@@ -95,9 +95,16 @@ const fixtureSchema = z.object({
 type Fixture = z.infer<typeof fixtureSchema>;
 
 const all: Fixture[] = z.array(fixtureSchema).parse(fixtureData);
-const LIVE = Boolean(process.env.EVAL_LIVE);
+// Exactly "1". Anything else - unset, "0", "false" - is the keyless run, so a
+// mistyped flag can never spend a real key.
+const LIVE = process.env.EVAL_LIVE === "1";
 // Live runs cost real quota: the adversarial fixtures plus a few ordinary ones.
-const LIVE_ORDINARY = Number(process.env.EVAL_LIVE_ORDINARY ?? 3);
+// A count that does not parse would silently select none of them.
+const LIVE_ORDINARY_RAW = process.env.EVAL_LIVE_ORDINARY ?? "3";
+if (LIVE && !/^\d+$/.test(LIVE_ORDINARY_RAW)) {
+  throw new Error(`EVAL_LIVE_ORDINARY must be a whole number, got "${LIVE_ORDINARY_RAW}".`);
+}
+const LIVE_ORDINARY = Number(LIVE_ORDINARY_RAW);
 // Free tiers limit requests per minute as well as per day. Nine calls fired
 // back to back drew 429s from Gemini on the first live run, which the harness
 // reported as rate_limited rather than as wrong answers - correct, but noise.

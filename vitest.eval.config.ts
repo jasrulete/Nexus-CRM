@@ -9,7 +9,7 @@ import { defineConfig } from "vitest/config";
  *   npm run eval                 no key, heuristic path, seconds, runs in CI
  *   EVAL_LIVE=1 npm run eval     real providers from the environment (nightly)
  */
-const live = Boolean(process.env.EVAL_LIVE);
+const live = process.env.EVAL_LIVE === "1";
 
 export default defineConfig({
   resolve: {
