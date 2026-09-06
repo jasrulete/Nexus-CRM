@@ -59,19 +59,21 @@ describe("generateText", () => {
 
   // A provider that never answers is the likeliest production failure, and it
   // has to reach the heuristic fallback rather than the page error boundary.
+  // The result says *why* it failed: the panel used to label "no key" and
+  // "every provider down" with the same words.
   it.each([
     ["a request timeout", Object.assign(new Error("timed out"), { name: "TimeoutError" })],
     ["a network error", new TypeError("fetch failed")],
-  ])("returns null when the provider fails with %s", async (_label, error) => {
+  ])("reports an error when the provider fails with %s", async (_label, error) => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubEnv("GEMINI_API_KEY", "test-key");
     vi.stubEnv("GROQ_API_KEY", "");
     vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
 
-    await expect(generateText("prompt")).resolves.toBeNull();
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
   });
 
-  it("returns null rather than throwing when the provider answers with an error status", async () => {
+  it("reports a rate limit rather than throwing when the provider answers 429", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("GROQ_API_KEY", "test-key");
@@ -79,15 +81,24 @@ describe("generateText", () => {
       new Response("rate limited", { status: 429 }),
     );
 
-    await expect(generateText("prompt")).resolves.toBeNull();
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited" });
   });
 
-  it("returns null without calling out when no key is configured", async () => {
+  it("reports an error, not a rate limit, on a non-429 error status", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "test-key");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
+
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+  });
+
+  it("reports not_configured without calling out when no key is set", async () => {
     vi.stubEnv("GEMINI_API_KEY", "");
     vi.stubEnv("GROQ_API_KEY", "");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    await expect(generateText("prompt")).resolves.toBeNull();
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "not_configured" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
@@ -145,6 +156,7 @@ describe("generateText failover", () => {
     });
 
     await expect(generateText("prompt")).resolves.toEqual({
+      ok: true,
       text: "from groq",
       provider: `groq/${GROQ_DEFAULT_MODEL}`,
     });
@@ -157,7 +169,7 @@ describe("generateText failover", () => {
       groq: () => groqReply("from groq"),
     });
 
-    await expect(generateText("prompt")).resolves.toMatchObject({ text: "from groq" });
+    await expect(generateText("prompt")).resolves.toMatchObject({ ok: true, text: "from groq" });
   });
 
   it("tries groq when gemini answers OK but with no text", async () => {
@@ -167,17 +179,28 @@ describe("generateText failover", () => {
       groq: () => groqReply("from groq"),
     });
 
-    await expect(generateText("prompt")).resolves.toMatchObject({ text: "from groq" });
+    await expect(generateText("prompt")).resolves.toMatchObject({ ok: true, text: "from groq" });
   });
 
-  it("returns null only after every configured provider has failed", async () => {
+  it("reports rate_limited only after every configured provider was rate-limited", async () => {
     const fetchSpy = routeFetch({
       gemini: () => new Response("quota exceeded", { status: 429 }),
       groq: () => new Response("rate limited", { status: 429 }),
     });
 
-    await expect(generateText("prompt")).resolves.toBeNull();
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited" });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  // A quota on one provider and an outage on the other is degradation, not a
+  // rate limit: the label should not tell the user to wait for a quota reset.
+  it("reports error when the failures were mixed", async () => {
+    routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () => new Response("boom", { status: 500 }),
+    });
+
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
   });
 
   // AI_MODEL is one variable shared by both providers. A Gemini model name sent
@@ -203,7 +226,7 @@ describe("generateText failover", () => {
       groq: () => groqReply("from groq"),
     });
 
-    await expect(generateText("prompt")).resolves.toMatchObject({ text: "from gemini" });
+    await expect(generateText("prompt")).resolves.toMatchObject({ ok: true, text: "from gemini" });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

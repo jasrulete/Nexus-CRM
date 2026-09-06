@@ -30,6 +30,9 @@ vi.mock("@/lib/auth/session", () => ({
 // The model. Tests drive its answers directly; nothing here reaches a network.
 const model = vi.hoisted(() => ({
   reply: null as { text: string; provider: string } | null,
+  // Why the model gave no reply: what the provider layer reports when every
+  // configured provider failed, or when none is configured at all.
+  failure: "not_configured" as "not_configured" | "rate_limited" | "error",
   prompts: [] as string[],
 }));
 vi.mock("@/lib/ai/provider", async (importOriginal) => {
@@ -39,7 +42,7 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     aiProviderName: () => (model.reply ? model.reply.provider.split("/")[0] : null),
     generateText: async (prompt: string) => {
       model.prompts.push(prompt);
-      return model.reply;
+      return model.reply ? { ok: true, ...model.reply } : { ok: false, reason: model.failure };
     },
   };
 });
@@ -121,6 +124,7 @@ beforeEach(async () => {
   });
 
   model.reply = null;
+  model.failure = "not_configured";
   model.prompts = [];
   mail.configured = false;
   mail.sent = [];
@@ -161,11 +165,26 @@ describe("scoreContact", () => {
 
     expect(result.ok).toBe(true);
     expect(result.provider).toBe("heuristic");
+    // The panel used to say "AI provider unavailable" here, which is untrue
+    // when there is simply no key; the reason lets it say the right thing.
+    expect(result.degraded).toBe("not_configured");
     // Still persisted: the feature works with no API key at all, which is the
     // whole point of the fallback.
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScoreReason).toMatch(/rule-based/i);
+  });
+
+  it("says when it fell back because every provider was rate-limited", async () => {
+    model.reply = null;
+    model.failure = "rate_limited";
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "rate_limited" });
+    // The audit trail is where a quiet degradation is noticed the next day.
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.score_contact" } });
+    expect(entry.metadata).toContain("rate_limited");
   });
 
   it.each([
@@ -182,6 +201,7 @@ describe("scoreContact", () => {
     // The important half: a malformed reply must not reach the database as a
     // score, and must not be reported as if the model had produced it.
     expect(result.provider).toBe("heuristic");
+    expect(result.degraded).toBe("malformed");
     const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
     expect(after.aiScore).toBeGreaterThanOrEqual(0);
     expect(after.aiScore).toBeLessThanOrEqual(100);
@@ -316,6 +336,37 @@ describe("the prompt sent to the model", () => {
 });
 
 // ---------------------------------------------------------------- sending
+
+describe("heuristic summaries and drafts", () => {
+  it("labels a heuristic summary with the provider failure", async () => {
+    model.reply = null;
+    model.failure = "error";
+
+    const result = await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+  });
+
+  it("labels a heuristic draft with the provider failure", async () => {
+    model.reply = null;
+    model.failure = "rate_limited";
+
+    const result = await draftFollowUp(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "rate_limited" });
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.draft_email" } });
+    expect(entry.metadata).toContain("rate_limited");
+  });
+
+  it("carries no degraded reason when the model answered", async () => {
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+
+    const result = await summarizeContact(contactId);
+
+    expect(result.ok).toBe(true);
+    expect(result.degraded).toBeUndefined();
+  });
+});
 
 describe("sendFollowUp", () => {
   const draft = "Subject: Following up\n\nGood speaking today.";

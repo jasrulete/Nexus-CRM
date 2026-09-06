@@ -1041,7 +1041,7 @@ features without any model:
 
 **When it fires.** Three distinct situations, which is the part to be precise about:
 
-1. **No key configured.** `generateText` returns `null` immediately.
+1. **No key configured.** `generateText` returns `{ ok: false, reason: "not_configured" }` immediately.
 2. **The provider answered with an error.** `!res.ok` → logged → `null`.
 3. **The request never completed** — timeout, DNS failure, connection reset. This one is the
    fix on this branch, and it is worth understanding why it was a real bug: `!res.ok` only
@@ -1485,7 +1485,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 
 | Term | Where | What it means |
 |---|---|---|
-| `generateText(prompt)` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | The single entry point to the LLM. Returns `{ text, provider }` or `null`. `null` means "fall back to heuristics" and covers no key, an error response, and a rejected fetch. Wraps everything in try/catch and reports to Sentry with `tags: { subsystem: "ai-provider" }`. |
+| `generateText(prompt)` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | The single entry point to the LLM for free text. Returns `{ ok: true, text, provider }` or `{ ok: false, reason }` with `reason` one of `not_configured`, `rate_limited` (every attempt was a 429) or `error`. Callers fall back to heuristics on `ok: false` and pass the reason on as `degraded`. Wraps everything in try/catch and reports to Sentry with `tags: { subsystem: "ai-provider" }`. |
 | `aiProviderName()` | same file | Returns `"gemini"`, `"groq"` or `null` by inspecting env vars. Used by `/settings` to show which provider is live and by `currentAiProvider()`. |
 | `SYSTEM_PREAMBLE` | same file | The system instruction sent with every request, telling the model to treat `<record>` content strictly as data. |
 | `extractJson<T>(text)` | same file | Pulls the first `{…}` out of a reply that may be wrapped in prose or code fences, and `JSON.parse`s it. Returns `null` on failure. |

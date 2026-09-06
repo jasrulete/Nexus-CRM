@@ -9,7 +9,12 @@ import {
   heuristicLeadScore,
   heuristicSummary,
 } from "@/lib/ai/heuristics";
-import { aiProviderName, extractJson, generateText } from "@/lib/ai/provider";
+import {
+  aiProviderName,
+  extractJson,
+  generateText,
+  type AiDegradedReason,
+} from "@/lib/ai/provider";
 import { rateLimit } from "@/lib/rate-limit";
 import { aiContextSchema, aiDraftSchema, idSchema } from "@/lib/validation";
 import { emailConfigured, sendEmail, splitDraft } from "@/lib/email";
@@ -30,6 +35,8 @@ export type AiActionResult = {
   score?: number;
   reason?: string;
   provider: string;
+  /** Set when `provider` is "heuristic": why the model was not used. */
+  degraded?: AiDegradedReason;
   message?: string;
 };
 
@@ -119,6 +126,7 @@ export async function scoreContact(contactId: string): Promise<AiActionResult> {
   let score: number;
   let reason: string;
   let provider = "heuristic";
+  let degraded: AiDegradedReason | undefined;
 
   const ai = await generateText(
     `${recordBlock(contact)}
@@ -128,9 +136,7 @@ Consider seniority, engagement recency, open pipeline, and fit signals in the no
 Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one sentence>"}`,
   );
 
-  const parsed = ai
-    ? extractJson<{ score: number; reason: string }>(ai.text)
-    : null;
+  const parsed = ai.ok ? extractJson<{ score: number; reason: string }>(ai.text) : null;
 
   if (
     parsed &&
@@ -141,8 +147,11 @@ Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one senten
   ) {
     score = Math.round(parsed.score);
     reason = parsed.reason.slice(0, 500);
-    provider = ai!.provider;
+    provider = ai.ok ? ai.provider : provider;
   } else {
+    // A reply that came back but could not be used is its own reason: the
+    // provider was reachable, the model just did not answer the question.
+    degraded = ai.ok ? "malformed" : ai.reason;
     const h = heuristicLeadScore({
       status: contact.status,
       hasEmail: !!contact.email,
@@ -171,12 +180,12 @@ Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one senten
     entityType: "contact",
     entityId: contact.id,
     userId: user.id,
-    metadata: { score, provider },
+    metadata: { score, provider, ...(degraded && { degraded }) },
   });
 
   revalidatePath(`/contacts/${contact.id}`);
   revalidatePath("/contacts");
-  return { ok: true, score, reason, provider };
+  return { ok: true, score, reason, provider, ...(degraded && { degraded }) };
 }
 
 export async function draftFollowUp(
@@ -240,7 +249,7 @@ Subject: <subject line>
 <email body>`,
   );
 
-  if (ai) {
+  if (ai.ok) {
     await audit({
       action: "ai.draft_email",
       entityType: "contact",
@@ -263,9 +272,9 @@ Subject: <subject line>
     entityType: "contact",
     entityId: contact.id,
     userId: user.id,
-    metadata: { provider: "heuristic" },
+    metadata: { provider: "heuristic", degraded: ai.reason },
   });
-  return { ok: true, text, provider: "heuristic" };
+  return { ok: true, text, provider: "heuristic", degraded: ai.reason };
 }
 
 export async function summarizeContact(contactId: string): Promise<AiActionResult> {
@@ -285,7 +294,7 @@ current state, open pipeline, engagement trend, and the single best next step.
 Use 3-4 short bullet points.`,
   );
 
-  if (ai) {
+  if (ai.ok) {
     await audit({
       action: "ai.summarize_contact",
       entityType: "contact",
@@ -304,7 +313,7 @@ Use 3-4 short bullet points.`,
     openDeals,
     recentActivities: contact.activities,
   });
-  return { ok: true, text, provider: "heuristic" };
+  return { ok: true, text, provider: "heuristic", degraded: ai.reason };
 }
 
 /**

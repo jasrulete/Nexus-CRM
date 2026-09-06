@@ -7,13 +7,27 @@ import * as Sentry from "@sentry/nextjs";
  *  - GEMINI_API_KEY  → Google AI Studio free tier
  *  - GROQ_API_KEY    → Groq free tier (OpenAI-compatible API)
  *  - neither, or every one failed → callers fall back to deterministic heuristics
+ *
+ * A failure says why. "No key configured" and "every provider is down" both
+ * end in the heuristic, but they mean different things to the person reading
+ * the label, and the second one deserves a signal.
  */
 
-export type AiResult = { text: string; provider: string };
+export type AiFailureReason = "not_configured" | "rate_limited" | "error";
+export type AiFailure = { ok: false; reason: AiFailureReason };
+/** Why an action fell back to its heuristic: a provider failure, or a reply it could not use. */
+export type AiDegradedReason = AiFailureReason | "malformed";
+export type AiTextResult = { ok: true; text: string; provider: string } | AiFailure;
+
+/** One provider call. A thrown fetch error is caught by the caller. */
+type Attempt =
+  | { kind: "ok"; text: string; provider: string }
+  | { kind: "rate_limited" }
+  | { kind: "error" };
 
 type Provider = {
   name: string;
-  run: (prompt: string, modelOverride: string | undefined) => Promise<AiResult | null>;
+  run: (prompt: string, modelOverride: string | undefined) => Promise<Attempt>;
 };
 
 const SYSTEM_PREAMBLE = `You are the AI assistant inside a CRM. You will be given CRM record data (names, notes, activity logs) between <record> tags.
@@ -32,7 +46,7 @@ export function aiProviderName(): string | null {
   return configuredProviders()[0]?.name ?? null;
 }
 
-export async function generateText(prompt: string): Promise<AiResult | null> {
+export async function generateText(prompt: string): Promise<AiTextResult> {
   // Each provider is tried in turn, and any failure — an error status, an
   // empty reply, or a fetch that rejects (timeout, DNS, reset) — moves on to
   // the next. Gemini's free tier is quota-limited per day, so in production
@@ -44,10 +58,16 @@ export async function generateText(prompt: string): Promise<AiResult | null> {
   // providers, and a Gemini model name sent to Groq is a 404 that would turn
   // a working fallback into a second failure.
   const chain = configuredProviders();
+  if (chain.length === 0) return { ok: false, reason: "not_configured" };
+
+  const failures: Exclude<Attempt, { kind: "ok" }>["kind"][] = [];
   for (const [index, provider] of chain.entries()) {
     try {
-      const result = await provider.run(prompt, index === 0 ? process.env.AI_MODEL : undefined);
-      if (result) return result;
+      const attempt = await provider.run(prompt, index === 0 ? process.env.AI_MODEL : undefined);
+      if (attempt.kind === "ok") {
+        return { ok: true, text: attempt.text, provider: attempt.provider };
+      }
+      failures.push(attempt.kind);
     } catch (error) {
       // Catching here stops the rejection reaching `onRequestError`, which is
       // what used to report it — so report it explicitly, or an expired key
@@ -56,12 +76,22 @@ export async function generateText(prompt: string): Promise<AiResult | null> {
         tags: { subsystem: "ai-provider", provider: provider.name },
       });
       console.error(`${provider.name} request failed`, error);
+      failures.push("error");
     }
   }
-  return null;
+  // Only an all-429 chain is "rate limited": that label invites waiting for a
+  // quota reset, which is the wrong advice when a provider is actually down.
+  return {
+    ok: false,
+    reason: failures.every((kind) => kind === "rate_limited") ? "rate_limited" : "error",
+  };
 }
 
-async function gemini(prompt: string, modelOverride?: string): Promise<AiResult | null> {
+function classify(status: number): Attempt {
+  return status === 429 ? { kind: "rate_limited" } : { kind: "error" };
+}
+
+async function gemini(prompt: string, modelOverride?: string): Promise<Attempt> {
   // "-latest" is Google's rolling alias for the newest stable Flash model —
   // pinned snapshots (e.g. gemini-2.5-flash) get gated for new API keys.
   const model = modelOverride || "gemini-flash-latest";
@@ -83,7 +113,7 @@ async function gemini(prompt: string, modelOverride?: string): Promise<AiResult 
   );
   if (!res.ok) {
     console.error("gemini error", res.status, await res.text().catch(() => ""));
-    return null;
+    return classify(res.status);
   }
   const json = (await res.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -92,11 +122,14 @@ async function gemini(prompt: string, modelOverride?: string): Promise<AiResult 
     ?.map((p) => p.text ?? "")
     .join("")
     .trim();
-  if (!text) console.error("gemini returned no text");
-  return text ? { text, provider: `gemini/${model}` } : null;
+  if (!text) {
+    console.error("gemini returned no text");
+    return { kind: "error" };
+  }
+  return { kind: "ok", text, provider: `gemini/${model}` };
 }
 
-async function groq(prompt: string, modelOverride?: string): Promise<AiResult | null> {
+async function groq(prompt: string, modelOverride?: string): Promise<Attempt> {
   const model = modelOverride || "llama-3.3-70b-versatile";
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -117,14 +150,17 @@ async function groq(prompt: string, modelOverride?: string): Promise<AiResult | 
   });
   if (!res.ok) {
     console.error("groq error", res.status, await res.text().catch(() => ""));
-    return null;
+    return classify(res.status);
   }
   const json = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
   };
   const text = json.choices?.[0]?.message?.content?.trim();
-  if (!text) console.error("groq returned no text");
-  return text ? { text, provider: `groq/${model}` } : null;
+  if (!text) {
+    console.error("groq returned no text");
+    return { kind: "error" };
+  }
+  return { kind: "ok", text, provider: `groq/${model}` };
 }
 
 /** Extract a JSON object from an AI reply that may be wrapped in prose/fences. */

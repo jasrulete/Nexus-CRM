@@ -765,8 +765,11 @@ Three pure functions, no I/O, unit-tested, deterministic:
 open pipeline, engagement recency, churn), `heuristicEmailDraft`, and
 `heuristicSummary`.
 
-They run in three situations: no API key configured, the provider returned
-nothing, or — for scoring specifically — the model's reply failed validation.
+They run in three situations: no API key configured, every provider failed,
+or — for scoring specifically — the model's reply failed validation. Each
+action reports which one as `degraded` (`not_configured`, `rate_limited`,
+`error` or `malformed`) on its result and in its audit entry, so the panel
+label and the audit trail can tell absence from degradation.
 `scoreContact` only accepts the model's number if `extractJson` finds an object
 with a numeric `score` in `[0, 100]` and a string `reason`; otherwise it falls
 through to the heuristic. The reason is written into `Contact.aiScoreReason` and
@@ -785,7 +788,9 @@ Neither provider is asked for structured output (`responseSchema` /
 Groq — and moves to the next on any failure: an error status, a fetch that
 rejects (timeout, DNS, reset), or a `200` with no text, which is what a
 safety-filtered Gemini reply looks like. Only when every provider has failed
-does it return `null`, and the caller falls back to heuristics.
+does it return `{ ok: false, reason }` — `rate_limited` when every attempt was
+a 429, `error` otherwise, `not_configured` when there was nothing to try — and
+the caller falls back to heuristics.
 
 This matters because Gemini's free tier is quota-limited per day — 20 requests
 has been observed on this project — so its `429` is the *expected steady
