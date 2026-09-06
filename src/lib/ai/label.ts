@@ -7,7 +7,7 @@ import type { AiDegradedReason } from "./provider";
  * Type-only import above, so this stays importable from the client.
  */
 const DEGRADED_LABELS: Record<AiDegradedReason, string> = {
-  not_configured: "rule-based mode (no AI key configured)",
+  not_configured: "rule-based mode (no API key configured)",
   rate_limited: "rule-based fallback (AI provider rate-limited)",
   error: "rule-based fallback (AI provider error)",
   malformed: "rule-based fallback (AI reply was not usable)",

@@ -40,6 +40,9 @@ export function AiPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel>(null);
   const [result, setResult] = useState<AiActionResult | null>(null);
+  // The score itself renders from revalidated server data, so its provenance
+  // (which model, or why the rule ran) is kept from the action result instead.
+  const [scoredBy, setScoredBy] = useState<AiActionResult | null>(null);
   const [copied, setCopied] = useState(false);
   const [context, setContext] = useState("");
   const [showContext, setShowContext] = useState(false);
@@ -75,7 +78,10 @@ export function AiPanel({
         if (kind === "score") {
           const r = await scoreContact(contactId);
           if (!r.ok) setResult(r);
-          else setResult(null); // score renders from revalidated server data
+          else {
+            setResult(null); // score renders from revalidated server data
+            setScoredBy(r);
+          }
           setPanel(null);
         } else {
           const r =
@@ -130,6 +136,9 @@ export function AiPanel({
           ) : (
             <p className="mt-0.5 text-[12px] text-ink-faint">Not scored yet</p>
           )}
+          {scoredBy ? (
+            <p className="mt-1 text-[11px] text-ink-faint">Scored by {providerLabel(scoredBy)}</p>
+          ) : null}
         </div>
         <ScorePill score={score} />
       </div>

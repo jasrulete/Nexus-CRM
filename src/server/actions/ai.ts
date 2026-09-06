@@ -323,6 +323,15 @@ Use 3-4 short bullet points.`,
     openDeals,
     recentActivities: contact.activities,
   });
+  // Read-only, but a day of degraded summaries is still something the audit
+  // trail should show, the same as drafts.
+  await audit({
+    action: "ai.summarize_contact",
+    entityType: "contact",
+    entityId: contact.id,
+    userId: user.id,
+    metadata: { provider: "heuristic", degraded: ai.reason },
+  });
   return { ok: true, text, provider: "heuristic", degraded: ai.reason };
 }
 

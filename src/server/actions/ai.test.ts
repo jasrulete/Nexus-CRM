@@ -400,6 +400,10 @@ describe("heuristic summaries and drafts", () => {
     const result = await summarizeContact(contactId);
 
     expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    // Summaries are read-only, but a day of degraded ones is still something
+    // the audit trail should show, the same as drafts.
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.summarize_contact" } });
+    expect(entry.metadata).toContain("error");
   });
 
   it("labels a heuristic draft with the provider failure", async () => {

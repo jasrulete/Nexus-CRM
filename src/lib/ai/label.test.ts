@@ -13,7 +13,7 @@ describe("providerLabel", () => {
 
   it("says no key is configured, not that a provider is down", () => {
     expect(providerLabel({ provider: "heuristic", degraded: "not_configured" })).toBe(
-      "rule-based mode (no AI key configured)",
+      "rule-based mode (no API key configured)",
     );
   });
 

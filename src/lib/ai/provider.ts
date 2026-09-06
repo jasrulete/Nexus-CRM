@@ -36,8 +36,9 @@ export type AiJsonRequest<T> = {
 type Attempt =
   | { kind: "ok"; text: string; provider: string }
   | { kind: "rate_limited" }
-  | { kind: "error" };
-type FailureKind = Exclude<Attempt, { kind: "ok" }>["kind"] | "malformed";
+  | { kind: "error" }
+  | { kind: "malformed" };
+type FailureKind = Exclude<Attempt, { kind: "ok" }>["kind"];
 
 type JsonMode = { jsonSchema: Record<string, unknown> };
 
@@ -135,16 +136,27 @@ async function runChain<T>(
       failures.push("error");
     }
   }
-  // Only an all-429 chain is "rate limited": that label invites waiting for a
-  // quota reset, which is the wrong advice when a provider is actually down.
-  // Otherwise the last attempt names the failure.
+  // The reason does not depend on the order the providers were tried. Only
+  // an all-429 chain is "rate limited": that label invites waiting for a quota
+  // reset, which is the wrong advice when a provider is actually down. An
+  // error anywhere is an error. What is left is a chain where every provider
+  // was reachable and at least one answered unusably.
   if (failures.every((kind) => kind === "rate_limited")) return { ok: false, reason: "rate_limited" };
-  const last = failures[failures.length - 1];
-  return { ok: false, reason: last === "malformed" ? "malformed" : "error" };
+  if (failures.includes("error")) return { ok: false, reason: "error" };
+  return { ok: false, reason: "malformed" };
 }
 
 function classify(status: number): Attempt {
   return status === 429 ? { kind: "rate_limited" } : { kind: "error" };
+}
+
+function isJsonValidationFailure(errorBody: string): boolean {
+  try {
+    const parsed = JSON.parse(errorBody) as { error?: { code?: string } };
+    return parsed.error?.code === "json_validate_failed";
+  } catch {
+    return false;
+  }
 }
 
 async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
@@ -216,7 +228,12 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
-    console.error("groq error", res.status, await res.text().catch(() => ""));
+    const detail = await res.text().catch(() => "");
+    console.error("groq error", res.status, detail);
+    // In JSON mode Groq does not hand back invalid JSON as a 200: a model that
+    // fails to produce an object is a 400 json_validate_failed. That is a reply
+    // that was not usable, not a provider outage.
+    if (res.status === 400 && json && isJsonValidationFailure(detail)) return { kind: "malformed" };
     return classify(res.status);
   }
   const body = (await res.json()) as {

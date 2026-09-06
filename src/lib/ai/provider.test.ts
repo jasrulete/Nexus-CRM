@@ -359,6 +359,48 @@ describe("generateJson", () => {
     });
   });
 
+  // The reason is order-independent: an error anywhere is an error, otherwise
+  // a reply that arrived but was unusable names the failure, and only a chain
+  // where every attempt was a 429 is a rate limit.
+  it.each([
+    ["malformed then 429 as malformed", "malformed", 429, "malformed"],
+    ["429 then malformed as malformed", 429, "malformed", "malformed"],
+    ["malformed then 500 as error", "malformed", 500, "error"],
+    ["500 then malformed as error", 500, "malformed", "error"],
+  ] as const)("reports %s", async (_label, first, second, expected) => {
+    const answer = (what: "malformed" | 429 | 500, vendor: "gemini" | "groq") =>
+      what === "malformed"
+        ? vendor === "gemini"
+          ? geminiReply("I would rather not.")
+          : groqReply("I would rather not.")
+        : new Response("nope", { status: what });
+    routeFetch({ gemini: () => answer(first, "gemini"), groq: () => answer(second, "groq") });
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: expected,
+    });
+  });
+
+  // Groq's JSON mode does not return invalid JSON as a 200: when the model
+  // fails to produce an object the API answers 400 json_validate_failed.
+  // That is a reply that was not usable, not a provider error.
+  it("treats groq's json_validate_failed 400 as a malformed reply", async () => {
+    routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () =>
+        new Response(
+          JSON.stringify({ error: { code: "json_validate_failed", failed_generation: "Sure!" } }),
+          { status: 400, headers: { "Content-Type": "application/json" } },
+        ),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: "malformed",
+    });
+  });
+
   it("still distinguishes an all-429 chain from a malformed one", async () => {
     routeFetch({
       gemini: () => new Response("quota exceeded", { status: 429 }),
