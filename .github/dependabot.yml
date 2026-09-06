@@ -40,6 +40,13 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: prisma
         update-types: [version-update:semver-major]
+      # prisma@7.10.0 is the only 7.x CLI release published without npm
+      # provenance and by a different account than every sibling package
+      # (7.6.0-7.9.1 were all GitHub Actions + attested). The CLI runs
+      # `prisma generate` at build time with production variables in scope,
+      # so it waits for an attested release. Drop this entry when one exists.
+      - dependency-name: prisma
+        versions: ["7.10.0"]
 
   # The workflows pin every action to a commit SHA, which is correct for supply
   # chain but means nothing tells you when a pinned action has moved on.
