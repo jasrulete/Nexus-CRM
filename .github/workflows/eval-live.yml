@@ -4,6 +4,12 @@ name: AI evaluation (live providers)
 # the real providers once a night. Informational by design: it never gates a
 # merge, because a provider having a bad day is information, not a regression.
 #
+# Red here means the MODEL misbehaved. A provider that errored, timed out or
+# rate-limited us is retried once and then reported as a skip, so this job
+# stays green through the weather -- see src/eval/outcome.ts. The one
+# exception is a run in which nothing was answered at all: that proves
+# nothing, and says so in red.
+#
 # Uses its own keys (EVAL_GEMINI_API_KEY / EVAL_GROQ_API_KEY) so evaluation
 # never spends the production key's free-tier quota. With neither secret set
 # the job says so and stops.
@@ -24,7 +30,10 @@ concurrency:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Room for the harness's worst night: every call timing out and the whole
+    # retry budget spent still fits inside the 25-minute hook budget in
+    # vitest.eval.config.ts, and this leaves margin around it.
+    timeout-minutes: 30
     env:
       # Not a secret — a dummy path so `prisma generate` has a URL to read.
       # The harness builds its own throwaway SQLite database.
