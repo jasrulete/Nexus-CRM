@@ -33,7 +33,7 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass (331 across 27 as of 2026-09-03) |
+| `npm test` (vitest) | 117 tests across 13 files, pass (374 across 30 as of 2026-09-06) |
 | `npm run build` | pass |
 | `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (44 as of 2026-09-03) |
 | `npm audit` | 3 high, 0 critical |
@@ -433,7 +433,7 @@ path and the parsing, and cost nothing). Live provider runs go nightly behind a
 flag, reusing the scheduling pattern already proven by
 `.github/workflows/reset-demo.yml`.
 
-**Acceptance.** ✅ Shipped 2026-09-07 (`docs/superpowers/specs/2026-09-07-ai-eval-harness-design.md`):
+**Acceptance.** ✅ Shipped 2026-09-06 (`docs/superpowers/specs/2026-09-06-ai-eval-harness-design.md`):
 `npm run eval` runs `src/eval/ai.eval.test.ts` over `src/eval/fixtures/contacts.json`
 (13 fixtures, 3 adversarial) and is a CI step; each injection payload has a named
 test; the harness records the prompts the real chain was asked and asserts the
@@ -468,6 +468,11 @@ parrot test. That candour is the strongest thing in the section.
 **Acceptance.** A test that a note containing the closing tag cannot close the
 block. Audit metadata carries provider, latency and token counts. The
 accepted-risk text matches what the code actually guarantees.
+
+The first criterion shipped with W12 on 2026-09-06: `src/lib/ai/prompt.test.ts`
+proves a note containing the closing tag cannot close the block, and the
+`fence-escape` fixture checks it on the real prompt. What remains here is the
+per-request nonce, the §3 restatement and the latency / token instrumentation.
 
 **Risk.** Low. Do not oversell the nonce — 2026 consensus is that delimiter
 defences are heuristics, not solutions, and the document should keep saying so.
@@ -762,7 +767,7 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 331 tests (test:coverage adds the gate CI enforces)
+npm test            # vitest, 374 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
 npm run test:e2e    # playwright, 44 tests
 ```

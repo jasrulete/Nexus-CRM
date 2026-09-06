@@ -1,6 +1,6 @@
 # AI evaluation harness — design
 
-**Date:** 2026-09-07 · **Plan item:** W12 (`docs/ENGINEERING-PLAN.md`) · **Branch:**
+**Date:** 2026-09-06 · **Plan item:** W12 (`docs/ENGINEERING-PLAN.md`) · **Branch:**
 `feat/ai-eval-harness` · **Depends on:** W10 (shipped in #40: the discriminated result
 is what lets a test tell degradation from a wrong answer).
 
