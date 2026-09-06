@@ -84,7 +84,8 @@ GROQ_API_KEY=...     # https://console.groq.com/keys
 
 Restart the dev server. The Settings page shows which provider is tried first and which takes over.
 Without a key, AI features run in deterministic rule-based mode and are labeled
-as such in the UI.
+as such in the UI; when a key is set but its provider is rate-limited or down, the
+label says that instead, so a quiet outage never reads like a fresh install.
 
 ## Scripts
 

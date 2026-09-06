@@ -272,8 +272,10 @@ Branch-by-branch, in prose:
   boundary and blanked the page instead.
 - **Heuristic fallback (`src/lib/ai/heuristics.ts`):** deterministic, no network call — computes a
   score from signals like status, has-email, has-phone, open deal count/value, days since last
-  activity; a canned-but-parameterized summary and email draft. `AiPanel` labels this
-  "rule-based fallback (AI provider unavailable)" rather than showing the raw string `"heuristic"`.
+  activity; a canned-but-parameterized summary and email draft. `AiPanel` labels this by
+  the reason the action reports (`providerLabel` in `src/lib/ai/label.ts`): "rule-based
+  mode (no AI key configured)", or "rule-based fallback (AI provider rate-limited)",
+  "(AI provider error)" or "(AI reply was not usable)" — never the raw string `"heuristic"`.
 - **Score is persisted** (`prisma.contact.update({ data: { aiScore, aiScoreReason, aiScoredAt }
   })`); summarize and draft are **not** — they render once in the panel and vanish on navigation.
 - **Add context / attach a file:** the "+ Add context for the draft" toggle reveals a textarea

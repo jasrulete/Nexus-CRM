@@ -1069,9 +1069,10 @@ loud failure into an invisible one.
 
 **Honesty is the design constraint.** The file's docblock: *"Clearly labeled in the UI as
 'rule-based' so demos stay honest."* `heuristicLeadScore` returns reasons prefixed
-*"Rule-based score:"*, the AI panel renders `"rule-based fallback (AI provider
-unavailable)"` when `result.provider === "heuristic"`, and `/settings` says *"Rule-based
-mode (no API key configured)"*. A rule-based score presented as AI would be the kind of
+*"Rule-based score:"*, the AI panel renders the reason the action reports — `"rule-based
+mode (no AI key configured)"`, or `"rule-based fallback (AI provider rate-limited)"`,
+`"(AI provider error)"` or `"(AI reply was not usable)"` — when `result.provider ===
+"heuristic"`, and `/settings` says *"Rule-based mode (no API key configured)"*. A rule-based score presented as AI would be the kind of
 claim a reviewer checks.
 
 **The fallback chain.** `generateText` tries every provider that has a key, in order:
