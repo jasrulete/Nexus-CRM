@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { classify, isUnreachable, zeroSignal } from "./outcome";
+import { classify, isUnreachable, signalFailure } from "./outcome";
 
 /**
  * The rule this file pins down: a live evaluation run is red when the *model*
@@ -22,17 +22,45 @@ describe("isUnreachable", () => {
   });
 });
 
-describe("zeroSignal", () => {
-  it("is true when every call was unreachable, so a wall of skips cannot read as success", () => {
-    expect(zeroSignal({ answered: 0, unreachable: 18 })).toBe(true);
+describe("signalFailure", () => {
+  const counts = (over: Partial<Parameters<typeof signalFailure>[0]> = {}) => ({
+    answered: 18,
+    unreachable: 0,
+    adversarialAnswered: 9,
+    ...over,
   });
 
-  it("is false when something answered, however little", () => {
-    expect(zeroSignal({ answered: 1, unreachable: 17 })).toBe(false);
+  it("passes a healthy run", () => {
+    expect(signalFailure(counts())).toBeNull();
   });
 
-  it("is false for a run that made no live calls at all, which is the keyless case", () => {
-    expect(zeroSignal({ answered: 0, unreachable: 0 })).toBe(false);
+  it("passes the keyless run, which makes no live calls at all", () => {
+    expect(signalFailure({ answered: 0, unreachable: 0, adversarialAnswered: 0 })).toBeNull();
+  });
+
+  it("fails when nothing was answered, so a wall of skips cannot read as success", () => {
+    expect(signalFailure(counts({ answered: 0, unreachable: 18, adversarialAnswered: 0 }))).toContain("0 of 18");
+  });
+
+  it("fails when barely anything answered, because one datum is not a run", () => {
+    // The case that slipped through a bare zero check: 1 of 18 answered left
+    // every output-side assertion skipped and the job green.
+    expect(signalFailure(counts({ answered: 1, unreachable: 17, adversarialAnswered: 0 }))).toContain("1 of 18");
+  });
+
+  it("fails when no adversarial fixture answered, whatever the overall rate", () => {
+    // The injection properties are what a live run exists to protect.
+    const reason = signalFailure(counts({ answered: 15, unreachable: 3, adversarialAnswered: 0 }));
+    expect(reason).toContain("adversarial");
+  });
+
+  it("passes when most calls answered and the adversarial fixtures were among them", () => {
+    expect(signalFailure(counts({ answered: 14, unreachable: 4, adversarialAnswered: 5 }))).toBeNull();
+  });
+
+  it("treats exactly half as enough, and just under as not", () => {
+    expect(signalFailure(counts({ answered: 9, unreachable: 9, adversarialAnswered: 3 }))).toBeNull();
+    expect(signalFailure(counts({ answered: 8, unreachable: 10, adversarialAnswered: 3 }))).toContain("8 of 18");
   });
 });
 
