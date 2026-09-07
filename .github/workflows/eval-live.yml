@@ -16,8 +16,12 @@ name: AI evaluation (live providers)
 
 on:
   schedule:
-    # 20:00 UTC = 04:00 in Manila. GitHub may delay scheduled runs under load.
-    - cron: "0 20 * * *"
+    # 07:30 UTC = 15:30 in Manila: just after Google's free-tier daily quota
+    # resets at midnight Pacific (07:00 UTC). The first scheduled run, at
+    # 20:00 UTC, got five of eighteen calls answered because the day's
+    # allowance had already gone on daytime use, and eighteen calls is most
+    # of a day's free allowance. GitHub may delay scheduled runs under load.
+    - cron: "30 7 * * *"
   workflow_dispatch:
 
 permissions:

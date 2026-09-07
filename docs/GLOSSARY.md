@@ -1409,7 +1409,8 @@ script in a 921-package dependency tree.
 
 **The third workflow** is
 [`.github/workflows/eval-live.yml`](../.github/workflows/eval-live.yml), a nightly cron at
-`0 20 * * *` (plus `workflow_dispatch`) that runs the AI evaluation harness against the real
+`30 7 * * *` (07:30 UTC, right after Google's free-tier daily quota resets; plus
+`workflow_dispatch`) that runs the AI evaluation harness against the real
 providers on its own `EVAL_GEMINI_API_KEY` / `EVAL_GROQ_API_KEY` secrets, so it never spends
 the production quota; with neither secret set it prints a notice and skips. Informational by
 design — it never gates a merge — and it uploads its JSON report as a 30-day artifact.
