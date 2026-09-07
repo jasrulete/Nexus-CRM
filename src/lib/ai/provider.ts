@@ -209,7 +209,13 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
 }
 
 async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
-  const model = modelOverride || "llama-3.3-70b-versatile";
+  // Groq's deprecation page lists llama-3.3-70b-versatile as shut down for
+  // free and developer tiers on 08/16/26 (Enterprise-only since), naming this
+  // model as a replacement. Because Gemini answers first, a dead model here is
+  // invisible in production until the day Gemini does not answer, and then
+  // the "fallback" fails too. AI_MODEL cannot cover it: the chain passes the
+  // override to the first provider only.
+  const model = modelOverride || "openai/gpt-oss-120b";
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -224,9 +230,10 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
       ],
       temperature: 0.4,
       max_tokens: 1024,
-      // JSON mode guarantees a syntactically valid object, not the schema:
-      // the Llama model here does not support Groq's json_schema mode, so
-      // the schema is enforced on our side after parsing.
+      // JSON mode guarantees a syntactically valid object, not the schema;
+      // the schema is enforced on our side after parsing, the same rule the
+      // Gemini path is held to. (This model also offers Groq's json_schema
+      // mode, which the Llama predecessor did not - a separate change.)
       ...(json && { response_format: { type: "json_object" } }),
     }),
     signal: AbortSignal.timeout(30_000),

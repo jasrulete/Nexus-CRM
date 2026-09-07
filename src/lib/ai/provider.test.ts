@@ -81,7 +81,7 @@ describe("generateText", () => {
 // has to actually be tried, or it is a fallback in name only.
 describe("generateText failover", () => {
   const GEMINI_HOST = "generativelanguage.googleapis.com";
-  const GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile";
+  const GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b";
 
   function json(body: unknown) {
     return new Response(JSON.stringify(body), {
@@ -369,7 +369,7 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toMatchObject({
       ok: true,
       data: { score: 64, reason: "steady engagement" },
-      provider: "groq/llama-3.3-70b-versatile",
+      provider: "groq/openai/gpt-oss-120b",
     });
   });
 

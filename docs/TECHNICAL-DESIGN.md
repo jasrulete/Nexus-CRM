@@ -682,7 +682,7 @@ Both providers are called with plain `fetch` — no SDK, matching how
 `src/lib/email.ts` talks to Resend. Both use `AbortSignal.timeout(30_000)`, both
 send `temperature: 0.4` and a 1024-token cap, and a success carries
 `provider` as the model string that actually answered
-(`gemini/gemini-3.6-flash`, `groq/llama-3.3-70b-versatile`). That string is
+(`gemini/gemini-3.6-flash`, `groq/openai/gpt-oss-120b`). That string is
 rendered in the UI under every generated block, so the reader always knows what
 produced the text.
 
@@ -789,8 +789,8 @@ action reports which one as `degraded` (`not_configured`, `rate_limited`,
 label and the audit trail can tell absence from degradation.
 `scoreContact` asks for JSON natively through `generateJson` — Gemini with
 `responseMimeType: "application/json"` and `responseJsonSchema`, Groq with
-`response_format: { type: "json_object" }` (JSON mode; the Llama model there
-does not support Groq's schema mode) — parses the whole reply, and validates it
+`response_format: { type: "json_object" }` (JSON mode; the schema is enforced on
+our side, the same rule for both providers) — parses the whole reply, and validates it
 with a zod schema that rounds a fractional score and cuts a long reason. A reply
 that fails is `malformed`: the next provider is tried, and if none answers
 usably the action falls through to the heuristic with `degraded: "malformed"`.
