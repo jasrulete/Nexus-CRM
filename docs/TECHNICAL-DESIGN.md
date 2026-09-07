@@ -91,7 +91,7 @@ flowchart TB
         REPO["Repo: jasrulete/Nexus-CRM"]
         CI["CI workflow<br/>lint, typecheck, 397 unit tests,<br/>eval harness, build, 44 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
-        EVAL["eval-live workflow<br/>cron 07:30 UTC, real providers"]
+        EVAL["eval-live workflow<br/>cron 08:30 UTC, real providers"]
         REPO --> CI
         REPO --> RESET
         REPO --> EVAL
