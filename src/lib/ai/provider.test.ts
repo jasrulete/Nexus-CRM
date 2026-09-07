@@ -81,7 +81,7 @@ describe("generateText", () => {
 // has to actually be tried, or it is a fallback in name only.
 describe("generateText failover", () => {
   const GEMINI_HOST = "generativelanguage.googleapis.com";
-  const GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile";
+  const GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b";
 
   function json(body: unknown) {
     return new Response(JSON.stringify(body), {
@@ -325,6 +325,22 @@ describe("generateJson", () => {
     expect(body(groqCall).response_format).toEqual({ type: "json_object" });
   });
 
+  // gpt-oss-120b reasons before it answers, and the reasoning is spent from
+  // the same completion budget as the answer. A score, a short summary or a
+  // brief email needs none of it: at higher effort a 1024-token cap can be
+  // consumed by thinking, leaving `content` empty, which the chain would
+  // report as a provider error.
+  it("asks groq for low reasoning effort so the answer is not spent on thinking", async () => {
+    const fetchSpy = routeFetch({
+      gemini: () => new Response("quota exceeded", { status: 429 }),
+      groq: () => groqReply('{"score": 82, "reason": "strong pipeline"}'),
+    });
+
+    await generateJson("prompt", request);
+
+    expect(body(fetchSpy.mock.calls[1]).reasoning_effort).toBe("low");
+  });
+
   it("parses and validates the reply, applying the schema transforms", async () => {
     routeFetch({
       gemini: () => geminiReply('{"score": 71.6, "reason": "' + "x".repeat(900) + '"}'),
@@ -369,7 +385,7 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toMatchObject({
       ok: true,
       data: { score: 64, reason: "steady engagement" },
-      provider: "groq/llama-3.3-70b-versatile",
+      provider: "groq/openai/gpt-oss-120b",
     });
   });
 
