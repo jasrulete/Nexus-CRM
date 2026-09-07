@@ -10,14 +10,20 @@ name: AI evaluation (live providers)
 # exception is a run in which nothing was answered at all: that proves
 # nothing, and says so in red.
 #
-# Uses its own keys (EVAL_GEMINI_API_KEY / EVAL_GROQ_API_KEY) so evaluation
-# never spends the production key's free-tier quota. With neither secret set
-# the job says so and stops.
+# Uses its own keys (EVAL_GEMINI_API_KEY / EVAL_GROQ_API_KEY). Google enforces
+# its free-tier limits per PROJECT, not per key, so this spares the production
+# quota only if the eval key was minted in its own Google Cloud project. With
+# neither secret set the job says so and stops.
 
 on:
   schedule:
-    # 20:00 UTC = 04:00 in Manila. GitHub may delay scheduled runs under load.
-    - cron: "0 20 * * *"
+    # 08:30 UTC (16:30 in Manila): after Google's free-tier daily quota has
+    # reset at midnight Pacific in BOTH halves of the year - 07:00 UTC under
+    # daylight time, 08:00 UTC under standard time. The first scheduled run,
+    # at 20:00 UTC, got five of eighteen calls answered; the 429 bodies named
+    # the quota: GenerateRequestsPerDayPerProjectPerModel-FreeTier, value 20.
+    # GitHub may delay scheduled runs under load.
+    - cron: "30 8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -72,6 +78,12 @@ jobs:
         if: steps.keys.outputs.present == 'true'
         env:
           EVAL_LIVE: "1"
+          # Twenty requests per day per model on the free tier. Three adversarial
+          # fixtures plus one ordinary is 12 calls; with the whole retry budget
+          # spent that is 18, inside the day's twenty. The harness default of
+          # three ordinary fixtures is 18 calls before any retry, which is why
+          # every retry on the first run was itself a 429.
+          EVAL_LIVE_ORDINARY: "1"
           GEMINI_API_KEY: ${{ secrets.EVAL_GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.EVAL_GROQ_API_KEY }}
         run: npm run eval -- --reporter=default --reporter=json --outputFile=eval-report.json
