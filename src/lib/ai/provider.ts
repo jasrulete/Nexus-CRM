@@ -211,10 +211,12 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
 async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
   // Groq's deprecation page lists llama-3.3-70b-versatile as shut down for
   // free and developer tiers on 08/16/26 (Enterprise-only since), naming this
-  // model as a replacement. Because Gemini answers first, a dead model here is
-  // invisible in production until the day Gemini does not answer, and then
-  // the "fallback" fails too. AI_MODEL cannot cover it: the chain passes the
-  // override to the first provider only.
+  // model as a replacement. A retired model answers 404, which classify()
+  // below turns into { kind: "error" }: logged here, not sent to Sentry, and
+  // surfaced only as degraded "error" in the audit row and the "AI provider
+  // error" label - which is what every visitor saw once Gemini's daily quota
+  // ran out, from 08/16 until this change. AI_MODEL cannot cover it: the
+  // chain passes the override to the first provider only.
   const model = modelOverride || "openai/gpt-oss-120b";
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -230,6 +232,12 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
       ],
       temperature: 0.4,
       max_tokens: 1024,
+      // This is a reasoning model, and its thinking is spent from the same
+      // completion budget as the answer. Nothing asked of it here needs more
+      // than "low": a score with a reason, a few bullets, a short email. At
+      // higher effort the cap above can go entirely on thinking, leaving
+      // `content` empty - which the chain would report as a provider error.
+      reasoning_effort: "low",
       // JSON mode guarantees a syntactically valid object, not the schema;
       // the schema is enforced on our side after parsing, the same rule the
       // Gemini path is held to. (This model also offers Groq's json_schema
