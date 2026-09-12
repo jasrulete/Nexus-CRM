@@ -1418,7 +1418,9 @@ either half of the year; GitHub actually starts it four to six hours later, betw
 14:23 UTC on every run so far; plus `workflow_dispatch`) that runs the AI evaluation harness
 against the real providers on its own `EVAL_GEMINI_API_KEY` / `EVAL_GROQ_API_KEY` secrets.
 Google enforces its limits per project, so that spares the production quota only if the eval key
-was minted in its own project. With neither secret set it prints a notice and skips. Informational by
+was minted in its own project. It runs as two legs, one per provider, each with only its own key in
+scope so the chain cannot fall through to the other and the verdict is about that provider alone; a
+leg whose secret is absent prints a notice and skips without failing the run. Informational by
 design — it never gates a merge — and it uploads its JSON report as a 30-day artifact.
 
 #### Docker multi-stage builds and standalone output
