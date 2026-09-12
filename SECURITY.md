@@ -59,8 +59,11 @@ script/connect sources — AI providers are called **server-side only**),
 ## AI-specific concerns
 
 - **Prompt injection**: CRM notes/activities are user-controlled text that
-  gets embedded in prompts. They are fenced inside `<record>` tags and the
-  system prompt instructs the model to treat that content strictly as data.
+  gets embedded in prompts. They are fenced inside `<record>` tags, pasted
+  background inside `<user-context>` tags, and the system prompt instructs the
+  model to treat both strictly as data and to take instructions only from
+  outside those tags. The draft prompt additionally tells the model, above the
+  `<user-context>` block, to ignore any sentence in it that addresses the model.
   Outputs are rendered as plain text (never HTML/markdown-executed). The fence
   and three named injection payloads are checked on every PR by the evaluation
   harness (`npm run eval`, `src/eval`), on the prompt itself and on the output;

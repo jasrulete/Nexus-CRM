@@ -14,7 +14,7 @@ Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **408 unit tests, 44 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **414 unit tests, 44 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -178,8 +178,12 @@ assuming a filesystem.
   available to the model. It stops being acceptable if either changes. Since
   2026-09-06 this is a test, not a paragraph: the `parrot` fixture in
   `src/eval/fixtures/contacts.json`, run keyless on every PR and live nightly by
-  the evaluation harness. Every clean nightly since 2026-09-08 has resisted it;
-  the nonce fence (W13) would make that structural rather than observed.
+  the evaluation harness. Every clean Gemini nightly since 2026-09-08 has resisted
+  it. On 2026-09-12 the first Groq leg showed `openai/gpt-oss-120b` obeying it
+  ("Subject: Polly – …"), so the wording was hardened the same day: the block
+  now tells the model to ignore any sentence that addresses it, and the system
+  preamble names `<user-context>` as data. The nonce fence (W13) would make
+  that structural rather than observed.
 
 ---
 

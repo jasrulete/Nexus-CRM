@@ -210,7 +210,7 @@ export function AiPanel({
               value={context}
               onChange={(e) => setContext(e.target.value.slice(0, 2000))}
               rows={3}
-              placeholder="Anything the record doesn't say — e.g. they just raised a round, keep it brief."
+              placeholder="Anything the record doesn't say — e.g. they just raised a round, their CFO is new."
               className="w-full rounded-lg border border-edge bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-ink-faint focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent"
             />
             <p className="mt-1 text-[11px] text-ink-faint">
