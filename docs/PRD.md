@@ -512,7 +512,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 397 unit tests (coverage-gated), 44 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 408 unit tests (coverage-gated), 44 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -632,7 +632,7 @@ second route.
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-397 unit tests cover library modules and the server actions (against a real
+408 unit tests cover library modules and the server actions (against a real
 migrations-built SQLite). Component behaviour is covered exclusively by the 44
 Playwright tests.
 

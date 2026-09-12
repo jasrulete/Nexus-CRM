@@ -22,7 +22,9 @@ on:
     # daylight time, 08:00 UTC under standard time. The first scheduled run,
     # at 20:00 UTC, got five of eighteen calls answered; the 429 bodies named
     # the quota: GenerateRequestsPerDayPerProjectPerModel-FreeTier, value 20.
-    # GitHub may delay scheduled runs under load.
+    # In practice GitHub starts this between 12:19 and 14:23 UTC (observed on
+    # every run 09-07 to 09-12): a 4-6 hour queue delay, still inside a fresh
+    # quota day and after the Manila working day, so it is left alone.
     - cron: "30 8 * * *"
   workflow_dispatch:
 

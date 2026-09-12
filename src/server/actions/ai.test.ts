@@ -308,6 +308,29 @@ describe("the prompt sent to the model", () => {
     expect(prompt).toMatch(/not as instructions/i);
   });
 
+  // Two findings from the nightly live evaluation. The summary described "the
+  // account" without naming the person on four separate nights, and on
+  // 2026-09-12 a draft opened with a quote of the system prompt instead of a
+  // subject line. The prompts now say what the properties expect.
+  it("asks the summary to name the person in its first line", async () => {
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+
+    await summarizeContact(contactId);
+
+    const [prompt] = model.prompts;
+    expect(prompt).toMatch(/name the person/i);
+  });
+
+  it("tells the draft to start with the subject line and never repeat its instructions", async () => {
+    model.reply = { text: "Subject: Hi\n\nBody.", provider: "gemini/test" };
+
+    await draftFollowUp(contactId);
+
+    const [prompt] = model.prompts;
+    expect(prompt).toMatch(/first line must be/i);
+    expect(prompt).toMatch(/do not quote/i);
+  });
+
   it("returns a message for typed context past the cap, rather than throwing", async () => {
     model.reply = { text: "Subject: Hi\n\nBody.", provider: "gemini/test" };
 

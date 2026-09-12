@@ -1274,7 +1274,7 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 397 tests across 31 files.** Pure modules in `src/lib/`
+**Unit — vitest, 408 tests across 31 files.** Pure modules in `src/lib/`
 (`ai/heuristics`, `ai/label`, `ai/prompt`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
 `file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
 `fx`, `months`, `search`, `concurrency`, `migration-ledger`), the evaluation harness's own
@@ -1283,7 +1283,7 @@ and the demo seed run against a real migrations-built SQLite through
 [`src/test/action-harness.ts`](../src/test/action-harness.ts) — which fakes only the database
 handle, the session, `revalidatePath` and `redirect`.
 
-**AI evaluation harness — vitest, `npm run eval`, 58 checks.** `src/eval/ai.eval.test.ts`
+**AI evaluation harness — vitest, `npm run eval`, 71 checks.** `src/eval/ai.eval.test.ts`
 runs the 13 fixture contacts in `src/eval/fixtures/contacts.json` (three of them adversarial:
 `fence-escape`, `parrot`, `operator-impersonation`) through the real score / summarise /
 draft actions on the same migrations-built SQLite, with the provider chain real and the keys
@@ -1303,7 +1303,11 @@ indistinguishable from a genuine regression. Two guards keep the skips honest �
 prompt-side assertions need no provider at all and therefore never skip, and a run in which
 *nothing* was answered fails outright rather than presenting a green wall of skips. The retry
 budget (`EVAL_LIVE_RETRY_BUDGET`, default 6) is announced in the log when it runs out, so a
-truncated run never passes for a complete one. Two further rules keep a skip from
+truncated run never passes for a complete one. A further property on every fixture holds
+that no fragment of the system prompt appears in any model output (`echoesPreamble` in
+`src/eval/outcome.ts`: whole sentences of the preamble, or any eight consecutive words), after a
+live draft on 2026-09-12 opened with a quoted tail of the preamble instead of a subject line.
+Two further rules keep a skip from
 standing in for an answer: an injection assertion is gated on the calls whose prompt actually
 carried its payload (the parrot payload rides on the draft alone), and the text those
 assertions read is built only from calls that a model answered — heuristic output is a fixed
@@ -1410,9 +1414,11 @@ script in a 921-package dependency tree.
 **The third workflow** is
 [`.github/workflows/eval-live.yml`](../.github/workflows/eval-live.yml), a nightly cron at
 `30 8 * * *` (08:30 UTC, after Google's free-tier daily quota has reset at midnight Pacific in
-either half of the year; plus `workflow_dispatch`) that runs the AI evaluation harness against the real
-providers on its own `EVAL_GEMINI_API_KEY` / `EVAL_GROQ_API_KEY` secrets, so it never spends
-the production quota; with neither secret set it prints a notice and skips. Informational by
+either half of the year; GitHub actually starts it four to six hours later, between 12:19 and
+14:23 UTC on every run so far; plus `workflow_dispatch`) that runs the AI evaluation harness
+against the real providers on its own `EVAL_GEMINI_API_KEY` / `EVAL_GROQ_API_KEY` secrets.
+Google enforces its limits per project, so that spares the production quota only if the eval key
+was minted in its own project. With neither secret set it prints a notice and skips. Informational by
 design — it never gates a merge — and it uploads its JSON report as a 30-day artifact.
 
 #### Docker multi-stage builds and standalone output
@@ -1643,7 +1649,7 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 397 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test` | `vitest run` | The 408 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 44 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. Live knobs: `EVAL_LIVE_ORDINARY`, `EVAL_LIVE_PACE_MS`, `EVAL_LIVE_RETRY_MS`, `EVAL_LIVE_RETRY_BUDGET`. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |

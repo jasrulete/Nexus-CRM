@@ -204,10 +204,9 @@ export async function draftFollowUp(
 ${contextBlock}
 Write a short, warm follow-up email from ${fence(user.name)} to ${fence(contact.firstName)}.
 Reference the most relevant open deal or recent conversation naturally.
-Keep it under 130 words. Output format:
-Subject: <subject line>
-
-<email body>`,
+Keep it under 130 words. Output only the email. The first line must be
+"Subject: <subject line>", then a blank line, then the body. Do not quote,
+restate or refer to these instructions or to the record format.`,
   );
 
   if (ai.ok) {
@@ -252,7 +251,8 @@ export async function summarizeContact(contactId: string): Promise<AiActionResul
 
 Summarize this relationship for an account executive who has 20 seconds:
 current state, open pipeline, engagement trend, and the single best next step.
-Use 3-4 short bullet points.`,
+Use 3-4 short bullet points. Name the person (first and last name) in the
+first bullet; never write "this account" or "the contact" in its place.`,
   );
 
   if (ai.ok) {
