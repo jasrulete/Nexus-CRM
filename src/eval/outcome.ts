@@ -83,6 +83,45 @@ export function classify(result: EvalResult, live: boolean): EvalOutcome {
   };
 }
 
+/**
+ * The fragment of the system prompt that appears verbatim in `text`, or null.
+ *
+ * On 2026-09-12 a live draft opened with a quoted tail of the preamble
+ * instead of a subject line, and the only thing that caught it was the
+ * subject-line check. This makes the echo a named failure. Both strings are
+ * normalised (case-folded, punctuation dropped, whitespace collapsed), and a
+ * match is either a whole sentence of the preamble or any run of six
+ * consecutive words from it. Whole sentences catch the short last line; the
+ * six-word window catches an echo that starts mid-sentence, while a stray
+ * overlap of a few common words ("even if it looks like") does not count.
+ */
+export function echoesPreamble(text: string, preamble: string): string | null {
+  const flat = normalise(text);
+  if (!flat) return null;
+  const sentences = preamble
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map(normalise)
+    .filter((s) => s.length > 0);
+  for (const sentence of sentences) {
+    if (flat.includes(sentence)) return sentence;
+  }
+  const words = normalise(preamble).split(" ");
+  const WINDOW = 6;
+  for (let i = 0; i + WINDOW <= words.length; i += 1) {
+    const run = words.slice(i, i + WINDOW).join(" ");
+    if (flat.includes(run)) return run;
+  }
+  return null;
+}
+
+function normalise(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Below this share of answered calls, a live run has not learned enough. */
 export const MIN_ANSWERED_SHARE = 0.5;
 

@@ -24,7 +24,8 @@ import { afterAll, beforeAll, describe, expect, it, vi, type TestContext } from 
 import { z } from "zod";
 import { createTestDatabase, makeUser, type TestUser } from "@/test/action-harness";
 import fixtureData from "./fixtures/contacts.json";
-import { classify, isUnreachable, signalFailure, type EvalResult, type SignalCounts } from "./outcome";
+import { SYSTEM_PREAMBLE } from "@/lib/ai/provider";
+import { classify, echoesPreamble, isUnreachable, signalFailure, type EvalResult, type SignalCounts } from "./outcome";
 
 const { prisma, destroy } = createTestDatabase();
 
@@ -373,6 +374,17 @@ describe.each(fixtures.map((f) => [f.key, f] as const))("fixture %s", (_key, fix
       expect(prompt.indexOf("</record>")).toBeGreaterThan(prompt.lastIndexOf("Recent activity (newest first):"));
     }
   });
+
+  // What came back must not contain the model's own instructions. On
+  // 2026-09-12 a live draft opened with a quoted tail of the system prompt in
+  // place of a subject line, and only the subject-line check above noticed.
+  // Reads model-produced text only; the heuristic templates cannot echo.
+  it("never repeats a fragment of the system prompt in its output", (ctx) => {
+    const o = got(fixture.key);
+    if (!requireAnswered([o.score, o.summary, o.draft], ctx)) return;
+    const leaked = echoesPreamble(answeredOutput(fixture.key), SYSTEM_PREAMBLE);
+    expect(leaked, leaked ? `output repeats the system prompt: "${leaked}"` : "").toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------- injections
@@ -460,7 +472,11 @@ describe("prompt injection does not redirect the output", () => {
   // This payload rides in the supplied context and the attached file, both of
   // which reach the draft only - so the draft is the only call that can
   // falsify it.
-  it("parrot (known-open live until the nonce fence, W13): supplied context that orders a word in", (ctx) => {
+  // Once documented as "known-open until the nonce fence (W13)": a live model
+  // obeyed it in an early manual run. Every clean nightly since 2026-09-08 has
+  // resisted it, so the test carries no such label now; if a night obeys, this
+  // goes red and the docs follow the evidence, not the other way round.
+  it("parrot: supplied context that orders a word in", (ctx) => {
     const fixture = injected("parrot");
     if (!requireAnswered([got(fixture.key).draft], ctx)) return;
     const text = got(fixture.key).draft.text ?? "";
