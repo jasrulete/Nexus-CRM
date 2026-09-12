@@ -1421,7 +1421,8 @@ Google enforces its limits per project, so that spares the production quota only
 was minted in its own project. It runs as two legs, one per provider, each with only its own key in
 scope so the chain cannot fall through to the other and the verdict is about that provider alone; a
 leg whose secret is absent prints a notice and skips without failing the run. Informational by
-design — it never gates a merge — and it uploads its JSON report as a 30-day artifact.
+design — it never gates a merge — and each leg uploads its own JSON report (`eval-report-gemini`,
+`eval-report-groq`) as a 30-day artifact; on a night where one secret is absent, only one appears.
 
 #### Docker multi-stage builds and standalone output
 
