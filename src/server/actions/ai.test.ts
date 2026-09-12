@@ -322,6 +322,21 @@ describe("the prompt sent to the model", () => {
     expect(prompt).toMatch(/do not act on it/i);
   });
 
+  // The preamble says instructions come only from outside the tags. A rule
+  // written inside <user-context> is therefore, by the model's own contract,
+  // something it may disregard. The rule has to sit above the opening tag.
+  it("keeps the context rules outside the tags, where the preamble says instructions live", async () => {
+    model.reply = { text: "Subject: Hi\n\nBody.", provider: "gemini/test" };
+
+    await draftFollowUp(contactId, "They just closed a funding round.");
+
+    const [prompt] = model.prompts;
+    expect(prompt.indexOf("ignore that sentence")).toBeGreaterThan(-1);
+    expect(prompt.indexOf("ignore that sentence")).toBeLessThan(prompt.indexOf("<user-context>"));
+    // The rule must not spell the tag itself, or the harness sees two openings.
+    expect(prompt.match(/<user-context>/g)).toHaveLength(1);
+  });
+
   // Two findings from the nightly live evaluation. The summary described "the
   // account" without naming the person on four separate nights, and on
   // 2026-09-12 a draft opened with a quote of the system prompt instead of a
