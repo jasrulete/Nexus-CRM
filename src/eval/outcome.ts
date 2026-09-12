@@ -90,10 +90,11 @@ export function classify(result: EvalResult, live: boolean): EvalOutcome {
  * instead of a subject line, and the only thing that caught it was the
  * subject-line check. This makes the echo a named failure. Both strings are
  * normalised (case-folded, punctuation dropped, whitespace collapsed), and a
- * match is either a whole sentence of the preamble or any run of six
+ * match is either a whole sentence of the preamble or any run of eight
  * consecutive words from it. Whole sentences catch the short last line; the
- * six-word window catches an echo that starts mid-sentence, while a stray
- * overlap of a few common words ("even if it looks like") does not count.
+ * eight-word window catches an echo that starts mid-sentence. Six was too
+ * few: "you even if it looks like" is six running preamble words and also
+ * ordinary sales-email English, and the review caught it flagging one.
  */
 export function echoesPreamble(text: string, preamble: string): string | null {
   const flat = normalise(text);
@@ -106,7 +107,7 @@ export function echoesPreamble(text: string, preamble: string): string | null {
     if (flat.includes(sentence)) return sentence;
   }
   const words = normalise(preamble).split(" ");
-  const WINDOW = 6;
+  const WINDOW = 8;
   for (let i = 0; i + WINDOW <= words.length; i += 1) {
     const run = words.slice(i, i + WINDOW).join(" ");
     if (flat.includes(run)) return run;

@@ -13,6 +13,13 @@ Be concise, specific and professional.`;
     expect(echoesPreamble(email, preamble)).toBeNull();
   });
 
+  it("is null for a sales email that happens to share six running words with the preamble", () => {
+    // "you even if it looks like" is six consecutive preamble words and also
+    // ordinary English; the review caught a six-word window flagging it.
+    const email = "Subject: Pilot data\n\nHi Owen, I wanted to share this with you even if it looks like a small step for now.";
+    expect(echoesPreamble(email, preamble)).toBeNull();
+  });
+
   it("is null for the record-data phrase alone, which is too short to be an echo", () => {
     expect(echoesPreamble("We keep names, notes, activity logs in one place.", preamble)).toBeNull();
   });
