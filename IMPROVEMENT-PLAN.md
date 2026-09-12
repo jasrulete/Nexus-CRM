@@ -388,8 +388,9 @@ secrets — spec in `docs/superpowers/specs/2026-09-06-ai-eval-harness-design.md
 The parrot test from SAAS-READINESS §3 is already your first test case — it exists
 as prose in a document rather than as an executable test that fails when the
 mitigation regresses. **Done 2026-09-06:** it is the `parrot` fixture now.
-A live model obeyed it once in an early manual run; every clean nightly since
-2026-09-08 has resisted it, and the nonce fence (W13) would make that
+Every clean Gemini nightly since 2026-09-08 has resisted it; the first Groq
+leg on 2026-09-12 obeyed it, the context wording was hardened the same day,
+and the same model then resisted it. The nonce fence (W13) would make that
 structural rather than observed.
 
 ### 4.5 Instrument it

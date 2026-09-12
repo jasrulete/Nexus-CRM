@@ -14,7 +14,7 @@ Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **410 unit tests, 44 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **414 unit tests, 44 e2e tests**, with coverage gated in CI.
 
 ---
 
