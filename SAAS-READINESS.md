@@ -178,8 +178,8 @@ assuming a filesystem.
   available to the model. It stops being acceptable if either changes. Since
   2026-09-06 this is a test, not a paragraph: the `parrot` fixture in
   `src/eval/fixtures/contacts.json`, run keyless on every PR and live nightly by
-  the evaluation harness, where it is expected to fail until the nonce fence
-  (W13) lands.
+  the evaluation harness. Every clean nightly since 2026-09-08 has resisted it;
+  the nonce fence (W13) would make that structural rather than observed.
 
 ---
 
