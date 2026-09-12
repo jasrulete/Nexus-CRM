@@ -1649,7 +1649,7 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 397 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test` | `vitest run` | The 407 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 44 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. Live knobs: `EVAL_LIVE_ORDINARY`, `EVAL_LIVE_PACE_MS`, `EVAL_LIVE_RETRY_MS`, `EVAL_LIVE_RETRY_BUDGET`. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |

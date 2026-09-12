@@ -33,7 +33,7 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass (397 across 31 as of 2026-09-06) |
+| `npm test` (vitest) | 117 tests across 13 files, pass (407 across 31 as of 2026-09-12) |
 | `npm run build` | pass |
 | `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (44 as of 2026-09-03) |
 | `npm audit` | 3 high, 0 critical |
@@ -767,7 +767,7 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 397 tests (test:coverage adds the gate CI enforces)
+npm test            # vitest, 407 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
 npm run test:e2e    # playwright, 44 tests
 ```

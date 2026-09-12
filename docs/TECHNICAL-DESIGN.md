@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 397 unit tests,<br/>eval harness, build, 44 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 407 unit tests,<br/>eval harness, build, 44 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -1595,7 +1595,7 @@ and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
 covered only by the 44 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"397 unit tests" means 397 tests of server modules and server actions — none of a rendered component.
+"407 unit tests" means 407 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
