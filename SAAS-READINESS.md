@@ -236,7 +236,7 @@ clone or self-hosted instance is unaffected.
 | `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |
 | `EMAIL_FROM` | Vercel (Production) | Sender identity, e.g. `Nexus CRM <onboarding@resend.dev>` |
 | `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` | GitHub repo secrets | The nightly reset (§2) can reach production |
-| `EVAL_GEMINI_API_KEY`, `EVAL_GROQ_API_KEY` | GitHub repo secrets | The nightly live evaluation (`eval-live.yml`) calls the real providers on its own quota; with neither set the job prints a notice and skips |
+| `EVAL_GEMINI_API_KEY`, `EVAL_GROQ_API_KEY` | GitHub repo secrets | The nightly live evaluation (`eval-live.yml`) runs one leg per provider, each with only its own key; a leg whose secret is absent prints a notice and skips |
 
 `NEXT_PUBLIC_*` values are inlined at **build** time, so a redeploy that reuses
 the build cache will not pick up a changed DSN. The rest are read at runtime, so

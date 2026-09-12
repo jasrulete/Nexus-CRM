@@ -10,10 +10,13 @@ name: AI evaluation (live providers)
 # exception is a run in which nothing was answered at all: that proves
 # nothing, and says so in red.
 #
-# Uses its own keys (EVAL_GEMINI_API_KEY / EVAL_GROQ_API_KEY). Google enforces
-# its free-tier limits per PROJECT, not per key, so this spares the production
-# quota only if the eval key was minted in its own Google Cloud project. With
-# neither secret set the job says so and stops.
+# One leg per provider, each with only its own key in scope, so the verdict is
+# about that provider alone: the chain never falls through to the other. With
+# both keys set that is two runs of twelve calls; Gemini's free allowance is
+# twenty a day per project per model, Groq's is a thousand. Google enforces
+# its limits per PROJECT, not per key, so the Gemini leg spares the production
+# quota only if EVAL_GEMINI_API_KEY was minted in its own Google Cloud project.
+# A leg whose secret is absent says so and skips; it never fails the run.
 
 on:
   schedule:
@@ -37,11 +40,21 @@ concurrency:
 
 jobs:
   eval:
+    name: eval (${{ matrix.provider }})
     runs-on: ubuntu-latest
     # Room for the harness's worst night: every call timing out and the whole
     # retry budget spent still fits inside the 25-minute hook budget in
     # vitest.eval.config.ts, and this leaves margin around it.
     timeout-minutes: 30
+    strategy:
+      # One provider's bad night must not cancel the other's verdict.
+      fail-fast: false
+      matrix:
+        include:
+          - provider: gemini
+            secret: EVAL_GEMINI_API_KEY
+          - provider: groq
+            secret: EVAL_GROQ_API_KEY
     env:
       # Not a secret — a dummy path so `prisma generate` has a URL to read.
       # The harness builds its own throwaway SQLite database.
@@ -63,37 +76,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check for evaluation keys
+      - name: Check for the ${{ matrix.provider }} evaluation key
         id: keys
         env:
-          EVAL_GEMINI_API_KEY: ${{ secrets.EVAL_GEMINI_API_KEY }}
-          EVAL_GROQ_API_KEY: ${{ secrets.EVAL_GROQ_API_KEY }}
+          EVAL_KEY: ${{ secrets[matrix.secret] }}
         run: |
-          if [ -z "${EVAL_GEMINI_API_KEY}" ] && [ -z "${EVAL_GROQ_API_KEY}" ]; then
-            echo "::notice::No EVAL_GEMINI_API_KEY or EVAL_GROQ_API_KEY secret is set; skipping the live run."
+          if [ -z "${EVAL_KEY}" ]; then
+            echo "::notice::No ${{ matrix.secret }} secret is set; skipping the ${{ matrix.provider }} leg."
             echo "present=false" >> "$GITHUB_OUTPUT"
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run the harness against the real providers
+      - name: Run the harness against ${{ matrix.provider }} only
         if: steps.keys.outputs.present == 'true'
         env:
           EVAL_LIVE: "1"
-          # Twenty requests per day per model on the free tier. Three adversarial
-          # fixtures plus one ordinary is 12 calls; with the whole retry budget
-          # spent that is 18, inside the day's twenty. The harness default of
-          # three ordinary fixtures is 18 calls before any retry, which is why
-          # every retry on the first run was itself a 429.
+          # Twenty requests per day per model on Gemini's free tier. Three
+          # adversarial fixtures plus one ordinary is 12 calls; with the whole
+          # retry budget spent that is 18, inside the day's twenty. The harness
+          # default of three ordinary fixtures is 18 calls before any retry,
+          # which is why every retry on the first run was itself a 429.
           EVAL_LIVE_ORDINARY: "1"
-          GEMINI_API_KEY: ${{ secrets.EVAL_GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.EVAL_GROQ_API_KEY }}
-        run: npm run eval -- --reporter=default --reporter=json --outputFile=eval-report.json
+          # Exactly one key per leg. The other stays empty on purpose: the
+          # provider chain tries every configured key in order, so a second
+          # key here would let Gemini's weather be answered by Groq and the
+          # report would say nothing about either.
+          GEMINI_API_KEY: ${{ matrix.provider == 'gemini' && secrets.EVAL_GEMINI_API_KEY || '' }}
+          GROQ_API_KEY: ${{ matrix.provider == 'groq' && secrets.EVAL_GROQ_API_KEY || '' }}
+        run: npm run eval -- --reporter=default --reporter=json --outputFile=eval-report-${{ matrix.provider }}.json
 
       - name: Upload the report
         if: always() && steps.keys.outputs.present == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: eval-report
-          path: eval-report.json
+          name: eval-report-${{ matrix.provider }}
+          path: eval-report-${{ matrix.provider }}.json
           retention-days: 30
