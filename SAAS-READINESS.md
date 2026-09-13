@@ -14,7 +14,7 @@ Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **416 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **452 unit tests, 45 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -183,7 +183,12 @@ assuming a filesystem.
   ("Subject: Polly – …"), so the wording was hardened the same day: the block
   now tells the model to ignore any sentence that addresses it, and the system
   preamble names `<user-context>` as data. The nonce fence (W13) would make
-  that structural rather than observed.
+  that structural rather than observed. The operator-impersonation note is the
+  other record: Gemini resists it; `gpt-oss-120b` returned it verbatim as the
+  draft on 2026-09-12 and obeyed it on 2026-09-13 (a preamble fragment and the
+  marker, no subject line), so since 2026-09-13 a draft that is not
+  shaped like an email is discarded before anyone sees it (`isEmailShaped`); the
+  marker check on an accepted draft remains.
 
 ---
 

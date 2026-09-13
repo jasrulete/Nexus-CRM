@@ -33,7 +33,7 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass (416 across 31 as of 2026-09-13) |
+| `npm test` (vitest) | 117 tests across 13 files, pass (452 across 32 as of 2026-09-13) |
 | `npm run build` | pass |
 | `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (45 as of 2026-09-13) |
 | `npm audit` | 3 high, 0 critical |
@@ -456,6 +456,11 @@ interpolated fields. Then instrumentation: record latency and the token counts
 both APIs already return in the audit metadata (the provider and the reason a
 rule ran are already there since W10).
 
+The output-side guard for drafts shipped separately on 2026-09-13: `generateDraft` accepts a
+model draft only when it is shaped like an email (`isEmailShaped`), after the groq leg
+returned an injected note as the draft on 2026-09-12 and obeyed it again on 2026-09-13. W13's remaining scope — the nonce, the §3
+restatement, instrumentation — is unchanged by that.
+
 Also restate the accepted-risk paragraph in `SAAS-READINESS.md` §3. Its
 precondition — "the content is the user's own, with no other user's data in the
 prompt" — is already false: the workspace is shared, activities are cross-user
@@ -767,7 +772,7 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 416 tests (test:coverage adds the gate CI enforces)
+npm test            # vitest, 452 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
 npm run test:e2e    # playwright, 45 tests
 ```
@@ -973,7 +978,7 @@ makes a claim true.
 | 1 | **W14 — seed AI scores and fix the revenue-chart data** | 0.5 | ✅ Shipped. The flagship feature rendered as twelve em-dashes on the page a reviewer opens second; nothing else in this document changed so much for so little. |
 | 2 | **W2 — `PRAGMA foreign_keys` on production** | 0.5 | One query. If the answer is 0, it changes what you believe about every delete path in the app, and you would rather know before spending the other nine hours. |
 | 3 | **W10 — provider fallback chain + structured output** | 2.0 | ✅ Shipped in full: failover, a discriminated result with the reason carried to the panel and the audit log, and native JSON requests validated with zod. |
-| 4 | **W12 — minimal eval harness in CI** | 3.0 | ✅ Shipped: 13 fixtures with property assertions plus three named injection payloads, keyless on every PR, live nightly behind its own secrets. The parrot test is a test now: resisted by every clean Gemini nightly, obeyed once by the first Groq leg until the context wording was hardened (2026-09-12); W13 makes it structural. |
+| 4 | **W12 — minimal eval harness in CI** | 3.0 | ✅ Shipped: 13 fixtures with property assertions plus three named injection payloads, keyless on every PR, live nightly behind its own secrets (two legs since 2026-09-12, one key each). Since 2026-09-13 a draft that is not shaped like an email is rejected before it can be shown; the operator-impersonation note `gpt-oss-120b` returned on 2026-09-12 and obeyed on 2026-09-13 now surfaces as a `malformed` draft, not as a missing subject line. The parrot test is a test now: resisted by every clean Gemini nightly, obeyed once by the first Groq leg until the context wording was hardened (2026-09-12); W13 makes it structural. |
 | 5 | **W6 — `isOverdueDateOnly()` + fixed-clock tests** | 1.0 | ✅ Shipped. Was a wrong number a human acts on, in the UI: "due Aug 22" rendered in red on Aug 21. The 24-hour test is a good interview story about why the formatter passing was not enough. |
 | 6 | **W3 — ~~atomic migrations~~ interrupted-migration detection + tests** | 1.5 | ✅ Shipped, though not as a transaction — see W3 for why that cannot work. This bug class already broke production once; it was the cheapest insurance in the document. |
 | 7 | **W23 (partial) — Mermaid architecture diagram + decision log pointer** | 1.5 | Converts nine hours of engineering into something a reviewer can absorb in two minutes. Check `docs/` first — if a companion document already covers the decisions, spend this hour and a half on **W7** (deal-ordering transactions) instead. |

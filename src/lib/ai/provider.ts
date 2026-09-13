@@ -1,6 +1,7 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
 import type { z } from "zod";
+import { isEmailShaped } from "./draft-shape";
 
 /**
  * Pluggable AI provider. Free options, tried in this order, each taking over
@@ -66,6 +67,22 @@ export function aiProviderName(): string | null {
 
 export async function generateText(prompt: string): Promise<AiTextResult> {
   const result = await runChain(prompt, undefined, (text) => text);
+  return result.ok ? { ok: true, text: result.value, provider: result.provider } : result;
+}
+
+/**
+ * Ask for a follow-up email and accept only a reply shaped like one. A reply
+ * that is not — a preface, a code fence, a note from the record echoed back —
+ * counts as a failed attempt for that provider, exactly as JSON that fails
+ * its schema does, and the chain moves on; the caller never sees it. The
+ * groq leg of the live evaluation returned such a note as the draft on
+ * 2026-09-12 and obeyed it again on the 2026-09-13 nightly. Summaries keep
+ * the plain entry point above.
+ */
+export async function generateDraft(prompt: string): Promise<AiTextResult> {
+  const result = await runChain(prompt, undefined, (text) =>
+    isEmailShaped(text) ? text : undefined,
+  );
   return result.ok ? { ok: true, text: result.value, provider: result.provider } : result;
 }
 

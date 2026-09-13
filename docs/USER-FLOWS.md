@@ -216,20 +216,20 @@ flowchart TD
     Load -->|not found| NF["ok:false 'Contact not found'"]
     Load -->|found| Prompt[Build prompt from recordBlock]
 
-    Prompt --> Provider{generateText, or generateJson for Score<br/>providers with a key, in order}
+    Prompt --> Provider{generateText for Summarize, generateDraft for Draft email,<br/>generateJson for Score — providers with a key, in order}
     Provider -->|no key set| NotConfigured["{ ok:false, reason:'not_configured' }"]
     Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies to whichever<br/>provider is first in the chain · Score adds<br/>responseMimeType + responseJsonSchema]
     Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout · Score adds response_format json_object]
 
     Gemini -->|res.ok, reply usable| AIResult["{ ok:true, text or data, provider }"]
-    Gemini -->|"non-2xx (429 → rate_limited, else error), 200 with no text (error),<br/>or JSON that fails the schema (malformed)"| GeminiFailed["attempt recorded<br/>console.error only — nothing reaches Sentry"]
+    Gemini -->|"non-2xx (429 → rate_limited, else error), 200 with no text (error),<br/>JSON that fails the schema,<br/>or a draft with no email shape (malformed)"| GeminiFailed["attempt recorded<br/>console.error only — nothing reaches Sentry"]
     Gemini -->|"fetch rejects: timeout / DNS / reset"| GeminiCaught["caught in runChain,<br/>Sentry.captureException"]
     GeminiFailed --> Next{GROQ_API_KEY set?}
     GeminiCaught --> Next
     Next -->|yes| Groq
     Next -->|no| AllFailed["{ ok:false, reason }<br/>rate_limited only if every attempt was 429,<br/>else error if any attempt errored, else malformed"]
     Groq -->|res.ok, reply usable| AIResult
-    Groq -->|"non-2xx, no text, unusable JSON,<br/>or 400 json_validate_failed (malformed)"| AllFailed
+    Groq -->|"non-2xx, no text, unusable JSON, a draft with no email shape,<br/>or 400 json_validate_failed (malformed)"| AllFailed
     Groq -->|"fetch rejects → Sentry"| AllFailed
 
     AIResult --> UseAI[Use model output]
@@ -259,9 +259,10 @@ Branch-by-branch, in prose:
   shared across score/summarize/draft/send/file-extract — one bucket, `ai:{userId}`. Hitting it
   returns `{ ok: false, message: "AI rate limit reached — try again later." }`, rendered by
   `AiPanel` in a warning-styled paragraph; no partial UI state changes.
-- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()` and `generateJson()`
+- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()`, `generateDraft()` (the
+  same chain with an email-shape acceptance step, `isEmailShaped`) and `generateJson()`
   try every provider that has a key, in order — Gemini, then Groq — and move to the next on
-  any failure; with no key at all they return `{ ok: false, reason: "not_configured" }`
+  any failure, including a reply the acceptance step rejects; with no key at all they return `{ ok: false, reason: "not_configured" }`
   without calling out. Every provider call has a **30-second `AbortSignal.timeout`**.
 - **Timeout / network failure branch:** if `fetch` itself rejects (DNS failure, timeout,
   connection reset — as opposed to a valid HTTP error response), the `try/catch` in
