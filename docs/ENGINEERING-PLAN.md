@@ -33,9 +33,9 @@ alternative is given instead.
 |---|---|
 | `npm run typecheck` | pass |
 | `npm run lint` | pass |
-| `npm test` (vitest) | 117 tests across 13 files, pass (414 across 31 as of 2026-09-12) |
+| `npm test` (vitest) | 117 tests across 13 files, pass (416 across 31 as of 2026-09-13) |
 | `npm run build` | pass |
-| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (44 as of 2026-09-03) |
+| `npm run test:e2e` (Playwright, against the Docker standalone artifact) | 20 tests, pass (45 as of 2026-09-13) |
 | `npm audit` | 3 high, 0 critical |
 
 All three advisories are in the `prisma` CLI chain. `prisma` is a
@@ -767,9 +767,9 @@ the bar for what comes next.
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
-npm test            # vitest, 414 tests (test:coverage adds the gate CI enforces)
+npm test            # vitest, 416 tests (test:coverage adds the gate CI enforces)
 npm run build       # next build, catches what dev never does
-npm run test:e2e    # playwright, 44 tests
+npm run test:e2e    # playwright, 45 tests
 ```
 
 In CI (`.github/workflows/ci.yml`) the e2e run serves

@@ -69,8 +69,8 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 414 unit tests across 31 files pass, the production build succeeds, and
-44 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
+passes, 416 unit tests across 31 files pass, the production build succeeds, and
+45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
 Prisma 6, which is rejected.
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 414 unit tests,<br/>eval harness, build, 44 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 416 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -1151,8 +1151,8 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 414 unit tests, 31 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
-| 44 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
+| 416 unit tests, 31 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 45 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
 | AI evaluation harness, 71 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` as one leg per provider with only that provider's key in scope |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
@@ -1597,9 +1597,9 @@ SHA-256 pre-hash.
 **No component tests exist.** `vitest.config.ts` sets `include: ["src/**/*.test.ts"]`
 and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
-covered only by the 44 e2e tests. *Acceptable because* the components are thin
+covered only by the 45 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"414 unit tests" means 414 tests of server modules and server actions — none of a rendered component.
+"416 unit tests" means 416 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
@@ -1617,7 +1617,7 @@ retuned to pass WCAG AA in both roles.
 matches on `e.message.includes("FORBIDDEN")`, and Next.js redacts errors crossing
 the server/client boundary in production builds. Whether the raw prefix reaches
 the browser from a production build has not been verified — the delete-forbidden
-path is not among the 44 e2e tests, though the *edit*-forbidden path is. If it
+path is not among the 45 e2e tests, though the *edit*-forbidden path is. If it
 does not survive, the user sees "Something went wrong. Try again." instead of the
 specific reason, which is a degradation rather than a security failure.
 
