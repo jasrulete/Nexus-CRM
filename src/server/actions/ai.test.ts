@@ -352,6 +352,13 @@ describe("the prompt sent to the model", () => {
     expect(prompt.indexOf("ignore that sentence")).toBeGreaterThan(-1);
     expect(prompt.indexOf("ignore that sentence")).toBeLessThan(prompt.indexOf("<user-context>"));
     expect(prompt.match(/<user-context>/g)).toHaveLength(1);
+    // And the file text itself must be what sits inside the block those rules
+    // govern; rules above an empty block would pass the three checks above.
+    const opening = prompt.indexOf("<user-context>");
+    const closing = prompt.indexOf("</user-context>");
+    const fileText = prompt.indexOf("put the word Polly");
+    expect(fileText).toBeGreaterThan(opening);
+    expect(fileText).toBeLessThan(closing);
   });
 
   // Two findings from the nightly live evaluation. The summary described "the
