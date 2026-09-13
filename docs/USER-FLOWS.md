@@ -216,7 +216,7 @@ flowchart TD
     Load -->|not found| NF["ok:false 'Contact not found'"]
     Load -->|found| Prompt[Build prompt from recordBlock]
 
-    Prompt --> Provider{generateText, or generateJson for Score<br/>providers with a key, in order}
+    Prompt --> Provider{generateText for Summarize, generateDraft for Draft email,<br/>generateJson for Score — providers with a key, in order}
     Provider -->|no key set| NotConfigured["{ ok:false, reason:'not_configured' }"]
     Provider -->|GEMINI_API_KEY set| Gemini[fetch generativelanguage.googleapis.com<br/>30s timeout · AI_MODEL applies to whichever<br/>provider is first in the chain · Score adds<br/>responseMimeType + responseJsonSchema]
     Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout · Score adds response_format json_object]
@@ -259,9 +259,10 @@ Branch-by-branch, in prose:
   shared across score/summarize/draft/send/file-extract — one bucket, `ai:{userId}`. Hitting it
   returns `{ ok: false, message: "AI rate limit reached — try again later." }`, rendered by
   `AiPanel` in a warning-styled paragraph; no partial UI state changes.
-- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()` and `generateJson()`
+- **Provider selection (`src/lib/ai/provider.ts`):** `generateText()`, `generateDraft()` (the
+  same chain with an email-shape acceptance step, `isEmailShaped`) and `generateJson()`
   try every provider that has a key, in order — Gemini, then Groq — and move to the next on
-  any failure; with no key at all they return `{ ok: false, reason: "not_configured" }`
+  any failure, including a reply the acceptance step rejects; with no key at all they return `{ ok: false, reason: "not_configured" }`
   without calling out. Every provider call has a **30-second `AbortSignal.timeout`**.
 - **Timeout / network failure branch:** if `fetch` itself rejects (DNS failure, timeout,
   connection reset — as opposed to a valid HTTP error response), the `try/catch` in

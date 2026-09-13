@@ -75,8 +75,9 @@ export async function generateText(prompt: string): Promise<AiTextResult> {
  * that is not — a preface, a code fence, a note from the record echoed back —
  * counts as a failed attempt for that provider, exactly as JSON that fails
  * its schema does, and the chain moves on; the caller never sees it. The
- * groq leg of the live evaluation returned such a note as the draft twice on
- * 2026-09-12. Summaries keep the plain entry point above.
+ * groq leg of the live evaluation returned such a note as the draft on
+ * 2026-09-12 and obeyed it again on the 2026-09-13 nightly. Summaries keep
+ * the plain entry point above.
  */
 export async function generateDraft(prompt: string): Promise<AiTextResult> {
   const result = await runChain(prompt, undefined, (text) =>

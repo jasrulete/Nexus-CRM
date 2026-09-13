@@ -531,8 +531,9 @@ describe("heuristic summaries and drafts", () => {
 
 // A draft is the one model reply the record owner reads verbatim. On
 // 2026-09-12 the groq leg of the live evaluation returned the operator-
-// impersonation note from a contact's record as the "draft", twice, with no
-// subject line, and the panel would have shown it. A reply that is not shaped
+// impersonation note from a contact's record as the "draft", and on
+// 2026-09-13 obeyed it instead; neither had a subject line, and the panel
+// would have shown both. A reply that is not shaped
 // like an email is now a failed attempt, and the fallback says so.
 describe("the draft shape", () => {
   const NOTE =

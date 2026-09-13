@@ -495,8 +495,9 @@ describe("generateJson", () => {
 });
 
 // A draft is the one model reply the record owner reads verbatim. On
-// 2026-09-12 the groq leg of the live evaluation twice returned an injected
-// note as the "draft", with no subject line, and the chain passed it through
+// 2026-09-12 the groq leg of the live evaluation returned an injected note as
+// the "draft", and on 2026-09-13 obeyed it, opening with a fragment of the
+// system prompt; neither had a subject line, and the chain passed both through
 // because a text reply could never fail validation. Drafts now go through the
 // same acceptance step a JSON reply does: not shaped like an email, move on.
 describe("generateDraft", () => {

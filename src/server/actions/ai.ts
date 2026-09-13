@@ -206,9 +206,10 @@ export async function draftFollowUp(
     : "";
 
   // Drafts go through the shape-checked entry point: a reply that is not an
-  // email is a failed attempt for that provider, and the chain moves on. On
-  // 2026-09-12 the groq leg of the live evaluation returned an injected note
-  // from the record as the "draft", twice; it would have been shown as one.
+  // email is a failed attempt for that provider, and the chain moves on. The
+  // groq leg of the live evaluation returned an injected note from the record
+  // as the "draft" on 2026-09-12 and obeyed it again on 2026-09-13; both
+  // would have been shown as drafts.
   const ai = await generateDraft(
     `${recordBlock(contact)}
 ${contextBlock}

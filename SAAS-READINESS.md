@@ -185,7 +185,8 @@ assuming a filesystem.
   preamble names `<user-context>` as data. The nonce fence (W13) would make
   that structural rather than observed. The operator-impersonation note is the
   other record: Gemini resists it; `gpt-oss-120b` returned it verbatim as the
-  draft on 2026-09-12 and 2026-09-13, so since 2026-09-13 a draft that is not
+  draft on 2026-09-12 and obeyed it on 2026-09-13 (a preamble fragment and the
+  marker, no subject line), so since 2026-09-13 a draft that is not
   shaped like an email is discarded before anyone sees it (`isEmailShaped`); the
   marker check on an accepted draft remains.
 
