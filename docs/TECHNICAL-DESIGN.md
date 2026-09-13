@@ -70,7 +70,7 @@ A production deployment is publicly linked with published demo credentials
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
 passes, 416 unit tests across 31 files pass, the production build succeeds, and
-44 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
+45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
 Prisma 6, which is rejected.

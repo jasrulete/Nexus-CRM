@@ -633,7 +633,7 @@ second route.
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
 416 unit tests cover library modules and the server actions (against a real
-migrations-built SQLite). Component behaviour is covered exclusively by the 44
+migrations-built SQLite). Component behaviour is covered exclusively by the 45
 Playwright tests.
 
 ### 11.13 No backup or restore runbook
