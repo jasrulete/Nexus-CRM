@@ -73,6 +73,13 @@ script/connect sources — AI providers are called **server-side only**),
   whole with a numeric 0–100 score (rounded to an integer) and a string reason,
   or they're discarded in favor of the deterministic heuristic, with the reason
   recorded in the audit entry.
+- **Draft integrity**: a model draft must open with a `Subject:` line that has
+  subject text and must carry a body, or it is discarded for the next provider
+  and then the heuristic, with the reason (`malformed`) in the audit entry. This
+  is shape, not content: an injected paragraph under a valid subject line is
+  not caught here, and the harness's injection fixtures remain that check. Added
+  after the Groq fallback returned an injected "maintenance mode" note verbatim
+  as the draft on 2026-09-12 and 2026-09-13.
 - **Quota abuse**: per-user hourly rate limit on all AI actions; per-user per-minute
   limit on global search, whose results are capped at five per record type so a
   query can never pull a whole table.

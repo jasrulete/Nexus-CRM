@@ -222,14 +222,14 @@ flowchart TD
     Provider -->|only GROQ_API_KEY set| Groq[fetch api.groq.com<br/>30s timeout · Score adds response_format json_object]
 
     Gemini -->|res.ok, reply usable| AIResult["{ ok:true, text or data, provider }"]
-    Gemini -->|"non-2xx (429 → rate_limited, else error), 200 with no text (error),<br/>or JSON that fails the schema (malformed)"| GeminiFailed["attempt recorded<br/>console.error only — nothing reaches Sentry"]
+    Gemini -->|"non-2xx (429 → rate_limited, else error), 200 with no text (error),<br/>JSON that fails the schema,<br/>or a draft with no email shape (malformed)"| GeminiFailed["attempt recorded<br/>console.error only — nothing reaches Sentry"]
     Gemini -->|"fetch rejects: timeout / DNS / reset"| GeminiCaught["caught in runChain,<br/>Sentry.captureException"]
     GeminiFailed --> Next{GROQ_API_KEY set?}
     GeminiCaught --> Next
     Next -->|yes| Groq
     Next -->|no| AllFailed["{ ok:false, reason }<br/>rate_limited only if every attempt was 429,<br/>else error if any attempt errored, else malformed"]
     Groq -->|res.ok, reply usable| AIResult
-    Groq -->|"non-2xx, no text, unusable JSON,<br/>or 400 json_validate_failed (malformed)"| AllFailed
+    Groq -->|"non-2xx, no text, unusable JSON, a draft with no email shape,<br/>or 400 json_validate_failed (malformed)"| AllFailed
     Groq -->|"fetch rejects → Sentry"| AllFailed
 
     AIResult --> UseAI[Use model output]

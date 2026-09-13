@@ -69,7 +69,7 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 416 unit tests across 31 files pass, the production build succeeds, and
+passes, 452 unit tests across 32 files pass, the production build succeeds, and
 45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 416 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 452 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -659,8 +659,10 @@ The server actions that use it are in `src/server/actions/ai.ts`.
 
 ### Provider abstraction — `src/lib/ai/provider.ts`
 
-Two entry points over one chain: `generateText(prompt): Promise<AiTextResult>`
-for free text, and `generateJson(prompt, { schema, jsonSchema }): Promise<AiJsonResult<T>>`
+Three entry points over one chain: `generateText(prompt): Promise<AiTextResult>`
+for free text that is not shape-checked (summaries), `generateDraft(prompt): Promise<AiTextResult>`
+for a follow-up email (the same chain, with an acceptance step that requires an email shape:
+`isEmailShaped` in `src/lib/ai/draft-shape.ts`), and `generateJson(prompt, { schema, jsonSchema }): Promise<AiJsonResult<T>>`
 for a validated object. A success is `{ ok: true, text | data, provider }`; a
 failure is `{ ok: false, reason }` with `not_configured`, `rate_limited`, `error`
 or `malformed`:
@@ -669,7 +671,7 @@ or `malformed`:
 for (const [index, provider] of configuredProviders().entries()) {
   const attempt = await provider.run(prompt, index === 0 ? AI_MODEL : undefined, json);
   if (attempt.kind === "ok") {
-    const value = accept(attempt.text); // identity for text; parse + zod for JSON
+    const value = accept(attempt.text); // identity for summaries; email shape for drafts; parse + zod for JSON
     if (value !== undefined) return { ok: true, value, provider: attempt.provider };
   }
   failures.push(/* rate_limited | error | malformed */);
@@ -786,7 +788,7 @@ open pipeline, engagement recency, churn), `heuristicEmailDraft`, and
 `heuristicSummary`.
 
 They run in three situations: no API key configured, every provider failed,
-or — for scoring specifically — the model's reply failed validation. Each
+or — for scoring and drafting — the model's reply failed validation. Each
 action reports which one as `degraded` (`not_configured`, `rate_limited`,
 `error` or `malformed`) on its result and in its audit entry, so the panel
 label and the audit trail can tell absence from degradation.
@@ -797,6 +799,12 @@ our side, the same rule for both providers) — parses the whole reply, and vali
 with a zod schema that rounds a fractional score and cuts a long reason. A reply
 that fails is `malformed`: the next provider is tried, and if none answers
 usably the action falls through to the heuristic with `degraded: "malformed"`.
+`draftFollowUp` asks for text through `generateDraft`, whose acceptance step is
+`isEmailShaped` (`src/lib/ai/draft-shape.ts`): the first non-blank line must be an exact
+`Subject:` line with subject text and a body must follow, or the reply is `malformed` the
+same way — added after the groq leg returned an injected note from the record verbatim as
+the draft on 2026-09-12 and 2026-09-13. Shape only: an injected paragraph under a valid
+subject line is not caught here; the harness's injection fixtures remain that check.
 A model that chats around its answer is therefore never scored, where the old
 greedy `/\{[\s\S]*\}/` scan would have pulled a number out of the prose. The
 reason is written into `Contact.aiScoreReason` and shown next to the score, and
@@ -1151,7 +1159,7 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 416 unit tests, 31 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 452 unit tests, 32 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
 | 45 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
 | AI evaluation harness, 71 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` as one leg per provider with only that provider's key in scope |
 
@@ -1187,7 +1195,9 @@ actually produced; and because a run without enough signal to conclude from —
 under half the live calls answered, or no answer at all from an adversarial
 fixture — is red rather than a green wall of skips. A model that echoes any fragment of its
 system prompt fails a named property on every fixture, after a live draft did exactly that on
-2026-09-12. The parrot payload has a mixed record, and the docs say so: every clean Gemini
+2026-09-12. The operator-impersonation note has its own record: Gemini has resisted it on every clean nightly, while `gpt-oss-120b` returned it verbatim as the draft on 2026-09-12 (a proof run) and again on 2026-09-13 (the first scheduled two-leg nightly, that time quoting a fragment of the system prompt). Since the draft shape is validated, such a reply surfaces in the report as the draft
+property failing with the `malformed` reason rather than as a missing `Subject:` or a marker hit,
+and the rejected text never reaches the injection assertions. The parrot payload has a mixed record, and the docs say so: every clean Gemini
 nightly since 2026-09-08 has resisted it; the first Groq leg on 2026-09-12 obeyed it, which is
 what prompted the hardened context wording, after which the same model resisted it. The nonce
 fence (W13) would make that structural rather than observed. The nightly run is informational and never gates a merge.
@@ -1599,7 +1609,7 @@ and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
 covered only by the 45 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"416 unit tests" means 416 tests of server modules and server actions — none of a rendered component.
+"452 unit tests" means 452 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
