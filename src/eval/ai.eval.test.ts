@@ -51,6 +51,14 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
       prompts.push(prompt);
       return actual.generateText(prompt);
     },
+    // The draft entry point applies the product's shape rule inside the chain;
+    // wrapping it the same way keeps the live path identical to production.
+    // Leave this out and every fixture's fence property fails: the real export
+    // runs, nothing is recorded, and `sent.draft` is empty.
+    generateDraft: async (prompt: string) => {
+      prompts.push(prompt);
+      return actual.generateDraft(prompt);
+    },
     generateJson: async (prompt: string, request: Parameters<typeof actual.generateJson>[1]) => {
       prompts.push(prompt);
       return actual.generateJson(prompt, request);
