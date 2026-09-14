@@ -14,7 +14,7 @@ Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **452 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **459 unit tests, 45 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -26,6 +26,7 @@ e2e tests, and a production build. Current suite: **452 unit tests, 45 e2e tests
 | Next.js 16.2.10 carried 4 high advisories, incl. a proxy/middleware bypass matching this app's auth gate | High | Patched to 16.2.11 |
 | Login rate limit keyed on client-controlled `x-forwarded-for` — spoof the header, get an unlimited bucket | Medium | Prefer platform-set `x-vercel-forwarded-for`/`x-real-ip`; added a per-account failure bucket that header spoofing cannot reset |
 | Successful logins consumed the brute-force budget, so a shared demo account throttled its own visitors (caught by e2e) | Medium | Both buckets now count failed attempts only |
+| No per-source cap on login (found by the 2026-09-13 auth review, F1): the only address-keyed bucket also carried the email, so a fresh email per request forced a bcrypt compare every time, and the code comment promised a control that did not exist | Medium | A third bucket keyed by source alone, 40 attempts / 15 min including successes, charged before the lookup and the compare; the bucket map bounded at 10,000 entries (2026-09-14) |
 | `toggleTask` had no ownership check, unlike `deleteTask` — any member could flip anyone's task | Medium | Assignee-or-admin check, matching its sibling actions |
 | Missing `TURSO_DATABASE_URL` on Vercel silently fell back to a local SQLite file on an ephemeral filesystem | Medium | Fails fast at boot with an explicit message |
 | `npm run db:seed` loaded `.env` and targeted **production Turso** — it would have written a publicly-documented ADMIN account there | High | Seeds locally by default; remote requires `SEED_REMOTE=true` |

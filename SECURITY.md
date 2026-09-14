@@ -14,7 +14,9 @@ free, self-hosted, single-instance app.
 - **Timing-safe login**: unknown emails still run a bcrypt compare against a
   dummy hash, keeping response times uniform; failures return one generic
   message ("Invalid email or password").
-- **Rate limiting**: login 10/15min per IP+email, registration 5/15min per IP,
+- **Rate limiting**: login 40 attempts/15min per source address (every attempt, checked
+  before the lookup and the bcrypt compare), 10 failures/15min per address+email and
+  20 failures/15min per account; registration 5/15min per IP;
   AI actions 30/hour per user, global search 120/min per user (`src/lib/rate-limit.ts`).
 
 ## Authorization
@@ -97,7 +99,7 @@ events in Settings.
 
 | Trade-off | Why | Production path |
 |---|---|---|
-| In-memory rate limiter | zero dependencies | Redis / DB-backed buckets |
+| In-memory rate limiter (per warm instance on serverless, so every cap is per instance; the bucket map is bounded at 10,000 entries) | zero dependencies | Redis / DB-backed buckets |
 | Open registration | demo convenience | invite-only flag |
 | No password reset | needs an email provider | Resend/SES + signed tokens |
 | No 2FA | scope | TOTP via otplib |

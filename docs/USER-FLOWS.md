@@ -112,13 +112,15 @@ step; `/register` is just "create a login for this one shared CRM."
 
 ## 3. Sign in, sign out, session expiry
 
-**Sign in** (`/login`, not demo): same `login()` path as §1, minus the auto-fill. Two independent
-rate-limit buckets are checked with `peekLimit` (read-only — a bucket is only *charged* on an
-actual failure, via `rateLimit`, a few lines later):
+**Sign in** (`/login`, not demo): same `login()` path as §1, minus the auto-fill. A per-source
+bucket is charged on every attempt before anything else runs; two more are checked with
+`peekLimit` (read-only — those are only *charged* on an actual failure, via `rateLimit`, a few
+lines later):
 
-| Bucket | Key | Limit | Why two |
+| Bucket | Key | Limit | Why |
 |---|---|---|---|
-| IP | `login:{ip}:{email}` | 10 failures / 15 min | stops one source guessing many passwords |
+| Source | `login:ip:{ip}` | 40 attempts / 15 min, successes included | bounds the bcrypt work one address can force; stops one source spraying a guess across many accounts |
+| Pair | `login:{ip}:{email}` | 10 failures / 15 min | stops one source guessing one account |
 | Account | `login:account:{email}` | 20 failures / 15 min | survives `x-forwarded-for` spoofing, which the IP bucket can't |
 
 A non-existent email still runs `verifyPassword` against a hard-coded `DUMMY_HASH` bcrypt string

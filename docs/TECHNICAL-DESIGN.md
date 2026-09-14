@@ -69,7 +69,7 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 452 unit tests across 32 files pass, the production build succeeds, and
+passes, 459 unit tests across 33 files pass, the production build succeeds, and
 45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 452 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 459 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -399,12 +399,18 @@ also means every expired session row persists indefinitely.
   `verifyPassword(password, DUMMY_HASH)` against a hard-coded bcrypt hash, so
   response time does not reveal which addresses are registered. The error message
   is one generic string for both cases.
-- **Two rate-limit buckets, both counting failures only.** `login:{ip}:{email}` at
-  10 per 15 minutes and `login:account:{email}` at 20 per 15 minutes. They are
-  *peeked* before the attempt and only *charged* on failure. Charging successes
-  broke the shared demo account — visitors throttled each other — and an e2e test
-  caught it (`SAAS-READINESS.md` §1). The account bucket exists because the IP
-  bucket can be defeated by header spoofing and the account bucket cannot.
+- **Three rate-limit buckets.** `login:ip:{ip}` at 40 attempts per 15 minutes is
+  *charged on every attempt*, successes included, before the user lookup and the
+  bcrypt compare: it bounds the work one address can force and stops one address
+  spraying a guess across many accounts. Until 2026-09-14 there was no such bucket —
+  the only address-keyed one also carried the email, so a fresh email per request
+  found no bucket and always reached bcrypt (auth review F1). `login:{ip}:{email}` at
+  10 and `login:account:{email}` at 20 count failures only: they are *peeked* before
+  the attempt and *charged* on failure. Charging successes on those broke the shared
+  demo account — visitors throttled each other — and an e2e test caught it
+  (`SAAS-READINESS.md` §1); the per-source cap can afford it because forty is far more
+  than any office behind one address signs in. The account bucket exists because
+  the address-keyed ones can be defeated by header spoofing and it cannot.
 - **Which IP header is trusted.** `clientIp()` prefers `x-vercel-forwarded-for`
   then `x-real-ip` — both platform-set — and only falls back to
   `x-forwarded-for`, which any client can forge, for self-hosting and local dev.
@@ -845,7 +851,9 @@ audit entry as `degraded`, which is where a quiet quota exhaustion is noticed.
 A fixed-window counter in a module-level `Map`. `rateLimit(key, {limit, windowMs})`
 consumes budget; `peekLimit(key, {limit})` reads standing without consuming, which
 is what makes "count failed logins only" possible. `sweepExpiredBuckets()` is
-opportunistic cleanup, at most every five minutes, so the map cannot grow without
+opportunistic cleanup, at most every five minutes; the map is also bounded at
+`MAX_BUCKETS` (10,000): past that, expired buckets are evicted first and then the
+oldest, so caller-chosen keys cannot grow it without
 bound within one process.
 
 Current buckets:
@@ -1161,7 +1169,7 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 452 unit tests, 32 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 459 unit tests, 33 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
 | 45 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
 | AI evaluation harness, 71 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` as one leg per provider with only that provider's key in scope |
 
@@ -1611,7 +1619,7 @@ and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
 covered only by the 45 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"452 unit tests" means 452 tests of server modules and server actions — none of a rendered component.
+"459 unit tests" means 459 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
