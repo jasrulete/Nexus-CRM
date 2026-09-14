@@ -1,6 +1,6 @@
 /**
  * The login action against a real database. Faked: the request headers (so a
- * test can be a given source address), bcrypt (so forty attempts cost
+ * test can be a given source address), bcrypt (so a hundred attempts cost
  * milliseconds, and so a test can see whether the compare ran at all), the
  * session cookie, and Next's redirect. The rate limiter, zod, the audit log
  * and the user lookup run for real.
@@ -26,8 +26,8 @@ vi.mock("@/lib/auth/session", () => ({
   getCurrentUser: async () => null,
 }));
 
-// bcrypt at cost 12 takes a quarter of a second, and forty of them would make
-// this the slowest file in the suite. The stand-in also counts how often it
+// bcrypt at cost 12 takes a quarter of a second, and a hundred of them would
+// make this the slowest file in the suite. The stand-in also counts how often it
 // ran, which is the whole point of a cap that sits in front of it.
 const bcrypt = vi.hoisted(() => ({ compares: 0 }));
 vi.mock("./password", () => ({
