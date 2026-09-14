@@ -99,7 +99,7 @@ events in Settings.
 
 | Trade-off | Why | Production path |
 |---|---|---|
-| In-memory rate limiter (per warm instance on serverless, so every cap is per instance; the bucket map is bounded at 10,000 entries) | zero dependencies | Redis / DB-backed buckets |
+| In-memory rate limiter (per warm instance on serverless, so every cap is per instance; the bucket map is bounded at 10,000 entries, evicting unexhausted buckets before any lockout) | zero dependencies | Redis / DB-backed buckets |
 | Open registration | demo convenience | invite-only flag |
 | No password reset | needs an email provider | Resend/SES + signed tokens |
 | No 2FA | scope | TOTP via otplib |

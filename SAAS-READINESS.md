@@ -13,8 +13,11 @@ attachments (§3).
 Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
+Fifth pass: 2026-09-14 — the auth review's one finding (F1): a per-source login cap and
+a bounded bucket map (§3b).
+
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **459 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **461 unit tests, 45 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -26,7 +29,6 @@ e2e tests, and a production build. Current suite: **459 unit tests, 45 e2e tests
 | Next.js 16.2.10 carried 4 high advisories, incl. a proxy/middleware bypass matching this app's auth gate | High | Patched to 16.2.11 |
 | Login rate limit keyed on client-controlled `x-forwarded-for` — spoof the header, get an unlimited bucket | Medium | Prefer platform-set `x-vercel-forwarded-for`/`x-real-ip`; added a per-account failure bucket that header spoofing cannot reset |
 | Successful logins consumed the brute-force budget, so a shared demo account throttled its own visitors (caught by e2e) | Medium | Both buckets now count failed attempts only |
-| No per-source cap on login (found by the 2026-09-13 auth review, F1): the only address-keyed bucket also carried the email, so a fresh email per request forced a bcrypt compare every time, and the code comment promised a control that did not exist | Medium | A third bucket keyed by source alone, 100 attempts / 15 min including successes, charged before the lookup and the compare; the bucket map bounded at 10,000 entries (2026-09-14) |
 | `toggleTask` had no ownership check, unlike `deleteTask` — any member could flip anyone's task | Medium | Assignee-or-admin check, matching its sibling actions |
 | Missing `TURSO_DATABASE_URL` on Vercel silently fell back to a local SQLite file on an ephemeral filesystem | Medium | Fails fast at boot with an explicit message |
 | `npm run db:seed` loaded `.env` and targeted **production Turso** — it would have written a publicly-documented ADMIN account there | High | Seeds locally by default; remote requires `SEED_REMOTE=true` |
@@ -231,6 +233,20 @@ its designed failure — ten such PRs arrived in the first hour after #10 merged
 spending a build on a preview nobody would open. Your own branches still build (and
 still fail until §4a is done), so the by-design signal is preserved where a human
 might look at it. Remove the rule when Dependabot previews become useful.
+
+---
+
+## 3b. Fixed in the 2026-09-14 pass
+
+A read-only review of the authentication flow (2026-09-13; one finding, upheld by three
+independent skeptics) found the login limiter promising a control it did not have.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| No per-source cap on login (F1): the only address-keyed bucket also carried the email, so a fresh email per request found no bucket, passed both checks and forced a bcrypt compare at cost 12 plus an audit row; the comment above the buckets claimed the bucket "stops one source guessing many passwords" | Medium | A third bucket keyed by source alone, 100 attempts / 15 min including successes, charged before the lookup and the compare; the two failure-only buckets renamed to say what their keys do; the bucket map bounded at 10,000 entries, evicting expired and then unexhausted buckets before any lockout, so a flood of fresh keys cannot flush a block |
+
+Still per warm instance on serverless; a durable, cross-instance limiter remains the known
+trade-off in `SECURITY.md`.
 
 ---
 

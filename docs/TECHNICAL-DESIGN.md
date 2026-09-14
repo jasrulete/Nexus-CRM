@@ -69,7 +69,7 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 459 unit tests across 33 files pass, the production build succeeds, and
+passes, 461 unit tests across 33 files pass, the production build succeeds, and
 45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
@@ -89,7 +89,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 459 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 461 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -852,8 +852,10 @@ A fixed-window counter in a module-level `Map`. `rateLimit(key, {limit, windowMs
 consumes budget; `peekLimit(key, {limit})` reads standing without consuming, which
 is what makes "count failed logins only" possible. `sweepExpiredBuckets()` is
 opportunistic cleanup, at most every five minutes; the map is also bounded at
-`MAX_BUCKETS` (10,000): past that, expired buckets are evicted first and then the
-oldest, so caller-chosen keys cannot grow it without
+`MAX_BUCKETS` (10,000): past that, expired buckets are evicted first, then the oldest
+that are not at their limit, then the oldest of all — so caller-chosen keys cannot grow it
+without limit and a flood of fresh keys cannot flush a lockout, which would otherwise be a way
+to reset an account bucket without
 bound within one process.
 
 Current buckets:
@@ -861,6 +863,7 @@ Current buckets:
 | Key | Limit | Window | Where |
 |---|---|---|---|
 | `register:{ip}` | 5 | 15 min | `auth/actions.ts` |
+| `login:ip:{ip}` | 100 attempts, successes included | 15 min | `auth/actions.ts` — charged before the lookup and the compare |
 | `login:{ip}:{email}` | 10 failures | 15 min | `auth/actions.ts` |
 | `login:account:{email}` | 20 failures | 15 min | `auth/actions.ts` |
 | `ai:{userId}` | 30 | 1 hour | `server/actions/ai.ts` |
@@ -1169,7 +1172,7 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 459 unit tests, 33 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 461 unit tests, 33 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
 | 45 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
 | AI evaluation harness, 71 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` as one leg per provider with only that provider's key in scope |
 
@@ -1619,7 +1622,7 @@ and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
 covered only by the 45 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"459 unit tests" means 459 tests of server modules and server actions — none of a rendered component.
+"461 unit tests" means 461 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
