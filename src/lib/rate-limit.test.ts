@@ -165,7 +165,10 @@ describe("the bucket map", () => {
     rateLimit("victim", hour);
     expect(rateLimit("victim", hour).ok).toBe(false);
 
-    for (let i = 0; i < MAX_BUCKETS; i++) rateLimit(`flood-${i}`, hour);
+    // Real flood keys sit far below their limit (a per-source bucket allows a
+    // hundred); a limit of one would make every flood key a lockout too.
+    const roomy = { limit: 100, windowMs: 60 * 60_000 };
+    for (let i = 0; i < MAX_BUCKETS; i++) rateLimit(`flood-${i}`, roomy);
 
     expect(rateLimit("victim", hour).ok).toBe(false);
   });
