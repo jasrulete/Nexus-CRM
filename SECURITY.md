@@ -14,7 +14,7 @@ free, self-hosted, single-instance app.
 - **Timing-safe login**: unknown emails still run a bcrypt compare against a
   dummy hash, keeping response times uniform; failures return one generic
   message ("Invalid email or password").
-- **Rate limiting**: login 40 attempts/15min per source address (every attempt, checked
+- **Rate limiting**: login 100 attempts/15min per source address (every attempt, checked
   before the lookup and the bcrypt compare), 10 failures/15min per address+email and
   20 failures/15min per account; registration 5/15min per IP;
   AI actions 30/hour per user, global search 120/min per user (`src/lib/rate-limit.ts`).

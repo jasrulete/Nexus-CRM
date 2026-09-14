@@ -119,7 +119,7 @@ lines later):
 
 | Bucket | Key | Limit | Why |
 |---|---|---|---|
-| Source | `login:ip:{ip}` | 40 attempts / 15 min, successes included | bounds the bcrypt work one address can force; stops one source spraying a guess across many accounts |
+| Source | `login:ip:{ip}` | 100 attempts / 15 min, successes included | bounds the bcrypt work one address can force; stops one source spraying a guess across many accounts |
 | Pair | `login:{ip}:{email}` | 10 failures / 15 min | stops one source guessing one account |
 | Account | `login:account:{email}` | 20 failures / 15 min | survives `x-forwarded-for` spoofing, which the IP bucket can't |
 

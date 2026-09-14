@@ -818,7 +818,7 @@ The configured limits:
 
 | Key | Limit | Window | Where |
 |---|---|---|---|
-| `login:ip:{ip}` | 40 attempts, successes included | 15 min | `IP_ATTEMPT_LIMIT` |
+| `login:ip:{ip}` | 100 attempts, successes included | 15 min | `IP_ATTEMPT_LIMIT` |
 | `login:{ip}:{email}` | 10 failures | 15 min | `PAIR_FAILURE_LIMIT` |
 | `login:account:{email}` | 20 failures | 15 min | `ACCOUNT_FAILURE_LIMIT` |
 | `register:{ip}` | 5 attempts | 15 min | `register()` |
@@ -1530,7 +1530,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `NOT_YOURS` | same file | `"You can only edit records you own."` Phrased for a user reading a form, because that is where it is rendered. |
 | `DUMMY_HASH` | [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts) | A constant bcrypt hash compared against when the email does not exist, so login timing does not reveal which emails are registered. |
 | `clientIp()` | same file | Prefers `x-vercel-forwarded-for` / `x-real-ip` (platform-set, trustworthy); falls back to the first entry of the client-spoofable `x-forwarded-for`, then `"local"`. |
-| `IP_ATTEMPT_LIMIT` / `PAIR_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 40 **attempts** per source (successes included, charged before the compare), then 10 and 20 **failed** logins per 15 minutes for the source-and-email pair and the account. The account one survives forwarded-for spoofing. |
+| `IP_ATTEMPT_LIMIT` / `PAIR_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 100 **attempts** per source (successes included, charged before the compare), then 10 and 20 **failed** logins per 15 minutes for the source-and-email pair and the account. The account one survives forwarded-for spoofing. |
 | `peekLimit` / `rateLimit` / `sweepExpiredBuckets` | [`src/lib/rate-limit.ts`](../src/lib/rate-limit.ts) | Read standing without consuming / increment and report / opportunistic map cleanup every 5 minutes. |
 | `recordBlock(contact)` | [`src/lib/ai/prompt.ts`](../src/lib/ai/prompt.ts) | Serialises a contact and its company, deals and last 10 activities into a `<record>…</record>` fenced block for the prompt. Each activity is truncated to 300 chars. |
 | `audit(entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends to `AuditLog`. `metadata` is `JSON.stringify`'d into a `String?` column. **Never throws** — a failed log must not break the action it records. Called after (and outside) the write it describes. |

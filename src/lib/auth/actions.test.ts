@@ -79,22 +79,22 @@ const failedLogins = () => prisma.auditLog.count({ where: { action: "auth.login_
 // the email: each request forced a bcrypt compare, and the comment above the
 // buckets promised a per-source control that did not exist.
 describe("login, per source", () => {
-  it("refuses the forty-first attempt from one source, whatever email it tries, before the lookup and the compare", async () => {
-    for (let i = 0; i < 40; i++) {
+  it("refuses the hundred-and-first attempt from one source, whatever email it tries, before the lookup and the compare", async () => {
+    for (let i = 0; i < 100; i++) {
       expect((await attempt(`guess${seq}-${i}@example.com`, "not it")).message).toMatch(WRONG);
     }
-    expect(bcrypt.compares).toBe(40);
-    expect(await failedLogins()).toBe(40);
+    expect(bcrypt.compares).toBe(100);
+    expect(await failedLogins()).toBe(100);
 
-    const refused = await attempt(`guess${seq}-41@example.com`, "not it");
+    const refused = await attempt(`guess${seq}-101@example.com`, "not it");
 
     expect(refused.message).toMatch(TOO_MANY);
-    expect(bcrypt.compares).toBe(40);
-    expect(await failedLogins()).toBe(40);
+    expect(bcrypt.compares).toBe(100);
+    expect(await failedLogins()).toBe(100);
   });
 
   it("leaves another source untouched by an exhausted one", async () => {
-    for (let i = 0; i < 41; i++) await attempt(`spray${seq}-${i}@example.com`, "not it");
+    for (let i = 0; i < 101; i++) await attempt(`spray${seq}-${i}@example.com`, "not it");
     expect((await attempt(`spray${seq}-x@example.com`, "not it")).message).toMatch(TOO_MANY);
 
     request.ip = `10.0.${seq}.2`;
@@ -104,7 +104,7 @@ describe("login, per source", () => {
 
   it("counts successful sign-ins toward the per-source cap but not toward the account's", async () => {
     const user = await makeUser(prisma, { email: `owner${seq}@example.com` });
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 100; i++) {
       expect((await attempt(user.email, "correct horse")).signedIn).toBe(true);
     }
 

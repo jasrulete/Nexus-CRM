@@ -193,7 +193,7 @@ it, and acceptance criteria written as behaviour you can observe in a browser.
 | A3 | Registering an email that already exists shows *"This email is already registered"* on the email field |
 | A4 | Signing in with a wrong password shows *"Invalid email or password"* and stays on `/login` |
 | A5 | An unknown email takes the same measurable time as a known one — `login()` runs bcrypt against a constant `DUMMY_HASH` when no user is found |
-| A6 | 11 failed sign-ins from one IP for one email within 15 minutes are refused with a retry countdown; **successful** sign-ins never consume that budget. Separately, the 41st sign-in attempt of any kind from one IP within 15 minutes is refused before the password is checked, whatever email it carries |
+| A6 | 11 failed sign-ins from one IP for one email within 15 minutes are refused with a retry countdown; **successful** sign-ins never consume that budget. Separately, the 101st sign-in attempt of any kind from one IP within 15 minutes is refused before the password is checked, whatever email it carries |
 | A7 | A second bucket keyed on the account alone (20 failures / 15 min) survives `x-forwarded-for` spoofing, which the IP bucket cannot |
 | A8 | Signing out returns to `/login` and `/contacts` then redirects back to `/login` |
 | A9 | `auth.login`, `auth.login_failed`, `auth.logout` and `auth.register` all appear in `AuditLog` |

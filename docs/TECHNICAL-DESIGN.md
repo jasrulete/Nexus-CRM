@@ -399,7 +399,7 @@ also means every expired session row persists indefinitely.
   `verifyPassword(password, DUMMY_HASH)` against a hard-coded bcrypt hash, so
   response time does not reveal which addresses are registered. The error message
   is one generic string for both cases.
-- **Three rate-limit buckets.** `login:ip:{ip}` at 40 attempts per 15 minutes is
+- **Three rate-limit buckets.** `login:ip:{ip}` at 100 attempts per 15 minutes is
   *charged on every attempt*, successes included, before the user lookup and the
   bcrypt compare: it bounds the work one address can force and stops one address
   spraying a guess across many accounts. Until 2026-09-14 there was no such bucket —
@@ -408,8 +408,8 @@ also means every expired session row persists indefinitely.
   10 and `login:account:{email}` at 20 count failures only: they are *peeked* before
   the attempt and *charged* on failure. Charging successes on those broke the shared
   demo account — visitors throttled each other — and an e2e test caught it
-  (`SAAS-READINESS.md` §1); the per-source cap can afford it because forty is far more
-  than any office behind one address signs in. The account bucket exists because
+  (`SAAS-READINESS.md` §1); the per-source cap can afford it because a hundred is far
+  more than real use — the e2e suite alone signs in 36 times from one address per run. The account bucket exists because
   the address-keyed ones can be defeated by header spoofing and it cannot.
 - **Which IP header is trusted.** `clientIp()` prefers `x-vercel-forwarded-for`
   then `x-real-ip` — both platform-set — and only falls back to

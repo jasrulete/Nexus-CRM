@@ -25,7 +25,7 @@ const DUMMY_HASH =
 // count failures only, so a shared account (the demo) cannot be locked by
 // its own visitors: one per source and email, one per account.
 const LOGIN_WINDOW_MS = 15 * 60_000;
-const IP_ATTEMPT_LIMIT = 40;
+const IP_ATTEMPT_LIMIT = 100;
 const PAIR_FAILURE_LIMIT = 10;
 const ACCOUNT_FAILURE_LIMIT = 20;
 
@@ -100,10 +100,11 @@ export async function login(
   const { email, password } = parsed.data;
 
   // Charged on every attempt, before the lookup and the bcrypt compare, so a
-  // refused request costs nothing. Forty per window is more than any office
-  // behind one address signs in, and it is what keeps a stream of fresh
-  // emails — or the published demo credentials — from being a free CPU
-  // faucet. Like every bucket here it is per instance on serverless.
+  // refused request costs nothing. A hundred per window bounds what one
+  // address can make the server do — a stream of fresh emails, or the
+  // published demo credentials, used to be a free CPU faucet — while staying
+  // far above real use: the end-to-end suite alone signs in 36 times from one
+  // address per run. Like every bucket here it is per instance on serverless.
   const sourceLimited = rateLimit(`login:ip:${ip}`, {
     limit: IP_ATTEMPT_LIMIT,
     windowMs: LOGIN_WINDOW_MS,
