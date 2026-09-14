@@ -8,6 +8,24 @@ import "server-only";
  */
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
+/**
+ * Keys are chosen by callers, and on the login path by whoever is calling: a
+ * fresh email per request used to add entries the periodic sweep would not
+ * touch for fifteen minutes. Past this many, expired buckets go first and
+ * then the oldest, so a flood of keys cannot grow memory without limit.
+ */
+export const MAX_BUCKETS = 10_000;
+
+function makeRoom(now: number) {
+  if (buckets.size < MAX_BUCKETS) return;
+  for (const [key, bucket] of buckets) if (bucket.resetAt <= now) buckets.delete(key);
+  // Insertion order is oldest first.
+  for (const key of buckets.keys()) {
+    if (buckets.size < MAX_BUCKETS) break;
+    buckets.delete(key);
+  }
+}
+
 export function rateLimit(
   key: string,
   { limit, windowMs }: { limit: number; windowMs: number },
@@ -16,6 +34,7 @@ export function rateLimit(
   const bucket = buckets.get(key);
 
   if (!bucket || bucket.resetAt <= now) {
+    if (!bucket) makeRoom(now);
     buckets.set(key, { count: 1, resetAt: now + windowMs });
     return { ok: true, retryAfterSec: 0 };
   }
@@ -46,7 +65,7 @@ export function peekLimit(
   return { ok: true, retryAfterSec: 0 };
 }
 
-// Opportunistic cleanup so the map doesn't grow unbounded.
+// Opportunistic cleanup so the map doesn't hold expired buckets for long.
 const CLEANUP_EVERY = 5 * 60_000;
 let lastCleanup = Date.now();
 export function sweepExpiredBuckets() {

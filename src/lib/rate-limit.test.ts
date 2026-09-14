@@ -120,3 +120,36 @@ describe("sweepExpiredBuckets", () => {
     expect(rateLimit("stale", opts)).toEqual({ ok: true, retryAfterSec: 0 });
   });
 });
+
+// Keys are chosen by the caller, and on the login path by whoever is calling:
+// one fresh email per request used to add two entries the sweep would not
+// touch for fifteen minutes. The map has to have a ceiling of its own.
+describe("the bucket map", () => {
+  const hour = { limit: 1, windowMs: 60 * 60_000 };
+
+  it("evicts the oldest bucket, not the newest, when a flood of keys fills it", async () => {
+    const { rateLimit, MAX_BUCKETS } = await freshLimiter();
+    rateLimit("first", hour);
+    expect(rateLimit("first", hour).ok).toBe(false);
+
+    for (let i = 0; i < MAX_BUCKETS; i++) rateLimit(`flood-${i}`, hour);
+
+    // "first" was pushed out, so it starts a fresh window; the last of the
+    // flood is still there and still counted.
+    expect(rateLimit("first", hour).ok).toBe(true);
+    expect(rateLimit(`flood-${MAX_BUCKETS - 1}`, hour).ok).toBe(false);
+  });
+
+  it("evicts expired buckets before live ones", async () => {
+    const { rateLimit, MAX_BUCKETS } = await freshLimiter();
+    rateLimit("stale", { limit: 1, windowMs: 60_000 });
+    vi.advanceTimersByTime(61_000);
+    rateLimit("live", hour);
+    expect(rateLimit("live", hour).ok).toBe(false);
+    for (let i = 0; i < MAX_BUCKETS - 2; i++) rateLimit(`filler-${i}`, hour);
+
+    rateLimit("one-more", hour);
+
+    expect(rateLimit("live", hour).ok).toBe(false);
+  });
+});
