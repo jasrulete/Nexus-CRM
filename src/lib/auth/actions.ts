@@ -117,7 +117,8 @@ export async function login(
   // abuse, and charging it would let the shared demo account lock out its own
   // visitors. The pair bucket stops one source guessing one account; the
   // account bucket survives forwarded-for spoofing, which the source ones
-  // cannot.
+  // cannot (a spoofed flood of fresh keys cannot evict it either: the map
+  // evicts unexhausted buckets before a lockout).
   const pairKey = `login:${ip}:${email}`;
   const accountKey = `login:account:${email}`;
 

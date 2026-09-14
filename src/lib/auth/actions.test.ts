@@ -80,17 +80,34 @@ const failedLogins = () => prisma.auditLog.count({ where: { action: "auth.login_
 // buckets promised a per-source control that did not exist.
 describe("login, per source", () => {
   it("refuses the hundred-and-first attempt from one source, whatever email it tries, before the lookup and the compare", async () => {
+    const lookups = vi.spyOn(prisma.user, "findUnique");
     for (let i = 0; i < 100; i++) {
       expect((await attempt(`guess${seq}-${i}@example.com`, "not it")).message).toMatch(WRONG);
     }
+    expect(lookups).toHaveBeenCalledTimes(100);
     expect(bcrypt.compares).toBe(100);
     expect(await failedLogins()).toBe(100);
 
     const refused = await attempt(`guess${seq}-101@example.com`, "not it");
 
     expect(refused.message).toMatch(TOO_MANY);
+    expect(lookups).toHaveBeenCalledTimes(100);
     expect(bcrypt.compares).toBe(100);
     expect(await failedLogins()).toBe(100);
+    lookups.mockRestore();
+  });
+
+  // Checked and charged in one step, before anything slow: a limiter that
+  // peeked first and charged after the compare would let a burst through
+  // together, every request seeing an empty bucket.
+  it("holds under a burst: exactly a hundred of a hundred and fifty concurrent attempts reach the compare", async () => {
+    const results = await Promise.all(
+      Array.from({ length: 150 }, (_, i) => attempt(`burst${seq}-${i}@example.com`, "not it")),
+    );
+
+    expect(bcrypt.compares).toBe(100);
+    expect(results.filter((r) => TOO_MANY.test(r.message))).toHaveLength(50);
+    expect(results.filter((r) => WRONG.test(r.message))).toHaveLength(100);
   });
 
   it("leaves another source untouched by an exhausted one", async () => {
