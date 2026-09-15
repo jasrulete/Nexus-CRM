@@ -19,8 +19,14 @@ export type AuthFormState = {
 const DUMMY_HASH =
   "$2b$12$C6UzMDM.H6dfI/f/IKcEeO7ZBpUS8QSkDf0MFyzHhEBRE5l0S7y2u";
 
-// Failed logins allowed per 15 minutes, per source IP and per account.
-const IP_FAILURE_LIMIT = 10;
+// Login limits, all per 15 minutes. The per-source cap counts every attempt,
+// successes included: it bounds the bcrypt work one address can force and
+// stops one address spraying one guess across many accounts. The other two
+// count failures only, so a shared account (the demo) cannot be locked by
+// its own visitors: one per source and email, one per account.
+const LOGIN_WINDOW_MS = 15 * 60_000;
+const IP_ATTEMPT_LIMIT = 100;
+const PAIR_FAILURE_LIMIT = 10;
 const ACCOUNT_FAILURE_LIMIT = 20;
 
 // Only platform-set headers are trustworthy; a direct client can send any
@@ -93,14 +99,30 @@ export async function login(
 
   const { email, password } = parsed.data;
 
-  // Both buckets count *failed* attempts only — a successful sign-in is not
+  // Charged on every attempt, before the lookup and the bcrypt compare, so a
+  // refused request costs nothing. A hundred per window bounds what one
+  // address can make the server do — a stream of fresh emails, or the
+  // published demo credentials, used to be a free CPU faucet — while staying
+  // far above real use: the end-to-end suite alone signs in 36 times from one
+  // address per run. Like every bucket here it is per instance on serverless.
+  const sourceLimited = rateLimit(`login:ip:${ip}`, {
+    limit: IP_ATTEMPT_LIMIT,
+    windowMs: LOGIN_WINDOW_MS,
+  });
+  if (!sourceLimited.ok) {
+    return { message: `Too many attempts. Try again in ${sourceLimited.retryAfterSec}s.` };
+  }
+
+  // These two count *failed* attempts only — a successful sign-in is not
   // abuse, and charging it would let the shared demo account lock out its own
-  // visitors. The IP bucket stops one source guessing many passwords; the
-  // account bucket survives forwarded-for spoofing, which the IP one cannot.
-  const ipKey = `login:${ip}:${email}`;
+  // visitors. The pair bucket stops one source guessing one account; the
+  // account bucket survives forwarded-for spoofing, which the source ones
+  // cannot (a spoofed flood of fresh keys cannot evict it either: the map
+  // evicts unexhausted buckets before a lockout).
+  const pairKey = `login:${ip}:${email}`;
   const accountKey = `login:account:${email}`;
 
-  const limited = peekLimit(ipKey, { limit: IP_FAILURE_LIMIT });
+  const limited = peekLimit(pairKey, { limit: PAIR_FAILURE_LIMIT });
   if (!limited.ok) {
     return { message: `Too many attempts. Try again in ${limited.retryAfterSec}s.` };
   }
@@ -116,11 +138,8 @@ export async function login(
   const valid = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
 
   if (!user || !valid) {
-    rateLimit(ipKey, { limit: IP_FAILURE_LIMIT, windowMs: 15 * 60_000 });
-    rateLimit(accountKey, {
-      limit: ACCOUNT_FAILURE_LIMIT,
-      windowMs: 15 * 60_000,
-    });
+    rateLimit(pairKey, { limit: PAIR_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
+    rateLimit(accountKey, { limit: ACCOUNT_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
     await audit({
       action: "auth.login_failed",
       entityType: "user",

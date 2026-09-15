@@ -13,8 +13,11 @@ attachments (§3).
 Fourth pass: 2026-08-21 — a research-and-audit sweep (`IMPROVEMENT-PLAN.md`),
 then the deployment-surface fixes in §3a.
 
+Fifth pass: 2026-09-14 — the auth review's one finding (F1): a per-source login cap and
+a bounded bucket map (§3b).
+
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **452 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **461 unit tests, 45 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -230,6 +233,20 @@ its designed failure — ten such PRs arrived in the first hour after #10 merged
 spending a build on a preview nobody would open. Your own branches still build (and
 still fail until §4a is done), so the by-design signal is preserved where a human
 might look at it. Remove the rule when Dependabot previews become useful.
+
+---
+
+## 3b. Fixed in the 2026-09-14 pass
+
+A read-only review of the authentication flow (2026-09-13; one finding, upheld by three
+independent skeptics) found the login limiter promising a control it did not have.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| No per-source cap on login (F1): the only address-keyed bucket also carried the email, so a fresh email per request found no bucket, passed both checks and forced a bcrypt compare at cost 12 plus an audit row; the comment above the buckets claimed the bucket "stops one source guessing many passwords" | Medium | A third bucket keyed by source alone, 100 attempts / 15 min including successes, charged before the lookup and the compare; the two failure-only buckets renamed to say what their keys do; the bucket map bounded at 10,000 entries, evicting expired and then unexhausted buckets before any lockout, so a flood of fresh keys cannot flush a block |
+
+Still per warm instance on serverless; a durable, cross-instance limiter remains the known
+trade-off in `SECURITY.md`.
 
 ---
 

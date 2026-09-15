@@ -120,3 +120,56 @@ describe("sweepExpiredBuckets", () => {
     expect(rateLimit("stale", opts)).toEqual({ ok: true, retryAfterSec: 0 });
   });
 });
+
+// Keys are chosen by the caller, and on the login path by whoever is calling:
+// one fresh email per request used to add two entries the sweep would not
+// touch for fifteen minutes. The map has to have a ceiling of its own.
+describe("the bucket map", () => {
+  const hour = { limit: 1, windowMs: 60 * 60_000 };
+
+  it("evicts the oldest unexhausted bucket, not the newest, when a flood of keys fills it", async () => {
+    const { rateLimit, MAX_BUCKETS } = await freshLimiter();
+    const two = { limit: 2, windowMs: 60 * 60_000 };
+    rateLimit("first", two);
+
+    for (let i = 0; i < MAX_BUCKETS; i++) rateLimit(`flood-${i}`, hour);
+
+    // "first" was pushed out, so it starts a fresh window with two calls to
+    // spare; had it stayed, the second of these would be its third and refused.
+    expect(rateLimit("first", two).ok).toBe(true);
+    expect(rateLimit("first", two).ok).toBe(true);
+    // The last of the flood is still there and still counted.
+    expect(rateLimit(`flood-${MAX_BUCKETS - 1}`, hour).ok).toBe(false);
+  });
+
+  it("evicts expired buckets before live ones", async () => {
+    const { rateLimit, MAX_BUCKETS } = await freshLimiter();
+    // The live bucket is the older of the two, so plain oldest-first would
+    // take it; only an expired-first pass spares it.
+    rateLimit("live", { limit: 2, windowMs: 60 * 60_000 });
+    rateLimit("stale", { limit: 1, windowMs: 60_000 });
+    vi.advanceTimersByTime(61_000);
+    for (let i = 0; i < MAX_BUCKETS - 2; i++) rateLimit(`filler-${i}`, hour);
+
+    rateLimit("one-more", hour);
+
+    expect(rateLimit("live", { limit: 2, windowMs: 60 * 60_000 }).ok).toBe(true);
+    expect(rateLimit("live", { limit: 2, windowMs: 60 * 60_000 }).ok).toBe(false);
+  });
+
+  // A lockout is a bucket at its limit. Every login attempt creates a
+  // per-source key, so an attacker who is locked out of one account could
+  // otherwise flood the map from fresh sources until the lockout is evicted.
+  it("keeps an exhausted bucket through a flood of fresh keys", async () => {
+    const { rateLimit, MAX_BUCKETS } = await freshLimiter();
+    rateLimit("victim", hour);
+    expect(rateLimit("victim", hour).ok).toBe(false);
+
+    // Real flood keys sit far below their limit (a per-source bucket allows a
+    // hundred); a limit of one would make every flood key a lockout too.
+    const roomy = { limit: 100, windowMs: 60 * 60_000 };
+    for (let i = 0; i < MAX_BUCKETS; i++) rateLimit(`flood-${i}`, roomy);
+
+    expect(rateLimit("victim", hour).ok).toBe(false);
+  });
+});

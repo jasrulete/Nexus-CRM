@@ -805,11 +805,13 @@ module-level `Map<string, { count, resetAt }>`. Three exported functions:
 
 - `rateLimit(key, {limit, windowMs})` — increments and reports.
 - `peekLimit(key, {limit})` — reads standing **without consuming budget**.
-- `sweepExpiredBuckets()` — opportunistic cleanup every 5 minutes so the map stays bounded.
+- `sweepExpiredBuckets()` — opportunistic cleanup every 5 minutes; `MAX_BUCKETS` (10,000) is what
+  actually bounds the map — past it, expired buckets are evicted first, then the oldest that are not
+  at their limit, then the oldest of all, so a flood of keys cannot flush a lockout.
 
 The `peek`/`charge` split is the interesting design. In `login`
-([`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts)) the flow is: *peek* both buckets
-before attempting; only *charge* them if the credentials were wrong. The comment says why:
+([`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts)) the flow is: *charge* the source bucket, then *peek* the pair
+and account buckets before attempting; only *charge* those two if the credentials were wrong. The comment says why:
 *"a successful sign-in is not abuse, and charging it would let the shared demo account lock
 out its own visitors."* The public demo credentials are in the README, so a stream of
 strangers all signing in as `demo@nexuscrm.dev` would otherwise trip an account-wide limit.
@@ -818,14 +820,18 @@ The configured limits:
 
 | Key | Limit | Window | Where |
 |---|---|---|---|
-| `login:{ip}:{email}` | 10 failures | 15 min | `IP_FAILURE_LIMIT` |
+| `login:ip:{ip}` | 100 attempts, successes included | 15 min | `IP_ATTEMPT_LIMIT` |
+| `login:{ip}:{email}` | 10 failures | 15 min | `PAIR_FAILURE_LIMIT` |
 | `login:account:{email}` | 20 failures | 15 min | `ACCOUNT_FAILURE_LIMIT` |
 | `register:{ip}` | 5 attempts | 15 min | `register()` |
 | `ai:{userId}` | 30 calls | 60 min | `aiRateLimited()` in `src/server/actions/ai.ts` |
 
-Two buckets on login, not one, and the reason is in the comment: *"The IP bucket stops one
-source guessing many passwords; the account bucket survives forwarded-for spoofing, which
-the IP one cannot."* `clientIp()` prefers platform-set headers (`x-vercel-forwarded-for`,
+Three buckets on login, and the reason is in the comment: the per-source cap *"bounds the
+bcrypt work one address can force and stops one address spraying one guess across many
+accounts"*, charged before the lookup and the compare; the pair bucket *"stops one source
+guessing one account"*; the account bucket *"survives forwarded-for spoofing, which the
+source ones cannot"*. Until 2026-09-14 the pair bucket was the only address-keyed one and
+was described as a per-source control it never was (auth review F1). `clientIp()` prefers platform-set headers (`x-vercel-forwarded-for`,
 `x-real-ip`) and only falls back to the client-controllable `x-forwarded-for`.
 
 **Why it is not a real limit on serverless.** The `Map` lives in one Node.js process's
@@ -1284,7 +1290,7 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 452 tests across 32 files.** Pure modules in `src/lib/`
+**Unit — vitest, 461 tests across 33 files.** Pure modules in `src/lib/`
 (`ai/heuristics`, `ai/label`, `ai/prompt`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
 `file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
 `fx`, `months`, `search`, `concurrency`, `migration-ledger`), the evaluation harness's own
@@ -1526,7 +1532,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `NOT_YOURS` | same file | `"You can only edit records you own."` Phrased for a user reading a form, because that is where it is rendered. |
 | `DUMMY_HASH` | [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts) | A constant bcrypt hash compared against when the email does not exist, so login timing does not reveal which emails are registered. |
 | `clientIp()` | same file | Prefers `x-vercel-forwarded-for` / `x-real-ip` (platform-set, trustworthy); falls back to the first entry of the client-spoofable `x-forwarded-for`, then `"local"`. |
-| `IP_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 10 and 20 **failed** logins per 15 minutes. Two buckets because the IP one stops one source guessing many passwords and the account one survives forwarded-for spoofing. |
+| `IP_ATTEMPT_LIMIT` / `PAIR_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 100 **attempts** per source (successes included, charged before the compare), then 10 and 20 **failed** logins per 15 minutes for the source-and-email pair and the account. The account one survives forwarded-for spoofing. |
 | `peekLimit` / `rateLimit` / `sweepExpiredBuckets` | [`src/lib/rate-limit.ts`](../src/lib/rate-limit.ts) | Read standing without consuming / increment and report / opportunistic map cleanup every 5 minutes. |
 | `recordBlock(contact)` | [`src/lib/ai/prompt.ts`](../src/lib/ai/prompt.ts) | Serialises a contact and its company, deals and last 10 activities into a `<record>…</record>` fenced block for the prompt. Each activity is truncated to 300 chars. |
 | `audit(entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends to `AuditLog`. `metadata` is `JSON.stringify`'d into a `String?` column. **Never throws** — a failed log must not break the action it records. Called after (and outside) the write it describes. |
@@ -1663,7 +1669,7 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 452 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test` | `vitest run` | The 461 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
 | `test:e2e` | `playwright test` | The 45 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. Live knobs: `EVAL_LIVE_ORDINARY`, `EVAL_LIVE_PACE_MS`, `EVAL_LIVE_RETRY_MS`, `EVAL_LIVE_RETRY_BUDGET`. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |

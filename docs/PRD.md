@@ -193,8 +193,8 @@ it, and acceptance criteria written as behaviour you can observe in a browser.
 | A3 | Registering an email that already exists shows *"This email is already registered"* on the email field |
 | A4 | Signing in with a wrong password shows *"Invalid email or password"* and stays on `/login` |
 | A5 | An unknown email takes the same measurable time as a known one — `login()` runs bcrypt against a constant `DUMMY_HASH` when no user is found |
-| A6 | 11 failed sign-ins from one IP for one email within 15 minutes are refused with a retry countdown; **successful** sign-ins never consume that budget |
-| A7 | A second bucket keyed on the account alone (20 failures / 15 min) survives `x-forwarded-for` spoofing, which the IP bucket cannot |
+| A6 | 11 failed sign-ins from one IP for one email within 15 minutes are refused with a retry countdown; **successful** sign-ins never consume that budget. Separately, the 101st sign-in attempt of any kind from one IP within 15 minutes is refused before the password is checked, whatever email it carries |
+| A7 | A bucket keyed on the account alone (20 failures / 15 min) survives `x-forwarded-for` spoofing, which the two address-keyed buckets cannot |
 | A8 | Signing out returns to `/login` and `/contacts` then redirects back to `/login` |
 | A9 | `auth.login`, `auth.login_failed`, `auth.logout` and `auth.register` all appear in `AuditLog` |
 
@@ -512,7 +512,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 452 unit tests (coverage-gated), 45 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 461 unit tests (coverage-gated), 45 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -632,7 +632,7 @@ second route.
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-452 unit tests cover library modules and the server actions (against a real
+461 unit tests cover library modules and the server actions (against a real
 migrations-built SQLite). Component behaviour is covered exclusively by the 45
 Playwright tests.
 

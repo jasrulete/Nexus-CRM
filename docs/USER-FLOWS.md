@@ -37,6 +37,7 @@ sequenceDiagram
     F->>F: fills email/password fields, form.requestSubmit()
     F->>A: login(prevState, formData)
     A->>A: sweepExpiredBuckets(), clientIp()
+    A->>A: rateLimit(login:ip:{ip}) — charged on every attempt, 100 / 15 min
     A->>A: peekLimit(ip+email), peekLimit(account) — read-only checks
     A->>DB: user.findUnique({ email: demo@nexuscrm.dev })
     A->>A: verifyPassword(password, user.passwordHash)
@@ -85,8 +86,8 @@ sequenceDiagram
 1. `RegisterForm` (`src/app/(auth)/register/register-form.tsx`) posts name/email/password to
    `register()` in `src/lib/auth/actions.ts` via `useActionState`.
 2. `register()` first calls `rateLimit(`register:${ip}`, { limit: 5, windowMs: 15 min })` — this
-   one *does* consume budget on every call, unlike login's `peekLimit`, because there's no
-   legitimate-success case to protect (nobody registers the same email repeatedly).
+   one *does* consume budget on every call — like login's per-source bucket, unlike its two
+   `peekLimit` buckets — because there's no legitimate-success case to protect (nobody registers the same email repeatedly).
 3. `registerSchema.safeParse` (`src/lib/validation.ts`) validates: name 2–100 chars, a real email
    (lowercased, max 254), password 8–128 chars. Failures return `{ errors }` rendered inline by
    `FieldError` — no round trip, no page reload.
@@ -112,19 +113,23 @@ step; `/register` is just "create a login for this one shared CRM."
 
 ## 3. Sign in, sign out, session expiry
 
-**Sign in** (`/login`, not demo): same `login()` path as §1, minus the auto-fill. Two independent
-rate-limit buckets are checked with `peekLimit` (read-only — a bucket is only *charged* on an
-actual failure, via `rateLimit`, a few lines later):
+**Sign in** (`/login`, not demo): same `login()` path as §1, minus the auto-fill. A per-source
+bucket is charged on every well-formed attempt, before the lookup and the bcrypt compare; two
+more are checked with
+`peekLimit` (read-only — those are only *charged* on an actual failure, via `rateLimit`, a few
+lines later):
 
-| Bucket | Key | Limit | Why two |
+| Bucket | Key | Limit | Why |
 |---|---|---|---|
-| IP | `login:{ip}:{email}` | 10 failures / 15 min | stops one source guessing many passwords |
-| Account | `login:account:{email}` | 20 failures / 15 min | survives `x-forwarded-for` spoofing, which the IP bucket can't |
+| Source | `login:ip:{ip}` | 100 attempts / 15 min, successes included | bounds the bcrypt work one address can force; stops one source spraying a guess across many accounts |
+| Pair | `login:{ip}:{email}` | 10 failures / 15 min | stops one source guessing one account |
+| Account | `login:account:{email}` | 20 failures / 15 min | survives `x-forwarded-for` spoofing, which the Source and Pair buckets can't |
 
 A non-existent email still runs `verifyPassword` against a hard-coded `DUMMY_HASH` bcrypt string
 (`src/lib/auth/actions.ts`) so that a login attempt against an unregistered address takes the same
 wall-clock time as one against a real account with a wrong password — the comment above it calls
-this "constant-time-ish." Only *successful* logins skip charging both buckets — the comment notes
+this "constant-time-ish." Only *successful* logins skip charging the pair and account buckets — the source bucket is
+charged either way — the comment notes
 this deliberately, "otherwise the shared demo account lock[s] out its own visitors" (many people
 signing in with the same demo password would otherwise trip the account bucket).
 
