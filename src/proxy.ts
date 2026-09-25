@@ -21,6 +21,13 @@ export function proxy(request: NextRequest) {
   // PUBLIC_PATHS — that branch redirects authenticated users to /dashboard.
   if (pathname === "/monitoring") return NextResponse.next();
 
+  // The Open Graph image behind the landing page's og:image/twitter:image.
+  // Social scrapers are never signed in, so gating it left every shared link
+  // without a preview; it cannot go in PUBLIC_PATHS either, for the same reason
+  // as /monitoring — a signed-in fetch would get /dashboard's HTML instead of
+  // the PNG. /icon.svg needs no entry: the matcher's .svg exclusion covers it.
+  if (pathname === "/opengraph-image") return NextResponse.next();
+
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE);
 
   if (PUBLIC_PATHS.has(pathname)) {
