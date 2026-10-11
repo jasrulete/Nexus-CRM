@@ -54,3 +54,6 @@ next-env.d.ts
 
 # throwaway spike and rehearsal files (multi-tenancy plan, Task 1); never committed
 /.scratch/
+
+# database backups taken before a production migration: real user data, never committed
+/backups/
