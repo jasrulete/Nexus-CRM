@@ -185,10 +185,15 @@ stops type-checking once M2 makes the column required. The extension verifies; i
 - `src/lib/db.ts`
 - `src/lib/auth/session.ts`
 - `src/lib/auth/actions.ts`
+- `src/lib/auth/platform-audit.ts`
 - `src/lib/workspace-context.ts`
 - `src/lib/workspace-bootstrap.ts`
 - `src/lib/system-queries.ts`
 - `src/app/api/health/route.ts`
+- `src/app/auth/signout-stale/route.ts`
+
+`auditPlatform` lives in its own `platform-audit.ts`, not in `auth/actions.ts`. That module is
+`'use server'`, so every function it exports is callable from the browser as a server action.
 
 A test scans **all of `src/`** (except `src/generated` and `*.test.ts`) for imports of `systemDb`, and
 for any value import of `PrismaClient` from the generated client. Only `src/lib/db.ts` and
