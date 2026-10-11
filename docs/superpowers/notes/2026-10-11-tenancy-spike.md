@@ -1,6 +1,6 @@
 # Tenancy spike: dual composite keys and the M2 file shape
 
-Plan Task 1 for `docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md` (§4.3, §10). Generated 2026-10-11T17:35:54.497Z by the throwaway runner `.scratch/tenancy-spike/run.ts` (gitignored) from the results it recorded.
+Plan Task 1 for `docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md` (§4.3, §10). Generated 2026-10-11T17:45:23.758Z by the throwaway runner `.scratch/tenancy-spike/run.ts` (gitignored) from the results it recorded.
 
 ## Questions
 
@@ -10,9 +10,10 @@ Plan Task 1 for `docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md`
 
 ## Decision
 
-- **§4.3 backstop: keep it in M2.** Prisma expresses the dual key as two named relations on the same `parentId`: the existing one (`SetNull` or `Cascade`), plus `fields: [workspaceId, parentId], references: [workspaceId, id], onDelete: NoAction, onUpdate: NoAction`, with `@@unique([workspaceId, id])` on the parent. Prisma generates both constraints, SQLite refuses every cross-workspace link, and the existing SET NULL and CASCADE behaviour is unchanged.
-- **M2 file shape: confirmed** on Prisma Migrate, the Turso runner, the Docker runner and the harness. None of them wraps a migration file in a transaction, and a failure mid-file (or in the foreign-key guard) leaves the M1 tables, rows and DDL exactly as they were.
+- **§4.3 backstop: keep it in M2.** Prisma expresses the dual key as two named relations on the same `parentId`: the existing one (`SetNull` or `Cascade`), plus `fields: [workspaceId, parentId], references: [workspaceId, id], onDelete: NoAction, onUpdate: NoAction`, with `@@unique([workspaceId, id])` on the parent. Prisma generates both constraints. At runtime, on all four paths, SQLite refused a cross-workspace Contact→Company link (insert and update) and a cross-workspace Deal→Company link (update), accepted a same-workspace link, and left the existing behaviour alone: deleting a company still SET NULLs its contacts' `companyId`, and deleting a deal still cascades to its activities and tasks. The other six links (Deal→Contact, Activity→Contact, Activity→Deal, Activity→Company, Task→Contact, Task→Deal) carry the same composite key in the generated DDL (the 8-key count in the Generated SQL table) and are enforced by the same SQLite mechanism, but were not probed at runtime.
+- **M2 file shape: confirmed** on Prisma Migrate, the Docker runner, the harness and the local-driver Turso runner (@libsql/client's `file:` driver). The Hrana/HTTP path that production uses is unproven until Phase B's Turso-branch rehearsal (see Not covered here). In these runs none of the four paths wraps a migration file in a transaction, and a failure mid-file (or in the foreign-key guard) leaves the M1 tables, rows and DDL exactly as they were.
 - **M1**, generated the way plan Task 3 generates it and with its data statements, applies on all four paths with no table rebuild and backfills as specified.
+- **Recovery after a failed M2:** see "What phase B carries forward" below, per path. In short: Prisma Migrate needs `migrate resolve --rolled-back` before it will deploy again; the Turso runner and the Docker runner each need their one stuck claim row deleted; a harness connection must be rolled back or closed. The runner records only the stuck ledger rows and the open-transaction flag (the ledger table). The refusals and the recovery steps were verified by hand on scratch copies of the `fail-mid` databases and are not recorded by the runner.
 
 ## Environment
 
@@ -247,10 +248,10 @@ CREATE TABLE "new_Contact" (
 ## What phase B carries forward
 
 - If the shape is confirmed: generate M2 with `prisma migrate dev --create-only`, then hand-wrap it exactly as in Method: remove Prisma's PRAGMA lines, add the spec header and footer, prepend the catch-up, add the COALESCE to each CRM rebuild, and append the guard before `COMMIT`.
-- **Recovery after a failed M2** (spec §10 phase B step 3), read from the ledger table above:
-  - Prisma Migrate: the M2 row stays unfinished, and `migrate deploy` refuses until `npx prisma migrate resolve --rolled-back <M2 directory>` is run. Run it only after confirming the M1 shape: no `new_*` tables, `workspaceId` still nullable, row counts equal to the backup.
-  - Turso runner and Docker runner: the claim row stays with an empty `applied_at`, and the next run refuses (`planMigrations` → `interrupted`). Delete that one row (`DELETE FROM _turso_migrations WHERE name = '<M2 directory>'`, or `_docker_migrations`) only after the same three checks. Never clear it while a `new_*` table exists or a `workspaceId` is already NOT NULL.
-  - A runner that keeps its connection after an error (the harness does; see the last column) is still inside the transaction. It must roll back or close that connection before reusing it.
+- **Recovery after a failed M2** (spec §10 phase B step 3). The ledger table above records only the stuck state: the unfinished or empty-`applied_at` M2 row, and whether the connection is still inside the transaction. The refusals and recovery steps below were **verified by hand on scratch copies of the `fail-mid` databases, not recorded by the runner**:
+  - Prisma Migrate: the M2 row stays unfinished. A second `migrate deploy` exits 1 with `P3009` ("migrate found failed migrations in the target database") until `npx prisma migrate resolve --rolled-back <M2 directory>` is run; after that, `migrate deploy` applies a corrected M2. Run the resolve only after confirming the M1 shape: no `new_*` tables, `workspaceId` still nullable, row counts equal to the backup.
+  - Turso runner and Docker runner: the claim row stays with an empty `applied_at`, and the next run exits 1 with "was started but never recorded as finished ... Refusing to continue" (the Turso runner via `planMigrations` → `interrupted`; the Docker entrypoint has an inline copy of the same check). After the row is deleted (`DELETE FROM _turso_migrations WHERE name = '<M2 directory>'`, or `_docker_migrations`), the next run applies a corrected M2. Delete it only after the same three checks. Never clear it while a `new_*` table exists or a `workspaceId` is already NOT NULL.
+  - A runner that keeps its connection after an error (the harness does; this one is recorded in the last column of the ledger table) is still inside the transaction. It must roll back or close that connection before reusing it.
 - With foreign keys off, only the guard checks the composite keys before `COMMIT`. Keep it in M2: the `fail-guard` rows show that it turns a pre-existing cross-workspace link into a complete rollback, rather than a committed violation that only the verify gate would find.
 - The catch-up assumes the single-mode default workspace, and its membership insert is guarded by `EXISTS (… 'ws_default')`. On a multi-mode database with NULL rows, the COALESCE would point rows at a missing workspace and the guard would abort M2. That is the safe outcome, but phase B should decide the multi-mode case explicitly.
 
