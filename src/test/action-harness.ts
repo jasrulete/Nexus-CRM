@@ -30,23 +30,35 @@ export type TestUser = { id: string; email: string; name: string; role: string }
  * Builds a fresh database by replaying the committed migrations, so the schema
  * under test is the schema that ships — not one `db push` inferred from the
  * Prisma schema file.
+ *
+ * `through` stops after the named migration directory (inclusive). A test can
+ * then insert fixtures at that older schema with raw SQL against `file`, and
+ * call `applyRemaining()` to run the later migrations exactly as every runner
+ * runs them (spec §9.8). The generated client only knows the current schema,
+ * so use `prisma` once every migration has been applied.
  */
-export function createTestDatabase() {
+export function createTestDatabase(opts: { through?: string } = {}): {
+  prisma: PrismaClient;
+  file: string;
+  applyRemaining(): void;
+  destroy(): Promise<void>;
+} {
   const dir = mkdtempSync(join(tmpdir(), "nexus-actions-"));
   const file = join(dir, "test.db");
 
-  const raw = new Database(file);
-  // Prisma's own migrations do not switch this on, and libSQL/Turso defaults it
-  // off — but better-sqlite3 defaults it off too, so enable it explicitly here
-  // rather than let onDelete rules silently not apply during a test.
-  raw.pragma("foreign_keys = ON");
   const names = readdirSync(MIGRATIONS_DIR)
     .filter((n) => statSync(join(MIGRATIONS_DIR, n)).isDirectory())
     .sort();
-  for (const name of names) {
-    raw.exec(readFileSync(join(MIGRATIONS_DIR, name, "migration.sql"), "utf8"));
+  let cut = names.length;
+  if (opts.through !== undefined) {
+    const at = names.indexOf(opts.through);
+    if (at === -1) {
+      throw new Error(`createTestDatabase: no migration directory named "${opts.through}"`);
+    }
+    cut = at + 1;
   }
-  raw.close();
+  let pending = names.slice(cut);
+  applyMigrations(file, names.slice(0, cut));
 
   const prisma = new PrismaClient({
     adapter: new PrismaBetterSqlite3({ url: `file:${file}` }),
@@ -54,11 +66,33 @@ export function createTestDatabase() {
 
   return {
     prisma,
+    file,
+    applyRemaining() {
+      const batch = pending;
+      pending = [];
+      applyMigrations(file, batch);
+    },
     async destroy() {
       await prisma.$disconnect();
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+function applyMigrations(file: string, names: string[]) {
+  const raw = new Database(file);
+  try {
+    // Prisma's own migrations do not switch this on, and libSQL/Turso defaults it
+    // off — but better-sqlite3 defaults it off too, so enable it explicitly here
+    // rather than let onDelete rules silently not apply during a test.
+    raw.pragma("foreign_keys = ON");
+    for (const name of names) {
+      raw.exec(readFileSync(join(MIGRATIONS_DIR, name, "migration.sql"), "utf8"));
+    }
+  } finally {
+    // Closing also rolls back a transaction a failed migration left open.
+    raw.close();
+  }
 }
 
 /** Deletes every row without dropping the schema, between tests. */
