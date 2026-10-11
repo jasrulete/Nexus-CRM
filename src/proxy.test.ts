@@ -57,3 +57,16 @@ describe("proxy", () => {
     expect(redirectedTo("/", true)).toBe("/dashboard");
   });
 });
+
+describe("proxy, /auth/signout-stale", () => {
+  // The route clears a session that cannot reach a workspace. In PUBLIC_PATHS a
+  // cookie-holder would be bounced to /dashboard before the cookie was cleared,
+  // which is the loop the route exists to break.
+  it("lets a signed-in visitor through", () => {
+    expect(redirectedTo("/auth/signout-stale", true)).toBeNull();
+  });
+
+  it("lets a signed-out visitor through", () => {
+    expect(redirectedTo("/auth/signout-stale")).toBeNull();
+  });
+});

@@ -28,6 +28,12 @@ export function proxy(request: NextRequest) {
   // the PNG. /icon.svg needs no entry: the matcher's .svg exclusion covers it.
   if (pathname === "/opengraph-image") return NextResponse.next();
 
+  // Clears a session that cannot reach a workspace (a stale cookie, or a
+  // multi-mode user with no membership) and redirects to /login. It must run
+  // with or without a cookie, so it cannot go in PUBLIC_PATHS either: that
+  // branch would bounce the very cookie it exists to clear to /dashboard.
+  if (pathname === "/auth/signout-stale") return NextResponse.next();
+
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE);
 
   if (PUBLIC_PATHS.has(pathname)) {

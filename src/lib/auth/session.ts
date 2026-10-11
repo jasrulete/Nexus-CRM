@@ -2,7 +2,7 @@ import "server-only";
 import { createHash, randomBytes } from "crypto";
 import { cookies, headers } from "next/headers";
 import { cache } from "react";
-import { prisma } from "@/lib/db";
+import { systemDb } from "@/lib/db";
 import { SESSION_COOKIE } from "./session-constants";
 
 export { SESSION_COOKIE };
@@ -31,7 +31,7 @@ export async function createSession(userId: string) {
   const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
   const userAgent = (await headers()).get("user-agent")?.slice(0, 255) ?? null;
 
-  await prisma.session.create({
+  await systemDb.session.create({
     data: { tokenHash: hashToken(token), userId, expiresAt, userAgent },
   });
   (await cookies()).set(SESSION_COOKIE, token, cookieOptions(expiresAt));
@@ -41,7 +41,7 @@ export async function destroySession() {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   if (token) {
-    await prisma.session
+    await systemDb.session
       .delete({ where: { tokenHash: hashToken(token) } })
       .catch(() => {});
   }
@@ -56,14 +56,14 @@ export const getCurrentUser = cache(async () => {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const session = await prisma.session.findUnique({
+  const session = await systemDb.session.findUnique({
     where: { tokenHash: hashToken(token) },
     include: { user: true },
   });
   if (!session) return null;
 
   if (session.expiresAt < new Date()) {
-    await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
+    await systemDb.session.delete({ where: { id: session.id } }).catch(() => {});
     return null;
   }
 
@@ -71,7 +71,7 @@ export const getCurrentUser = cache(async () => {
   const remaining = session.expiresAt.getTime() - Date.now();
   if (remaining < RENEW_BELOW_DAYS * 86400_000) {
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 86400_000);
-    await prisma.session
+    await systemDb.session
       .update({ where: { id: session.id }, data: { expiresAt } })
       .catch(() => {});
   }
