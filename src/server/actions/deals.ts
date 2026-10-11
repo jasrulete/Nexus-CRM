@@ -11,6 +11,7 @@ import { canMutate, NOT_YOURS } from "@/lib/authz";
 import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
 import { getRateToWorkspaceCurrency } from "@/lib/fx";
 import { convertAmount } from "@/lib/money";
+import { resolveRelation } from "@/lib/relations";
 import { dealMoveSchema, dealSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 const CLOSED_STAGES = new Set(["WON", "LOST"]);
@@ -26,19 +27,6 @@ function parseForm(formData: FormData) {
     companyId: formData.get("companyId"),
   });
 }
-
-async function resolveRelation(
-  model: "contact" | "company",
-  relId: string | null | undefined,
-) {
-  if (!relId) return null;
-  const found =
-    model === "contact"
-      ? await prisma.contact.findUnique({ where: { id: relId } })
-      : await prisma.company.findUnique({ where: { id: relId } });
-  return found ? relId : null;
-}
-
 
 /**
  * Resolves an entered amount into the workspace currency.
@@ -73,8 +61,8 @@ export async function createDeal(
 
   // Relations and the rate are resolved before the transaction opens: both can
   // be slow (the rate is a network call) and neither depends on the position.
-  const resolvedContactId = await resolveRelation("contact", contactId);
-  const resolvedCompanyId = await resolveRelation("company", companyId);
+  const resolvedContactId = await resolveRelation(prisma, "contact", contactId);
+  const resolvedCompanyId = await resolveRelation(prisma, "company", companyId);
 
   // The append position is a read-then-write, so it belongs in one transaction.
   // Outside it, two people adding a deal to the same column at the same moment
@@ -143,8 +131,8 @@ export async function updateDeal(
     : { fxRate: existing.fxRate, baseValue: existing.baseValue };
   if (!amount) return { message: RATE_UNAVAILABLE };
 
-  const resolvedContactId = await resolveRelation("contact", contactId);
-  const resolvedCompanyId = await resolveRelation("company", companyId);
+  const resolvedContactId = await resolveRelation(prisma, "contact", contactId);
+  const resolvedCompanyId = await resolveRelation(prisma, "company", companyId);
 
   const expectedVersion = parseSubmittedVersion(formData.get(VERSION_FIELD));
   if (!expectedVersion) return { message: STALE_RECORD };

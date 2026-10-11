@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate, NOT_YOURS } from "@/lib/authz";
 import { parseSubmittedVersion, STALE_RECORD, VERSION_FIELD } from "@/lib/concurrency";
+import { resolveCompanyId } from "@/lib/relations";
 import { contactSchema, fieldErrors, idSchema } from "@/lib/validation";
 
 function parseForm(formData: FormData) {
@@ -25,12 +26,6 @@ function parseForm(formData: FormData) {
   });
 }
 
-async function resolveCompanyId(companyId: string | null | undefined) {
-  if (!companyId) return null;
-  const company = await prisma.company.findUnique({ where: { id: companyId } });
-  return company ? company.id : null;
-}
-
 export async function createContact(
   _prev: ActionState,
   formData: FormData,
@@ -43,7 +38,7 @@ export async function createContact(
   const contact = await prisma.contact.create({
     data: {
       ...data,
-      companyId: await resolveCompanyId(companyId),
+      companyId: await resolveCompanyId(prisma, companyId),
       ownerId: user.id,
     },
   });
@@ -82,7 +77,7 @@ export async function updateContact(
   const { companyId, ...data } = parsed.data;
   const written = await prisma.contact.updateMany({
     where: { id, updatedAt: expectedVersion },
-    data: { ...data, companyId: await resolveCompanyId(companyId) },
+    data: { ...data, companyId: await resolveCompanyId(prisma, companyId) },
   });
   // Zero rows matched: someone saved this record between the form rendering
   // and this submit. Refuse rather than overwrite their change.

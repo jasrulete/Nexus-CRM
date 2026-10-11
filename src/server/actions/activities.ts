@@ -32,7 +32,7 @@ export async function createActivity(
   // Without this a stale tab whose contact was just deleted throws Prisma
   // P2003 out of the create, and the user gets the error boundary instead
   // of a message — losing what they typed.
-  const missing = await findMissingRelation({ contactId, dealId, companyId });
+  const missing = await findMissingRelation(prisma, { contactId, dealId, companyId });
   if (missing) return { message: missingRelationMessage(missing) };
 
   const activity = await prisma.activity.create({

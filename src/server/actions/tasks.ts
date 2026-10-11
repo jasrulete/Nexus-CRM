@@ -36,7 +36,7 @@ export async function createTask(
 
   // Same guard as createActivity: an id from a stale form must not reach
   // Prisma as a dangling foreign key.
-  const missing = await findMissingRelation({ contactId, dealId });
+  const missing = await findMissingRelation(prisma, { contactId, dealId });
   if (missing) return { message: missingRelationMessage(missing) };
 
   const task = await prisma.task.create({
