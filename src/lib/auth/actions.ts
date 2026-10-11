@@ -2,11 +2,11 @@
 
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { audit } from "@/lib/audit";
-import { prisma } from "@/lib/db";
+import { systemDb } from "@/lib/db";
 import { peekLimit, rateLimit, sweepExpiredBuckets } from "@/lib/rate-limit";
 import { fieldErrors, loginSchema, registerSchema } from "@/lib/validation";
 import { hashPassword, verifyPassword } from "./password";
+import { auditPlatform } from "./platform-audit";
 import { createSession, destroySession, getCurrentUser } from "./session";
 
 export type AuthFormState = {
@@ -58,13 +58,13 @@ export async function register(
 
   const { name, email, password } = parsed.data;
 
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = await systemDb.user.findUnique({ where: { email } });
   if (existing) {
     return { errors: { email: "This email is already registered" } };
   }
 
-  const userCount = await prisma.user.count();
-  const user = await prisma.user.create({
+  const userCount = await systemDb.user.count();
+  const user = await systemDb.user.create({
     data: {
       name,
       email,
@@ -74,7 +74,7 @@ export async function register(
     },
   });
 
-  await audit({
+  await auditPlatform({
     action: "auth.register",
     entityType: "user",
     entityId: user.id,
@@ -134,13 +134,13 @@ export async function login(
     };
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await systemDb.user.findUnique({ where: { email } });
   const valid = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
 
   if (!user || !valid) {
     rateLimit(pairKey, { limit: PAIR_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
     rateLimit(accountKey, { limit: ACCOUNT_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
-    await audit({
+    await auditPlatform({
       action: "auth.login_failed",
       entityType: "user",
       entityId: email,
@@ -149,7 +149,7 @@ export async function login(
     return { message: "Invalid email or password" };
   }
 
-  await audit({
+  await auditPlatform({
     action: "auth.login",
     entityType: "user",
     entityId: user.id,
@@ -162,7 +162,7 @@ export async function login(
 export async function logout() {
   const user = await getCurrentUser();
   if (user) {
-    await audit({
+    await auditPlatform({
       action: "auth.logout",
       entityType: "user",
       entityId: user.id,
