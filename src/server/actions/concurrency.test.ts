@@ -18,7 +18,15 @@ import { STALE_RECORD } from "@/lib/concurrency";
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -28,8 +36,10 @@ vi.mock("next/navigation", () => ({
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
-  requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  requireUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 const { updateContact } = await import("./contacts");
@@ -55,7 +65,7 @@ const iso = (d: Date) => d.toISOString();
 describe("contacts", () => {
   it("accepts a save carrying the current version", async () => {
     const contact = await prisma.contact.create({
-      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id },
+      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id, workspaceId: owner.workspaceId },
     });
 
     const result = await updateContact(
@@ -80,6 +90,7 @@ describe("contacts", () => {
         phone: "+63 900 000 0000",
         status: "LEAD",
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
     // The version B's form was rendered from.
@@ -115,7 +126,7 @@ describe("contacts", () => {
 
   it("refuses a submit with no version at all rather than falling back to last-write-wins", async () => {
     const contact = await prisma.contact.create({
-      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id },
+      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id, workspaceId: owner.workspaceId },
     });
 
     const result = await updateContact(
@@ -132,7 +143,7 @@ describe("contacts", () => {
 
   it("refuses an unparseable version", async () => {
     const contact = await prisma.contact.create({
-      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id },
+      data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id, workspaceId: owner.workspaceId },
     });
 
     const result = await updateContact(
@@ -153,7 +164,7 @@ describe("contacts", () => {
 describe("companies", () => {
   it("refuses a stale save and leaves the record untouched", async () => {
     const company = await prisma.company.create({
-      data: { name: "Northwind", industry: "Data & BI", ownerId: owner.id },
+      data: { name: "Northwind", industry: "Data & BI", ownerId: owner.id, workspaceId: owner.workspaceId },
     });
     const staleVersion = iso(company.updatedAt);
 
@@ -186,6 +197,7 @@ describe("deals", () => {
         stage: "LEAD",
         position: 0,
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
     const staleVersion = iso(deal.updatedAt);
@@ -223,6 +235,7 @@ describe("deals", () => {
         stage: "LEAD",
         position: 0,
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
 
@@ -253,6 +266,7 @@ describe("deals", () => {
         stage: "LEAD",
         position: 0,
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
     const staleVersion = iso(deal.updatedAt);
