@@ -5,11 +5,19 @@ vi.mock("@/lib/db", () => ({ assertSingleModeBoot: boot.check }));
 
 const sentry = vi.hoisted(() => ({ init: vi.fn() }));
 vi.mock("@sentry/nextjs", () => ({ init: sentry.init, captureRequestError: vi.fn() }));
-vi.mock("@/lib/sentry-options", () => ({ sentryEnabled: true, sharedSentryOptions: {} }));
+// A getter, so a test can turn Sentry off: register() reads the live binding.
+const sentryOptions = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/lib/sentry-options", () => ({
+  get sentryEnabled() {
+    return sentryOptions.enabled;
+  },
+  sharedSentryOptions: {},
+}));
 
 const { register } = await import("./instrumentation");
 
 afterEach(() => {
+  sentryOptions.enabled = true;
   vi.unstubAllEnvs();
   boot.check.mockReset();
   boot.check.mockResolvedValue(undefined);
@@ -51,6 +59,36 @@ describe("instrumentation register()", () => {
     boot.check.mockRejectedValue(new Error("SINGLE_MODE_VIOLATION: more than one workspace exists"));
 
     await expect(register()).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
+    expect(sentry.init).not.toHaveBeenCalled();
+  });
+
+  // Spec §6: the check is the top of register(), before any early return, so a
+  // deployment without Sentry (the self-host default) is guarded the same way.
+  it("still refuses a bad configuration when Sentry is disabled", async () => {
+    sentryOptions.enabled = false;
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("WORKSPACE_MODE", "");
+    await expect(register()).rejects.toThrow("WORKSPACE_MODE is required in production");
+
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("WORKSPACE_MODE", "multi");
+    vi.stubEnv("DEMO_MODE", "true");
+    await expect(register()).rejects.toThrow("WORKSPACE_MODE=multi cannot run with DEMO_MODE=true");
+
+    expect(boot.check).not.toHaveBeenCalled();
+    expect(sentry.init).not.toHaveBeenCalled();
+  });
+
+  it("still checks the database in single mode when Sentry is disabled", async () => {
+    sentryOptions.enabled = false;
+    vi.stubEnv("WORKSPACE_MODE", "single");
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+
+    await register();
+
+    expect(boot.check).toHaveBeenCalledTimes(1);
     expect(sentry.init).not.toHaveBeenCalled();
   });
 

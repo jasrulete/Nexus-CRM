@@ -3,7 +3,9 @@
  * Every function here also runs inside register()'s transaction, so the
  * transaction case is pinned too.
  */
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PrismaClient } from "@/generated/prisma/client";
 import { M1_DEFAULT_WORKSPACE_ID } from "@/lib/migration-checks";
 import { createTestDatabase, truncateAll } from "@/test/action-harness";
 import {
@@ -11,16 +13,20 @@ import {
   DEFAULT_WORKSPACE_NAME,
   DEFAULT_WORKSPACE_SLUG,
   assertSingleModeDatabase,
+  bootCheckSingleModeDatabase,
   ensureMember,
   ensureSingleWorkspace,
   memberCount,
   toMembershipRole,
 } from "./workspace-bootstrap";
 
-const { prisma, destroy } = createTestDatabase();
+const { prisma, file, destroy } = createTestDatabase();
+// The schema as it stood before M1: no Workspace table at all.
+const preM1 = createTestDatabase({ through: "20260823151943_add_deal_base_value_and_fx_rate" });
 
 afterAll(async () => {
   await destroy();
+  await preM1.destroy();
 });
 
 beforeEach(async () => {
@@ -158,6 +164,101 @@ describe("ensureMember", () => {
 
     await expect(ensureMember(prisma, user.id, "MEMBER")).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
     expect(await prisma.membership.count()).toBe(0);
+  });
+});
+
+describe("the upserts are single statements", () => {
+  // A no-op `update: {}` makes Prisma emit SELECT, INSERT, SELECT instead of
+  // `INSERT ... ON CONFLICT`, and on Turso the loser of a cross-instance race
+  // then fails on the unique key. The in-process race tests above cannot tell
+  // the two apart (the adapter serialises the calls), so read the SQL.
+  it("compiles ensureSingleWorkspace and ensureMember to one INSERT ... ON CONFLICT each", async () => {
+    const queries: string[] = [];
+    const logged = new PrismaClient({
+      adapter: new PrismaBetterSqlite3({ url: `file:${file}` }),
+      log: [{ emit: "event", level: "query" }],
+    });
+    logged.$on("query", (event) => {
+      queries.push(event.query);
+    });
+    try {
+      const user = await newUser();
+
+      await ensureMember(logged, user.id, "MEMBER");
+
+      // One read (the single-mode check), then exactly the two upserts.
+      expect(queries.filter((q) => q.startsWith("SELECT"))).toHaveLength(1);
+      const writes = queries.filter((q) => !q.startsWith("SELECT"));
+      expect(writes).toHaveLength(2);
+      expect(writes[0]).toMatch(/^INSERT INTO `main`\.`Workspace`.* ON CONFLICT/);
+      expect(writes[1]).toMatch(/^INSERT INTO `main`\.`Membership`.* ON CONFLICT/);
+    } finally {
+      await logged.$disconnect();
+    }
+  });
+
+  it("leaves an existing membership untouched, role and creation time", async () => {
+    const user = await newUser();
+    await ensureMember(prisma, user.id, "ADMIN");
+    const before = await prisma.membership.findUniqueOrThrow({ where: { userId: user.id } });
+
+    await ensureMember(prisma, user.id, "MEMBER");
+
+    expect(await prisma.membership.findUniqueOrThrow({ where: { userId: user.id } })).toEqual(before);
+  });
+});
+
+describe("bootCheckSingleModeDatabase", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes on an empty database and on one valid workspace, writing nothing", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(bootCheckSingleModeDatabase(prisma)).resolves.toBeUndefined();
+    await prisma.workspace.create({ data: { id: "ws_one", name: "One", slug: "one" } });
+    await expect(bootCheckSingleModeDatabase(prisma)).resolves.toBeUndefined();
+
+    expect(await prisma.workspace.count()).toBe(1);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a SINGLE_MODE_VIOLATION, for two workspaces and for a PAID one", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await prisma.workspace.create({ data: { id: "ws_paid", name: "Paid", slug: "paid", plan: "PAID" } });
+    await expect(bootCheckSingleModeDatabase(prisma)).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
+
+    await prisma.workspace.create({ data: { id: "ws_b", name: "B", slug: "b" } });
+    await expect(bootCheckSingleModeDatabase(prisma)).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
+
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a missing table (P2021) with a hint to apply the migrations", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const failure = await bootCheckSingleModeDatabase(preM1.prisma).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("apply the database migrations (M1) before starting");
+    expect(((failure as Error).cause as { code?: string }).code).toBe("P2021");
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("logs any other failure, naming the boot check, and does not throw", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const transient = new Error("SQLITE_BUSY: database is locked");
+    const db = { workspace: { findMany: vi.fn().mockRejectedValue(transient) } };
+
+    await expect(bootCheckSingleModeDatabase(db as never)).resolves.toBeUndefined();
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0]).toContain("single-mode boot check");
+    expect(log.mock.calls[0]).toContain(transient);
   });
 });
 

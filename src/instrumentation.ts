@@ -9,8 +9,10 @@ export async function register() {
   const mode = assertBootConfig();
 
   // Single mode also refuses a database that belongs to a multi deployment:
-  // more than one workspace, or a PAID one. Node only — the edge runtime has
-  // no database client.
+  // more than one workspace, or a PAID one, and one whose migrations were not
+  // applied. A transient read failure is only logged: a rejection here is
+  // cached for the life of the process and would fail every request. Node
+  // only — the edge runtime has no database client.
   if (process.env.NEXT_RUNTIME === "nodejs" && mode === "single") {
     const { assertSingleModeBoot } = await import("@/lib/db");
     await assertSingleModeBoot();
