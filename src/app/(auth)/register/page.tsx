@@ -1,12 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { Users2 } from "lucide-react";
 import { isSharedDemoInstance } from "@/lib/demo-guard";
+import { registerSubtitle, workspaceMode } from "@/lib/workspace-mode";
 import { RegisterForm } from "./register-form";
 
 export const metadata: Metadata = { title: "Create account" };
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  // Rendered per request, not at build time. The subtitle depends on
+  // WORKSPACE_MODE, which is read at runtime so one build serves both modes.
+  // Prerendered, the page would carry the build's mode, and `next build`
+  // (NODE_ENV=production) without the variable would fail on
+  // "WORKSPACE_MODE is required in production".
+  await connection();
+
   // On the shared demo the unqualified promise below is false: the workspace
   // already exists, it is shared with every visitor, and the nightly reset
   // deletes what you add. Say so before someone types real data into it.
@@ -18,9 +27,7 @@ export default function RegisterPage() {
         {sharedDemo ? "Join the shared demo" : "Create your workspace"}
       </h2>
       <p className="mt-1 text-sm text-ink-faint">
-        {sharedDemo
-          ? "This is a public sandbox, not a private workspace."
-          : "The first account becomes the workspace admin."}
+        {registerSubtitle(workspaceMode(), sharedDemo)}
       </p>
 
       {sharedDemo ? (

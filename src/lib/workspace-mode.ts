@@ -44,3 +44,15 @@ export function assertBootConfig(env: Env = process.env): WorkspaceMode {
   }
   return mode;
 }
+
+/**
+ * The line under the sign-up heading. On the shared demo it warns that nothing
+ * there is private. Otherwise it says where the new account lands, which
+ * depends on the mode.
+ */
+export function registerSubtitle(mode: WorkspaceMode, sharedDemo: boolean): string {
+  if (sharedDemo) return "This is a public sandbox, not a private workspace.";
+  return mode === "multi"
+    ? "Your account gets its own private workspace."
+    : "The first account becomes the workspace owner.";
+}

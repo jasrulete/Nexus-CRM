@@ -13,6 +13,7 @@ import {
 
 registerCrossTenantCase("src/lib/auth/actions.ts#login");
 registerCrossTenantCase("src/lib/auth/actions.ts#logout");
+registerCrossTenantCase("src/lib/auth/actions.ts#register");
 
 const { prisma, destroy } = createTestDatabase();
 
@@ -53,7 +54,7 @@ vi.mock("./password", () => ({
   verifyPassword: async (password: string) => password === "correct horse",
 }));
 
-const { login, logout } = await import("./actions");
+const { login, logout, register } = await import("./actions");
 
 afterAll(async () => {
   await destroy();
@@ -104,5 +105,22 @@ describe("cross-tenant: auth actions", () => {
     await expect(logout()).rejects.toThrow("NEXT_REDIRECT:/login");
 
     expect(await snapshotWorkspace(prisma, b.workspaceId)).toBe(before);
+  });
+
+  it("a multi-mode sign-up never joins an existing workspace and leaves A and B unchanged", async () => {
+    vi.stubEnv("WORKSPACE_MODE", "multi");
+    const beforeA = await snapshotWorkspace(prisma, a.workspaceId);
+    const beforeB = await snapshotWorkspace(prisma, b.workspaceId);
+
+    await expect(
+      register({}, formData({ name: "Nina New", email: "nina@example.com", password: "long enough password" })),
+    ).rejects.toThrow("NEXT_REDIRECT:/dashboard");
+
+    const nina = await prisma.user.findUniqueOrThrow({ where: { email: "nina@example.com" } });
+    const membership = await prisma.membership.findUniqueOrThrow({ where: { userId: nina.id } });
+    expect([a.workspaceId, b.workspaceId]).not.toContain(membership.workspaceId);
+    expect(membership.role).toBe("OWNER");
+    expect(await snapshotWorkspace(prisma, a.workspaceId)).toBe(beforeA);
+    expect(await snapshotWorkspace(prisma, b.workspaceId)).toBe(beforeB);
   });
 });

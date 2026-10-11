@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertBootConfig, workspaceMode } from "./workspace-mode";
+import { assertBootConfig, registerSubtitle, workspaceMode } from "./workspace-mode";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -56,5 +56,19 @@ describe("assertBootConfig", () => {
     expect(() => assertBootConfig({ NODE_ENV: "production" })).toThrow(
       "WORKSPACE_MODE is required in production",
     );
+  });
+});
+
+describe("registerSubtitle", () => {
+  it("keeps the shared-demo warning on the shared demo", () => {
+    expect(registerSubtitle("single", true)).toBe("This is a public sandbox, not a private workspace.");
+  });
+
+  it("names the first account the owner in single mode", () => {
+    expect(registerSubtitle("single", false)).toBe("The first account becomes the workspace owner.");
+  });
+
+  it("promises a private workspace in multi mode", () => {
+    expect(registerSubtitle("multi", false)).toBe("Your account gets its own private workspace.");
   });
 });
