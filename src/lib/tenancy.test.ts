@@ -59,11 +59,7 @@ async function newUser() {
 let owner: { id: string; name: string };
 
 async function resetDatabase() {
-  // Membership, AiUsage and Workspace join truncateAll in Task 6.
-  await prisma.membership.deleteMany();
-  await prisma.aiUsage.deleteMany();
   await truncateAll(prisma);
-  await prisma.workspace.deleteMany();
   await prisma.workspace.create({ data: { id: A, name: "A", slug: "a" } });
   await prisma.workspace.create({ data: { id: B, name: "B", slug: "b" } });
   owner = await newUser();

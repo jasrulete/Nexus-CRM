@@ -31,10 +31,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  // Membership and Workspace are not in truncateAll until Task 6.
-  await prisma.membership.deleteMany();
   await truncateAll(prisma);
-  await prisma.workspace.deleteMany();
 });
 
 let seq = 0;
