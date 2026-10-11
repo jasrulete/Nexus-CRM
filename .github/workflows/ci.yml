@@ -56,6 +56,16 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The committed migrations must build exactly prisma/schema.prisma. M1
+      # carries hand-appended data statements, and a hand edit that also changed
+      # the schema would otherwise ship unnoticed: the Turso and Docker runners
+      # and the test harness all trust the SQL files, never the schema. Replays
+      # prisma/migrations into a throwaway SQLite shadow and diffs it against
+      # the schema; exit code 2 means drift. (Prisma 7 removed
+      # --shadow-database-url and --to-url; SQLite needs no shadow URL.)
+      - name: Migration drift check
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
+
       # Runs the same suite, and fails if coverage drops below the floor in
       # vitest.config.ts — so deleting a test file, or adding a module with
       # none, is caught here rather than noticed months later.
