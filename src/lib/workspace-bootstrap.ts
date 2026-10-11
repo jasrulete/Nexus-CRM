@@ -59,6 +59,37 @@ export async function assertSingleModeDatabase(
   return workspaces[0] ? { id: workspaces[0].id } : null;
 }
 
+const NO_SUCH_TABLE = /no such table/i;
+
+/**
+ * Whether `error` says a table is missing, whichever driver produced it.
+ *
+ * better-sqlite3 surfaces Prisma's P2021. The libSQL driver (Turso, the
+ * production driver) does not: its adapter only maps the failure to
+ * TableDoesNotExist when the message *starts with* "no such table", but
+ * LibsqlError prefixes the message with its code, so Prisma reports a generic
+ * P2039 "Database error" whose text and `meta.driverAdapterError.cause
+ * .originalMessage` still say "no such table". So match the text, down the
+ * `cause` chain, as well as the code.
+ */
+function isMissingTable(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth += 1) {
+    const { code, message, meta, cause } = current as {
+      code?: unknown;
+      message?: unknown;
+      meta?: { driverAdapterError?: { cause?: { originalMessage?: unknown } } };
+      cause?: unknown;
+    };
+    if (code === "P2021") return true;
+    if (typeof message === "string" && NO_SUCH_TABLE.test(message)) return true;
+    const original = meta?.driverAdapterError?.cause?.originalMessage;
+    if (typeof original === "string" && NO_SUCH_TABLE.test(original)) return true;
+    current = cause;
+  }
+  return false;
+}
+
 /**
  * assertSingleModeDatabase as boot runs it (instrumentation's register()).
  *
@@ -66,7 +97,7 @@ export async function assertSingleModeDatabase(
  * here fails every request on that instance, including ones that never touch
  * the database. Only two outcomes are worth that:
  *  - a SINGLE_MODE_VIOLATION: this database belongs to a multi-mode deployment;
- *  - a missing table (Prisma P2021): the migrations were not applied.
+ *  - a missing table: the migrations were not applied.
  * Any other failure (a Turso timeout, a busy database) is logged and boot
  * continues. That is safe because ensureSingleWorkspace and ensureMember run
  * assertSingleModeDatabase again before every write.
@@ -78,9 +109,9 @@ export async function bootCheckSingleModeDatabase(
     await assertSingleModeDatabase(db);
   } catch (error) {
     if (error instanceof SingleModeViolationError) throw error;
-    if ((error as { code?: unknown } | null)?.code === "P2021") {
+    if (isMissingTable(error)) {
       throw new Error(
-        "The database is missing a table (Prisma P2021): apply the database migrations (M1) before starting",
+        "The database is missing a table: apply the database migrations (M1) before starting",
         { cause: error },
       );
     }

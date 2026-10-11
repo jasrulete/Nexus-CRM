@@ -4,6 +4,7 @@
  * transaction case is pinned too.
  */
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
+import { PrismaLibSql } from "@prisma/adapter-libsql";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@/generated/prisma/client";
 import { M1_DEFAULT_WORKSPACE_ID } from "@/lib/migration-checks";
@@ -246,6 +247,59 @@ describe("bootCheckSingleModeDatabase", () => {
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toContain("apply the database migrations (M1) before starting");
     expect(((failure as Error).cause as { code?: string }).code).toBe("P2021");
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  // The libSQL driver is what production (Turso) runs. It reports the same
+  // situation as P2039 "Database error" with kind "sqlite", not P2021, because
+  // LibsqlError prefixes the message with its code and the adapter's own
+  // "no such table" test is a startsWith. An empty in-memory libSQL database has
+  // no Workspace table, so this is the real error with no file handle to clean up.
+  it("rethrows a missing table as the libSQL driver reports it", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const libsql = new PrismaClient({ adapter: new PrismaLibSql({ url: ":memory:" }) });
+
+    try {
+      const failure = await bootCheckSingleModeDatabase(libsql).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain("apply the database migrations (M1) before starting");
+      expect(((failure as Error).cause as { code?: string }).code).toBe("P2039");
+    } finally {
+      await libsql.$disconnect();
+    }
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "in the message only",
+      { message: "Database error. Code: `1`. Message: `SQLITE_ERROR: no such table: main.Workspace`" },
+    ],
+    [
+      "in the driver adapter's originalMessage only",
+      {
+        message: "Database error.",
+        meta: { driverAdapterError: { cause: { originalMessage: "SQLITE_ERROR: no such table: Workspace" } } },
+      },
+    ],
+    [
+      "in a nested cause, as a remote LibsqlError carries it",
+      {
+        message: "Database error.",
+        cause: { code: "SQLITE_UNKNOWN", message: "SQLITE_UNKNOWN: SQLite error: no such table: Workspace" },
+      },
+    ],
+  ])("rethrows a missing table named %s", async (_where, shape) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const db = { workspace: { findMany: vi.fn().mockRejectedValue(shape) } };
+
+    await expect(bootCheckSingleModeDatabase(db as never)).rejects.toThrow(
+      "apply the database migrations (M1) before starting",
+    );
     expect(log).not.toHaveBeenCalled();
   });
 
