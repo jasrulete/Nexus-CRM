@@ -17,20 +17,23 @@ import "dotenv/config";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createClient } from "@libsql/client";
-import { describeTarget, dumpDatabase, parseCliArgs, queryFrom, rowCounts } from "../src/lib/migration-checks";
+import { backupArgsError, describeTarget, dumpDatabase, parseCliArgs, queryFrom, rowCounts } from "../src/lib/migration-checks";
 
 function fail(message: string): never {
   console.error(message);
   process.exit(1);
 }
 
+// Before anything reads the environment or opens a connection: without --url
+// this script backs up TURSO_DATABASE_URL, so a mistyped flag or a forgotten
+// --url must be refused, not taken for "no --url".
+const argError = backupArgsError(process.argv.slice(2));
+if (argError) fail(argError);
+
 const { positional, flags } = parseCliArgs(process.argv.slice(2));
-const label = positional[0] ?? "";
+const label = positional[0];
 const url = flags.url ?? process.env.TURSO_DATABASE_URL;
 
-if (!/^[a-z0-9][a-z0-9-]*$/i.test(label)) {
-  fail("Usage: npx tsx scripts/backup-turso.ts <label> [--url <libsql:// or file: url>]   (label: letters, digits, dashes)");
-}
 if (!url) fail("TURSO_DATABASE_URL is not set and no --url was given.");
 if (!existsSync(join(process.cwd(), "prisma", "schema.prisma"))) {
   fail("Run this from the repo root: backups/ is resolved from the working directory.");
@@ -40,6 +43,9 @@ if (url.startsWith("file:") && !existsSync(url.slice("file:".length))) {
 }
 
 async function main(target: string): Promise<void> {
+  // Say which database this is before connecting to it, so a wrong target is
+  // visible even if the connection then hangs or fails.
+  console.log(`Backing up ${describeTarget(target)}`);
   const client = createClient({
     url: target,
     authToken: target.startsWith("file:") ? undefined : process.env.TURSO_AUTH_TOKEN,

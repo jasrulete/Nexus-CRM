@@ -95,6 +95,24 @@ export function parseCliArgs(argv: string[]): { positional: string[]; flags: Par
   return { positional, flags };
 }
 
+/**
+ * The shape scripts/backup-turso.ts accepts: exactly one positional (the
+ * label) and, optionally, --url with a value. It returns the usage line for
+ * anything else, and null when the arguments are fine.
+ *
+ * Without --url the script reads TURSO_DATABASE_URL, which is production at
+ * rollout, so an argument that merely looks like --url (--urll, --URL, -url,
+ * --url=file:…) or a forgotten flag (`pre-m1 file:./x.db`) must be refused here
+ * and never be taken for "no --url". Same strictness as scripts/verify-m1.ts.
+ */
+export function backupArgsError(argv: string[]): string | null {
+  const usage = "Usage: npx tsx scripts/backup-turso.ts <label> [--url <libsql:// or file: url>]   (label: letters, digits, dashes)";
+  const { positional, flags } = parseCliArgs(argv);
+  const unknownFlags = Object.keys(flags).filter((flag) => flag !== "url");
+  const labelOk = positional.length === 1 && /^[a-z0-9][a-z0-9-]*$/i.test(positional[0]);
+  return labelOk && unknownFlags.length === 0 && flags.url !== "" ? null : usage;
+}
+
 /** The target with no credentials and no query string, safe to print and store. */
 export function describeTarget(url: string): string {
   return url.replace(/[?#].*$/, "").replace(/\/\/[^/@]*@/, "//");

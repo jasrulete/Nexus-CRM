@@ -12,6 +12,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  backupArgsError,
   checkM1,
   describeTarget,
   dumpDatabase,
@@ -292,6 +293,41 @@ describe("describeTarget", () => {
     expect(describeTarget("libsql://db-org.turso.io?authToken=secret")).toBe("libsql://db-org.turso.io");
     expect(describeTarget("libsql://user:pw@db-org.turso.io")).toBe("libsql://db-org.turso.io");
     expect(describeTarget("file:./.scratch/x.db")).toBe("file:./.scratch/x.db");
+  });
+});
+
+/**
+ * scripts/backup-turso.ts falls back to TURSO_DATABASE_URL (production at
+ * rollout) when it sees no --url, so every argument shape that is not exactly
+ * "<label> [--url <value>]" must be refused rather than read as "no --url".
+ */
+describe("backupArgsError", () => {
+  it.each([
+    [["pre-m1"]],
+    [["pre-m1", "--url", "file:./x.db"]],
+    [["--url", "file:.scratch/x.db", "pre-m1"]],
+    [["pre-m1", "--url", "libsql://db-org.turso.io"]],
+  ])("accepts %j", (argv) => {
+    expect(backupArgsError(argv)).toBeNull();
+  });
+
+  it.each([
+    ["a typo'd flag (--urll)", ["pre-m1", "--urll", "file:./x.db"]],
+    ["a typo'd flag (--ulr)", ["pre-m1", "--ulr", "file:./x.db"]],
+    ["the wrong case (--URL)", ["pre-m1", "--URL", "file:./x.db"]],
+    ["a single dash (-url)", ["pre-m1", "-url", "file:./x.db"]],
+    ["--url=value, which parseCliArgs reads as one unknown flag", ["pre-m1", "--url=file:./x.db"]],
+    ["a database path with the flag forgotten", ["pre-m1", "file:./x.db"]],
+    ["no label at all", []],
+    ["no label, only --url", ["--url", "file:./x.db"]],
+    ["two labels", ["pre-m1", "post-m1"]],
+    ["--url with no value", ["pre-m1", "--url"]],
+    ["--url with an empty value", ["pre-m1", "--url", ""]],
+    ["a stray extra flag beside a valid --url", ["pre-m1", "--url", "file:./x.db", "--backup", "b.json"]],
+    ["a label with a space", ["bad label"]],
+    ["a label starting with a dash", ["-pre-m1"]],
+  ])("refuses %s, so it can never fall back to TURSO_DATABASE_URL", (_name, argv) => {
+    expect(backupArgsError(argv)).toContain("Usage: npx tsx scripts/backup-turso.ts <label>");
   });
 });
 
