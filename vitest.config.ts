@@ -17,8 +17,12 @@ export default defineConfig({
     // Files run in parallel, and several tests do real work (hundreds of password
     // checks, migrations replayed into fresh databases) that takes 1s alone and
     // 4-8s once every core is busy, which trips the 5s default intermittently.
-    // This is a hang guard, not a speed target.
+    // This is a hang guard, not a speed target. The same load slows the hooks
+    // (a beforeEach that truncates and reseeds a database), and vitest's own 10s
+    // hook default trips under it just as the test default does, so hooks get
+    // the same ceiling.
     testTimeout: 30_000,
+    hookTimeout: 30_000,
     include: ["src/**/*.test.ts"],
     // The AI evaluation harness has its own config (vitest.eval.config.ts) and
     // its own script; it may talk to real providers and is not a unit test.
