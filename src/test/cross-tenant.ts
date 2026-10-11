@@ -15,6 +15,7 @@
  * files must find the keys by scanning test sources for that literal call.
  */
 import type { PrismaClient } from "@/generated/prisma/client";
+import { TENANT_MODELS } from "@/lib/tenancy-map";
 import { makeUser, makeWorkspace, type TestUser } from "./action-harness";
 
 export type TenantFixture = {
@@ -101,29 +102,35 @@ export async function twoWorkspaces(
   return { a: await seedTenant(prisma, "A"), b: await seedTenant(prisma, "B") };
 }
 
+// Untyped delegate lookup, so one loop can read every model in TENANT_MODELS.
+type Delegate = Record<string, (args?: unknown) => Promise<unknown>>;
+
+function delegateOf(client: PrismaClient, model: string): Delegate {
+  return (client as unknown as Record<string, Delegate>)[model[0].toLowerCase() + model.slice(1)];
+}
+
 /**
- * Every row that belongs to one workspace, as stable JSON: the workspace, its
- * memberships and their users, and all of its tenant rows, each ordered by id.
- * Equal before and after a call means the call changed nothing there.
+ * Every row that belongs to one workspace, as stable JSON: the workspace, the
+ * users of its memberships, and a section per model in `TENANT_MODELS`, each
+ * ordered by id. The tenant sections come from that map rather than a list kept
+ * here, so a model added to it is covered by construction. Equal before and
+ * after a call means the call changed nothing there.
  */
 export async function snapshotWorkspace(prisma: PrismaClient, workspaceId: string): Promise<string> {
   const where = { workspaceId };
   const orderBy = { id: "asc" } as const;
-  const memberships = await prisma.membership.findMany({ where, orderBy });
+  const tenantRows: Record<string, unknown> = {};
+  for (const model of TENANT_MODELS) {
+    tenantRows[model] = await delegateOf(prisma, model).findMany({ where, orderBy });
+  }
+  const memberships = await prisma.membership.findMany({ where, select: { userId: true } });
   return JSON.stringify({
     workspace: await prisma.workspace.findUnique({ where: { id: workspaceId } }),
-    memberships,
     users: await prisma.user.findMany({
       where: { id: { in: memberships.map((m) => m.userId) } },
       orderBy,
     }),
-    companies: await prisma.company.findMany({ where, orderBy }),
-    contacts: await prisma.contact.findMany({ where, orderBy }),
-    deals: await prisma.deal.findMany({ where, orderBy }),
-    tasks: await prisma.task.findMany({ where, orderBy }),
-    activities: await prisma.activity.findMany({ where, orderBy }),
-    auditLogs: await prisma.auditLog.findMany({ where, orderBy }),
-    aiUsages: await prisma.aiUsage.findMany({ where, orderBy }),
+    tenantRows,
   });
 }
 

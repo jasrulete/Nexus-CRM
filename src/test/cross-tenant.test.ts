@@ -46,8 +46,19 @@ describe("twoWorkspaces", () => {
   });
 
   it("links each workspace's rows only to each other", async () => {
-    const deal = await prisma.deal.findUniqueOrThrow({ where: { id: b.dealId } });
-    expect(deal).toMatchObject({ contactId: b.contactId, companyId: b.companyId, ownerId: b.owner.id });
+    for (const t of [a, b]) {
+      const deal = await prisma.deal.findUniqueOrThrow({ where: { id: t.dealId } });
+      expect(deal).toMatchObject({ contactId: t.contactId, companyId: t.companyId, ownerId: t.owner.id });
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: t.taskId } });
+      expect(task).toMatchObject({ contactId: t.contactId, dealId: t.dealId, assigneeId: t.owner.id });
+      const activity = await prisma.activity.findUniqueOrThrow({ where: { id: t.activityId } });
+      expect(activity).toMatchObject({
+        contactId: t.contactId,
+        dealId: t.dealId,
+        companyId: t.companyId,
+        userId: t.owner.id,
+      });
+    }
   });
 });
 
@@ -65,6 +76,10 @@ describe("snapshotWorkspace", () => {
 
   it.each([
     ["a contact edit", () => prisma.contact.update({ where: { id: b.contactId }, data: { firstName: "Changed" } })],
+    ["a deal edit", () => prisma.deal.update({ where: { id: b.dealId }, data: { title: "Changed" } })],
+    ["an activity edit", () => prisma.activity.update({ where: { id: b.activityId }, data: { content: "Changed" } })],
+    ["a membership role change", () => prisma.membership.update({ where: { userId: b.owner.id }, data: { role: "MEMBER" } })],
+    ["a new AI usage row", () => prisma.aiUsage.create({ data: { workspaceId: b.workspaceId, action: "score", outcome: "pending" } })],
     ["a deleted task", () => prisma.task.delete({ where: { id: b.taskId } })],
     ["a row moved out", () => prisma.company.update({ where: { id: b.companyId }, data: { workspaceId: a.workspaceId } })],
     ["a member's renamed user", () => prisma.user.update({ where: { id: b.owner.id }, data: { name: "Changed" } })],
