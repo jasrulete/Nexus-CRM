@@ -51,3 +51,6 @@ next-env.d.ts
 # local sqlite database
 *.db
 *.db-journal
+
+# throwaway spike and rehearsal files (multi-tenancy plan, Task 1); never committed
+/.scratch/
