@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { createDbAdapter } from "./db-adapter";
+import { assertSingleModeDatabase } from "./workspace-bootstrap";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
@@ -8,3 +9,12 @@ export const prisma =
   globalForPrisma.prisma ?? new PrismaClient({ adapter: createDbAdapter() });
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+/**
+ * The boot-time half of single mode's guard (spec §6), run by
+ * instrumentation's register(). It lives here so the boot path reaches the
+ * base client without a file outside the systemDb allowlist importing it.
+ */
+export async function assertSingleModeBoot(): Promise<void> {
+  await assertSingleModeDatabase(prisma);
+}
