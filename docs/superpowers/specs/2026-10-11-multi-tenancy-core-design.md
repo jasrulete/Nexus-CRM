@@ -163,8 +163,8 @@ callback under `$allModels` never sees model-less raw calls.
 
 - **`model` undefined** (`$queryRaw`, `$executeRaw`, `$queryRawUnsafe`, `$executeRawUnsafe`):
   **throw**.
-- **GLOBAL model, any operation: throw.** Nested `include`/`select` of a global model (e.g. a
-  membership's `user`) still works, because nested reads don't fire hooks.
+- **GLOBAL model, any operation: throw.** A nested read of a global relation (e.g. a membership's
+  `user`) still works, but only for scalar fields (§5.5).
 - **TENANT model:** an explicit switch over **every** operation the installed client has, with a
   **default that throws**. A unit test runs every operation name per tenant model, so a Prisma upgrade
   that adds an operation fails the test.
@@ -262,13 +262,19 @@ today's admin view.
 
 ### 5.5 Nested reads
 
-The extension can't see `include`, `select` or `_count` on relations; 14 sites read related rows this
+The extension's callback fires only for the top-level model, so `include`, `select`, `where`,
+`orderBy` and `_count` on relations are checked by walking the args; 14 sites read related rows this
 way.
 - Nested reads of **tenant** children are safe **because of §5.4 and the ScalarFieldEnum rule**: no
   write can link rows across workspaces or move a row out of one, so a scoped parent can only include
   same-workspace children.
-- Nested reads of **global** rows (a record's owner name, a membership's user) are safe by
-  construction: they hang off a scoped parent.
+- Nested access through a GLOBAL relation (a record's owner/user/assignee, a membership's workspace)
+  is NOT safe by construction: a User's back-relations reach every workspace's rows (review finding,
+  2026-10-12). `scopeToWorkspace` walks `select`, `include`, `where` and `orderBy`, and under any
+  relation whose target is GLOBAL allows scalar fields only — `true` or a `select` of the target's
+  scalars; a relation key, `include`, `_count`, or a nested relation filter under a GLOBAL relation
+  throws `TenancyViolation`. The relation-target map is a static table checked against
+  `prisma/schema.prisma` by a test.
 
 The cross-tenant suite (§9.1) proves this rather than assuming it.
 

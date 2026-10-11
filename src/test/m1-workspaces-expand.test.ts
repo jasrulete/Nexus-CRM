@@ -131,6 +131,7 @@ describe("M1 on an install with users", () => {
     ]);
   });
 
+  // Slow: it builds two databases through the migrations (7-9s under parallel load; the default is 5s).
   it("passes every check of the M1 verify gate", async () => {
     const db = migrated();
     const reference = createTestDatabase();
@@ -141,7 +142,7 @@ describe("M1 on an install with users", () => {
       backupCounts: null,
     });
     expect(checks.filter((c) => !c.ok)).toEqual([]);
-  });
+  }, 30_000);
 });
 
 describe("M1 on an install with no users", () => {

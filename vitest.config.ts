@@ -14,6 +14,11 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Files run in parallel, and several tests do real work (hundreds of password
+    // checks, migrations replayed into fresh databases) that takes 1s alone and
+    // 4-8s once every core is busy, which trips the 5s default intermittently.
+    // This is a hang guard, not a speed target.
+    testTimeout: 30_000,
     include: ["src/**/*.test.ts"],
     // The AI evaluation harness has its own config (vitest.eval.config.ts) and
     // its own script; it may talk to real providers and is not a unit test.

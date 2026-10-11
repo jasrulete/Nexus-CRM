@@ -66,3 +66,53 @@ const SCALAR_FIELDS = new Map<string, ReadonlySet<string>>(
 export function scalarFieldsOf(model: string): ReadonlySet<string> {
   return SCALAR_FIELDS.get(model) ?? new Set();
 }
+
+/**
+ * Every relation field of every model and the model it points at. Static
+ * because the prisma-client generator exports no DMMF; tenancy-map.test.ts
+ * parses prisma/schema.prisma and fails if this table drifts from it, so a
+ * schema change cannot leave a relation the scoped client's nested-access walk
+ * does not know about.
+ */
+export const RELATION_TARGETS = {
+  User: {
+    sessions: "Session",
+    companies: "Company",
+    contacts: "Contact",
+    deals: "Deal",
+    activities: "Activity",
+    tasks: "Task",
+    auditLogs: "AuditLog",
+    membership: "Membership",
+  },
+  Session: { user: "User" },
+  Workspace: { memberships: "Membership", aiUsages: "AiUsage" },
+  Membership: { workspace: "Workspace", user: "User" },
+  AiUsage: { workspace: "Workspace" },
+  Company: { owner: "User", contacts: "Contact", deals: "Deal", activities: "Activity" },
+  Contact: {
+    company: "Company",
+    owner: "User",
+    deals: "Deal",
+    activities: "Activity",
+    tasks: "Task",
+  },
+  Deal: {
+    contact: "Contact",
+    company: "Company",
+    owner: "User",
+    activities: "Activity",
+    tasks: "Task",
+  },
+  Activity: { contact: "Contact", deal: "Deal", company: "Company", user: "User" },
+  Task: { contact: "Contact", deal: "Deal", assignee: "User" },
+  AuditLog: { user: "User" },
+} as const satisfies Record<Prisma.ModelName, Record<string, Prisma.ModelName>>;
+
+/** The model a relation field points at, or undefined if `field` is not a relation of `model`. */
+export function relationTargetOf(model: string, field: string): string | undefined {
+  const relations: Readonly<Record<string, string>> | undefined = Object.hasOwn(RELATION_TARGETS, model)
+    ? RELATION_TARGETS[model as Prisma.ModelName]
+    : undefined;
+  return relations !== undefined && Object.hasOwn(relations, field) ? relations[field] : undefined;
+}

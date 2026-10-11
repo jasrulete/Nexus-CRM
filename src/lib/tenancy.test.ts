@@ -7,7 +7,7 @@
  * adds an operation fails "operation coverage" below until the switch in
  * tenancy.ts handles it.
  */
-import { afterAll, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 import type { Prisma } from "@/generated/prisma/client";
 import { createTestDatabase, truncateAll } from "@/test/action-harness";
 import {
@@ -20,6 +20,14 @@ import {
 import { TENANT_MODELS } from "./tenancy-map";
 
 const { prisma, destroy } = createTestDatabase();
+
+beforeAll(async () => {
+  // Every test resets and reseeds a throwaway database, and an fsync plus an
+  // on-disk journal make each write cost ~15ms, which is most of this file's
+  // runtime. Neither buys anything for a file deleted when the run ends.
+  await prisma.$queryRawUnsafe("PRAGMA synchronous = OFF");
+  await prisma.$queryRawUnsafe("PRAGMA journal_mode = MEMORY");
+});
 
 afterAll(async () => {
   await destroy();
@@ -488,6 +496,250 @@ describe("nested reads of global rows still work", () => {
   });
 });
 
+// A User's back-relations (companies, contacts, auditLogs, sessions, membership)
+// and a Workspace's (memberships, aiUsages) reach every workspace's rows, so a
+// hop through a GLOBAL relation must stay on scalar fields. Review finding,
+// 2026-10-12: without that, `include: { owner: { include: { companies: true } } }`
+// returned the owner's companies in workspace B.
+describe("nested access through a global relation", () => {
+  let mineCompany: { id: string };
+  let theirCompany: { id: string };
+  let before: { a: string; b: string };
+
+  beforeEach(async () => {
+    await resetDatabase();
+    mineCompany = await prisma.company.create({ data: { name: "Mine", ownerId: owner.id, workspaceId: A } });
+    theirCompany = await prisma.company.create({ data: { name: "Secret", ownerId: owner.id, workspaceId: B } });
+    await prisma.contact.create({
+      data: { firstName: "A", lastName: "One", ownerId: owner.id, companyId: mineCompany.id, workspaceId: A },
+    });
+    await prisma.contact.create({
+      data: { firstName: "B", lastName: "One", ownerId: owner.id, companyId: theirCompany.id, workspaceId: B },
+    });
+    await prisma.auditLog.create({
+      data: { action: "contact.create", entityType: "contact", entityId: "c1", userId: owner.id, workspaceId: B },
+    });
+    await prisma.auditLog.create({
+      data: { action: "auth.login", entityType: "user", entityId: owner.id, userId: owner.id, workspaceId: null },
+    });
+    await prisma.session.create({
+      data: { tokenHash: "hash", userId: owner.id, expiresAt: new Date(Date.now() + 3_600_000) },
+    });
+    await prisma.membership.create({ data: { workspaceId: B, userId: owner.id, role: "MEMBER" } });
+    before = { a: await rowsOf(A), b: await rowsOf(B) };
+  });
+
+  it("is a real leak: the same hops on the unscoped client reach workspace B", async () => {
+    const [row] = await prisma.company.findMany({
+      where: { id: mineCompany.id },
+      include: { owner: { include: { companies: true, auditLogs: true, sessions: true } } },
+    });
+
+    expect(row.owner.companies.map((c) => c.name).sort()).toEqual(["Mine", "Secret"]);
+    expect(row.owner.auditLogs).toHaveLength(2);
+    expect(row.owner.sessions).toHaveLength(1);
+  });
+
+  const oracle = { owner: { companies: { some: { workspaceId: B, name: "Secret" } } } };
+
+  it.each<[string, (db: ScopedDb) => PromiseLike<unknown>]>([
+    [
+      "include owner's companies, audit rows, sessions and membership's workspace",
+      (db: ScopedDb) =>
+        db.company.findMany({
+          include: {
+            owner: {
+              include: {
+                companies: true,
+                auditLogs: true,
+                sessions: true,
+                membership: { include: { workspace: true } },
+              },
+            },
+          },
+        }),
+    ],
+    ["include owner's companies", (db: ScopedDb) => db.company.findMany({ include: { owner: { include: { companies: true } } } })],
+    ["select owner's companies", (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { companies: true } } } })],
+    [
+      "select owner's session token hashes",
+      (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { sessions: { select: { tokenHash: true } } } } } }),
+    ],
+    ["select owner's audit rows", (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { auditLogs: true } } } })],
+    [
+      "select owner's membership and its workspace",
+      (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { membership: { include: { workspace: true } } } } } }),
+    ],
+    ["a record's user's deals (activity.user)", (db: ScopedDb) => db.activity.findMany({ include: { user: { include: { deals: true } } } })],
+    ["a task's assignee's companies", (db: ScopedDb) => db.task.findMany({ include: { assignee: { include: { companies: true } } } })],
+    ["an audit row's user's companies", (db: ScopedDb) => db.auditLog.findMany({ include: { user: { include: { companies: true } } } })],
+    ["a membership's user's companies", (db: ScopedDb) => db.membership.findMany({ include: { user: { include: { companies: true } } } })],
+    ["a membership's workspace's members", (db: ScopedDb) => db.membership.findMany({ include: { workspace: { include: { memberships: true } } } })],
+    ["a membership's workspace's AI usage", (db: ScopedDb) => db.membership.findMany({ select: { workspace: { select: { aiUsages: true } } } })],
+    ["an AI usage row's workspace's members", (db: ScopedDb) => db.aiUsage.findMany({ include: { workspace: { include: { memberships: true } } } })],
+    [
+      "through a tenant parent: contact -> company -> owner -> companies",
+      (db: ScopedDb) => db.contact.findMany({ include: { company: { include: { owner: { include: { companies: true } } } } } }),
+    ],
+    [
+      "through a tenant list: company -> contacts -> owner -> companies",
+      (db: ScopedDb) => db.company.findMany({ include: { contacts: { include: { owner: { include: { companies: true } } } } } }),
+    ],
+    [
+      "_count under the owner (counts across workspaces)",
+      (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { _count: { select: { companies: true, auditLogs: true } } } } } }),
+    ],
+    ["_count: true under the owner", (db: ScopedDb) => db.company.findMany({ select: { owner: { select: { _count: true } } } })],
+    ["where: a filter on the owner's other companies", (db: ScopedDb) => db.company.count({ where: oracle })],
+    ["where: the same filter through `is`", (db: ScopedDb) => db.company.findMany({ where: { owner: { is: { companies: { some: { name: "Secret" } } } } } })],
+    ["where: the same filter inside OR", (db: ScopedDb) => db.company.findMany({ where: { OR: [{ name: "Mine" }, oracle] } })],
+    ["where: the same filter inside NOT", (db: ScopedDb) => db.company.findMany({ where: { NOT: { AND: [oracle] } } })],
+    ["where: a filter on the owner's membership", (db: ScopedDb) => db.company.findMany({ where: { owner: { membership: { workspaceId: B } } } })],
+    ["where: aggregate", (db: ScopedDb) => db.company.aggregate({ _count: { _all: true }, where: oracle })],
+    ["where: groupBy", (db: ScopedDb) => db.company.groupBy({ by: ["name"], _count: { _all: true }, where: oracle })],
+    ["where: updateMany", (db: ScopedDb) => db.company.updateMany({ data: { name: "X" }, where: oracle })],
+    ["where: deleteMany", (db: ScopedDb) => db.company.deleteMany({ where: oracle })],
+    ["where: update", (db: ScopedDb) => db.company.update({ where: { id: mineCompany.id, ...oracle }, data: { name: "X" } })],
+    [
+      "where: inside a nested relation's filter",
+      (db: ScopedDb) => db.company.findMany({ include: { contacts: { where: { owner: { companies: { some: { name: "Secret" } } } } } } }),
+    ],
+    [
+      "where: inside a _count's filter",
+      (db: ScopedDb) =>
+        db.company.findMany({ select: { _count: { select: { contacts: { where: { owner: { companies: { some: { name: "Secret" } } } } } } } } }),
+    ],
+    [
+      "orderBy: through the owner's company count",
+      (db: ScopedDb) => db.company.findMany({ orderBy: { owner: { companies: { _count: "asc" } } } }),
+    ],
+    ["orderBy: through the owner's membership", (db: ScopedDb) => db.company.findMany({ orderBy: { owner: { membership: { role: "asc" } } } })],
+    [
+      "orderBy: written as an array",
+      (db: ScopedDb) => db.company.findMany({ orderBy: [{ name: "asc" }, { owner: { companies: { _count: "asc" } } }] }),
+    ],
+    [
+      "where: through a tenant list's `every`",
+      (db: ScopedDb) => db.company.findMany({ where: { contacts: { every: { owner: { companies: { some: { name: "Secret" } } } } } } }),
+    ],
+    [
+      "orderBy: inside a nested relation",
+      (db: ScopedDb) => db.company.findMany({ include: { contacts: { orderBy: { owner: { companies: { _count: "asc" } } } } } }),
+    ],
+    ["fluent: company.owner().companies()", (db: ScopedDb) => db.company.findUnique({ where: { id: mineCompany.id } }).owner().companies()],
+    ["fluent: company.owner().auditLogs()", (db: ScopedDb) => db.company.findUnique({ where: { id: mineCompany.id } }).owner().auditLogs()],
+    ["fluent: membership.workspace().memberships()", (db: ScopedDb) => db.membership.findFirst().workspace().memberships()],
+    [
+      "update returning the owner's companies",
+      (db: ScopedDb) => db.company.update({ where: { id: mineCompany.id }, data: { name: "X" }, include: { owner: { include: { companies: true } } } }),
+    ],
+    [
+      "create returning the owner's companies",
+      (db: ScopedDb) =>
+        db.company.create({
+          data: { name: "New", ownerId: owner.id, workspaceId: A },
+          include: { owner: { include: { companies: true } } },
+        }),
+    ],
+    [
+      "delete returning the owner's companies",
+      (db: ScopedDb) => db.company.delete({ where: { id: mineCompany.id }, include: { owner: { include: { companies: true } } } }),
+    ],
+  ])("%s throws and touches nothing", async (_name, call) => {
+    await expect(Promise.resolve().then(() => call(scopeToWorkspace(prisma, A)))).rejects.toThrow(TenancyViolation);
+
+    expect(await rowsOf(A)).toBe(before.a);
+    expect(await rowsOf(B)).toBe(before.b);
+  });
+
+  it("throws inside an interactive transaction's tx, for a read and for a filter", async () => {
+    const db = scopeToWorkspace(prisma, A);
+
+    await expect(
+      db.$transaction((tx) => tx.company.findMany({ include: { owner: { include: { companies: true } } } })),
+    ).rejects.toThrow(TenancyViolation);
+    await expect(db.$transaction((tx) => tx.company.count({ where: oracle }))).rejects.toThrow(TenancyViolation);
+    await expect(
+      db.$transaction((tx) => tx.company.findUnique({ where: { id: mineCompany.id } }).owner().companies()),
+    ).rejects.toThrow(TenancyViolation);
+  });
+
+  it("throws inside a batch transaction", async () => {
+    const db = scopeToWorkspace(prisma, A);
+
+    await expect(
+      db.$transaction([db.company.findMany({ include: { owner: { include: { companies: true } } } })]),
+    ).rejects.toThrow(TenancyViolation);
+  });
+
+  describe("scalar reads of a global relation still work", () => {
+    it("include: { owner: true }", async () => {
+      const rows = await scopeToWorkspace(prisma, A).company.findMany({ include: { owner: true } });
+
+      expect(rows.map((r) => [r.id, r.owner.id])).toEqual([[mineCompany.id, owner.id]]);
+    });
+
+    it("include: { owner: { select: { name: true } } }", async () => {
+      const rows = await scopeToWorkspace(prisma, A).company.findMany({
+        include: { owner: { select: { name: true } } },
+      });
+
+      expect(rows.map((r) => r.owner)).toEqual([{ name: owner.name }]);
+    });
+
+    it("select: { owner: { select: { name, email } } }", async () => {
+      const rows = await scopeToWorkspace(prisma, A).company.findMany({
+        select: { id: true, owner: { select: { name: true, email: true } } },
+      });
+
+      expect(rows).toEqual([{ id: mineCompany.id, owner: { name: owner.name, email: expect.any(String) } }]);
+    });
+
+    it("a membership's user, and a membership's workspace", async () => {
+      await prisma.membership.deleteMany({ where: { workspaceId: B } });
+      await prisma.membership.create({ data: { workspaceId: A, userId: owner.id, role: "OWNER" } });
+      const db = scopeToWorkspace(prisma, A);
+
+      const roster = await db.membership.findMany({
+        include: { user: { select: { id: true, name: true, email: true } } },
+      });
+      const withWorkspace = await db.membership.findMany({ include: { workspace: true } });
+
+      expect(roster.map((m) => m.user.id)).toEqual([owner.id]);
+      expect(withWorkspace.map((m) => m.workspace.id)).toEqual([A]);
+    });
+
+    it("a scalar filter on the owner, with `is` and inside OR/NOT", async () => {
+      const email = (await prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).email;
+      const db = scopeToWorkspace(prisma, A);
+
+      expect(ids(await db.company.findMany({ where: { owner: { email } } }))).toEqual([mineCompany.id]);
+      expect(ids(await db.company.findMany({ where: { owner: { is: { name: owner.name } } } }))).toEqual([mineCompany.id]);
+      expect(ids(await db.company.findMany({ where: { OR: [{ owner: { email } }, { name: "none" }] } }))).toEqual([mineCompany.id]);
+      expect(await db.company.findMany({ where: { NOT: { owner: { email } } } })).toEqual([]);
+      expect(await db.company.findMany({ where: { owner: { email: "nobody@example.com" } } })).toEqual([]);
+    });
+
+    it("orderBy: { owner: { name: 'asc' } }", async () => {
+      const rows = await scopeToWorkspace(prisma, A).company.findMany({ orderBy: { owner: { name: "asc" } } });
+
+      expect(ids(rows)).toEqual([mineCompany.id]);
+    });
+
+    it("tenant-to-tenant includes, and a global scalar below them", async () => {
+      const db = scopeToWorkspace(prisma, A);
+
+      const companies = await db.company.findMany({ include: { contacts: true } });
+      const nested = await db.company.findMany({ include: { contacts: { include: { owner: { select: { name: true } } } } } });
+      const counted = await db.company.findMany({ select: { _count: { select: { contacts: true } } } });
+
+      expect(companies.map((c) => c.contacts.length)).toEqual([1]);
+      expect(nested[0].contacts.map((c) => c.owner.name)).toEqual([owner.name]);
+      expect(counted.map((c) => c._count.contacts)).toEqual([1]);
+    });
+  });
+});
+
 describe("transactions", () => {
   let theirs: { id: string };
 
@@ -530,5 +782,14 @@ describe("construction", () => {
 
   it("names its errors", () => {
     expect(new TenancyViolation("x").name).toBe("TenancyViolation");
+  });
+
+  // A query extension stacked on the scoped client runs outside the scope's
+  // callback and can rewrite `where` to {} (review probe P5), so the type must
+  // not offer `$extends`. This is the type-level half; a cast can still reach it.
+  it("does not offer $extends on the scoped client's type", () => {
+    expectTypeOf<ScopedDb>().not.toHaveProperty("$extends");
+    expectTypeOf<ScopedDb>().toHaveProperty("$transaction");
+    expectTypeOf<ScopedDb>().toHaveProperty("company");
   });
 });
