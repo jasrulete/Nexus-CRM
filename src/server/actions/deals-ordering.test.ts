@@ -1,5 +1,5 @@
-﻿/**
- * Kanban reordering â€” the product's signature interaction, and previously
+/**
+ * Kanban reordering — the product's signature interaction, and previously
  * untested at any level.
  *
  * `moveDeal` is the one action that writes rows the caller did not name: it
@@ -7,8 +7,9 @@
  * for an ordering bug to hide, and reorder correctness is the first thing a
  * reviewer probes in a drag-and-drop implementation.
  *
- * These tests also pin a known open defect (see the final block) so that fixing
- * it is a visible change in behaviour rather than a silent one.
+ * A column is (workspaceId, stage) (spec §4). The last block holds a second
+ * workspace's cards beside the first and proves that no write path reads or
+ * rewrites them.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,13 +17,22 @@ import {
   formData,
   formDataFor,
   makeUser,
+  makeWorkspace,
   truncateAll,
   type TestUser,
 } from "@/test/action-harness";
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -32,8 +42,10 @@ vi.mock("next/navigation", () => ({
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
-  requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  requireUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 const { moveDeal, createDeal, updateDeal } = await import("./deals");
@@ -52,31 +64,38 @@ beforeEach(async () => {
   currentUser = owner;
 });
 
-/** Creates deals in a stage, already correctly sequenced. */
-async function seedColumn(stage: string, titles: string[]) {
+/** Creates deals in a stage of `as`'s workspace, already correctly sequenced. */
+async function seedColumn(stage: string, titles: string[], as: TestUser = owner) {
   const made = [];
   for (const [i, title] of titles.entries()) {
     made.push(
       await prisma.deal.create({
-        data: { title, value: 100, stage, position: i, ownerId: owner.id },
+        data: {
+          title,
+          value: 100,
+          stage,
+          position: i,
+          ownerId: as.id,
+          workspaceId: as.workspaceId,
+        },
       }),
     );
   }
   return made;
 }
 
-async function columnOrder(stage: string) {
+async function columnOrder(stage: string, workspaceId: string = owner.workspaceId) {
   const deals = await prisma.deal.findMany({
-    where: { stage },
+    where: { workspaceId, stage },
     orderBy: { position: "asc" },
     select: { title: true, position: true },
   });
   return deals.map((d) => d.title);
 }
 
-async function positionsIn(stage: string) {
+async function positionsIn(stage: string, workspaceId: string = owner.workspaceId) {
   const deals = await prisma.deal.findMany({
-    where: { stage },
+    where: { workspaceId, stage },
     orderBy: { position: "asc" },
     select: { position: true },
   });
@@ -147,6 +166,7 @@ describe("moveDeal across columns", () => {
       where: { action: "deal.stage_change" },
     });
     expect(entry.metadata).toContain("kanban");
+    expect(entry.workspaceId).toBe(owner.workspaceId);
   });
 
   it("rejects a stage that is not one of the six", async () => {
@@ -230,7 +250,7 @@ describe("concurrent writes keep the column well-formed", () => {
   }
 
   it("survives simultaneous creates into the same column", async () => {
-    // Both the read of the last position and the insert now happen inside one
+    // Both the read of the last position and the insert happen inside one
     // transaction. Previously they did not, so two creates could read the same
     // last position and both write it.
     await Promise.all(
@@ -270,5 +290,50 @@ describe("concurrent writes keep the column well-formed", () => {
     await expectWellFormed("PROPOSAL");
     expect(await prisma.deal.count({ where: { stage: "PROPOSAL" } })).toBe(3);
     expect(await prisma.deal.count({ where: { stage: "LEAD" } })).toBe(0);
+  });
+});
+
+describe("columns are per workspace", () => {
+  let neighbour: TestUser;
+
+  beforeEach(async () => {
+    const other = await makeWorkspace(prisma, { slug: "neighbour" });
+    neighbour = await makeUser(prisma, {
+      email: "neighbour@example.com",
+      name: "Nia Neighbour",
+      workspaceId: other.id,
+    });
+    await seedColumn("LEAD", ["N1", "N2", "N3"], neighbour);
+  });
+
+  it("createDeal appends after this workspace's cards only", async () => {
+    await seedColumn("LEAD", ["A"]);
+
+    await createDeal({}, formData({ title: "B", value: "100", stage: "LEAD" }));
+
+    expect(await columnOrder("LEAD")).toEqual(["A", "B"]);
+    expect(await positionsIn("LEAD")).toEqual([0, 1]);
+    expect(await positionsIn("LEAD", neighbour.workspaceId)).toEqual([0, 1, 2]);
+  });
+
+  it("moveDeal resequences this workspace's column and leaves the neighbour's alone", async () => {
+    const [, , c] = await seedColumn("LEAD", ["A", "B", "C"]);
+
+    await moveDeal({ dealId: c.id, stage: "LEAD", position: 0 });
+
+    expect(await columnOrder("LEAD")).toEqual(["C", "A", "B"]);
+    expect(await positionsIn("LEAD")).toEqual([0, 1, 2]);
+    expect(await columnOrder("LEAD", neighbour.workspaceId)).toEqual(["N1", "N2", "N3"]);
+    expect(await positionsIn("LEAD", neighbour.workspaceId)).toEqual([0, 1, 2]);
+  });
+
+  it("updateDeal into another stage lands after this workspace's cards only", async () => {
+    await seedColumn("PROPOSAL", ["N4", "N5"], neighbour);
+    const [a] = await seedColumn("LEAD", ["A"]);
+
+    await updateDeal(a.id, {}, formDataFor(a, { title: "A", value: "100", stage: "PROPOSAL" }));
+
+    expect(await positionsIn("PROPOSAL")).toEqual([0]);
+    expect(await positionsIn("PROPOSAL", neighbour.workspaceId)).toEqual([0, 1]);
   });
 });

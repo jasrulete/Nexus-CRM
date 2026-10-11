@@ -19,7 +19,15 @@ import { WORKSPACE_CURRENCY } from "@/lib/money";
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -29,8 +37,10 @@ vi.mock("next/navigation", () => ({
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
-  requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  requireUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 // The rate provider is the one thing genuinely mocked here — the point is to

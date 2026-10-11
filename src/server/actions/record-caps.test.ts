@@ -42,6 +42,7 @@ vi.mock("@/lib/auth/session", () => ({
 
 const { createContact } = await import("./contacts");
 const { createCompany } = await import("./companies");
+const { createDeal } = await import("./deals");
 
 let user: TestUser;
 let workspaceId: string;
@@ -78,6 +79,19 @@ async function fillCompanies(n: number) {
   await prisma.company.createMany({
     data: Array.from({ length: n }, (_, i) => ({
       name: `Fill ${i}`,
+      ownerId: user.id,
+      workspaceId,
+    })),
+  });
+}
+
+async function fillDeals(n: number) {
+  await prisma.deal.createMany({
+    data: Array.from({ length: n }, (_, i) => ({
+      title: `Fill ${i}`,
+      value: 0,
+      stage: "LEAD",
+      position: i,
       ownerId: user.id,
       workspaceId,
     })),
@@ -150,5 +164,29 @@ describe("companies", () => {
     await fillCompanies(PLAN_LIMITS.FREE.companies);
 
     expect((await createCompany({}, formData({ name: "Unlimited" }))).success).toBe(true);
+  });
+});
+
+describe("deals", () => {
+  it("refuses the next deal at the FREE cap in multi mode, counting every stage", async () => {
+    process.env.WORKSPACE_MODE = "multi";
+    await fillDeals(PLAN_LIMITS.FREE.deals - 1);
+    // A closed deal still counts: the cap covers all stages (spec §7).
+    await prisma.deal.create({
+      data: { title: "Won one", value: 0, stage: "WON", position: 0, ownerId: user.id, workspaceId },
+    });
+
+    const result = await createDeal({}, formData({ title: "One too many", value: "100", stage: "LEAD" }));
+
+    expect(result.message).toBe(capMessage("deals", PLAN_LIMITS.FREE.deals));
+    expect(await prisma.deal.count({ where: { workspaceId } })).toBe(PLAN_LIMITS.FREE.deals);
+  });
+
+  it("does not cap single mode", async () => {
+    await fillDeals(PLAN_LIMITS.FREE.deals);
+
+    const result = await createDeal({}, formData({ title: "Unlimited", value: "100", stage: "LEAD" }));
+
+    expect(result.success).toBe(true);
   });
 });
