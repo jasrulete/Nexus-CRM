@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Plus, Search, Users } from "lucide-react";
-import { prisma } from "@/lib/db";
 import { CONTACT_STATUSES, CONTACT_STATUS_LABELS } from "@/lib/constants";
 import { fullName, timeAgo } from "@/lib/utils";
+import { requireWorkspacePage } from "@/lib/workspace-context";
+import { loadContactsPage } from "@/server/queries/contacts";
 import { PageHeader } from "@/components/page-header";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ export default async function ContactsPage({
 }: {
   searchParams: Promise<{ q?: string; status?: string }>;
 }) {
+  const ctx = await requireWorkspacePage();
   const { q, status } = await searchParams;
   const query = q?.trim() || undefined;
   const statusFilter = CONTACT_STATUSES.includes(
@@ -31,32 +33,10 @@ export default async function ContactsPage({
     ? status
     : undefined;
 
-  const [contacts, companies] = await Promise.all([
-    prisma.contact.findMany({
-      where: {
-        ...(statusFilter ? { status: statusFilter } : {}),
-        ...(query
-          ? {
-              OR: [
-                { firstName: { contains: query } },
-                { lastName: { contains: query } },
-                { email: { contains: query } },
-              ],
-            }
-          : {}),
-      },
-      include: {
-        company: { select: { id: true, name: true } },
-        owner: { select: { name: true } },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: 100,
-    }),
-    prisma.company.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
+  const { contacts, companies } = await loadContactsPage(ctx, {
+    query,
+    status: statusFilter,
+  });
 
   return (
     <div className="mx-auto max-w-6xl">

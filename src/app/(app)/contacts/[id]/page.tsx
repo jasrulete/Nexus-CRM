@@ -11,12 +11,12 @@ import {
   Phone,
   Tag,
 } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { formatDate, fullName, timeAgo } from "@/lib/utils";
 import { formatDealAmount } from "@/lib/money";
+import { requireWorkspacePage } from "@/lib/workspace-context";
 import { deleteContact } from "@/server/actions/contacts";
+import { loadContactDetail } from "@/server/queries/contacts";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -38,38 +38,14 @@ export default async function ContactDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const demoLocked = isLockedDemoAccount((await getCurrentUser()) ?? { email: "" });
+  const ctx = await requireWorkspacePage();
+  const demoLocked = isLockedDemoAccount(ctx.user);
 
-  const [contact, companies] = await Promise.all([
-    prisma.contact.findUnique({
-      where: { id },
-      include: {
-        company: true,
-        owner: { select: { name: true } },
-        deals: { orderBy: { updatedAt: "desc" } },
-        tasks: {
-          where: { done: false },
-          orderBy: [{ dueDate: "asc" }],
-          take: 5,
-        },
-        activities: {
-          orderBy: { createdAt: "desc" },
-          take: 20,
-          include: {
-            user: { select: { name: true } },
-            contact: { select: { id: true, firstName: true, lastName: true } },
-            deal: { select: { id: true, title: true } },
-          },
-        },
-      },
-    }),
-    prisma.company.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
-
-  if (!contact) notFound();
+  // Another workspace's contact id reads as not found, the same 404 as an id
+  // that never existed.
+  const data = await loadContactDetail(ctx, id);
+  if (!data) notFound();
+  const { contact, companies } = data;
 
   const name = fullName(contact);
   const taskItems: TaskItem[] = contact.tasks.map((t) => ({

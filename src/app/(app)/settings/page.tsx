@@ -6,10 +6,10 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth/session";
 import { aiProviderName } from "@/lib/ai/provider";
-import { prisma } from "@/lib/db";
 import { timeAgo } from "@/lib/utils";
+import { requireWorkspacePage } from "@/lib/workspace-context";
+import { loadSettings } from "@/server/queries/settings";
 import { PageHeader } from "@/components/page-header";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -26,36 +26,15 @@ const securityFeatures = [
 ];
 
 export default async function SettingsPage() {
-  const user = (await getCurrentUser())!;
+  const ctx = await requireWorkspacePage();
+  const { user } = ctx;
   const provider = aiProviderName();
   // The card used to say "AI features are using the gemini API" — false for
   // most of any day Gemini's quota is exhausted and Groq is serving.
   const fallback = provider === "gemini" && process.env.GROQ_API_KEY ? "groq" : null;
-  const isAdmin = user.role === "ADMIN";
-
-  const [members, auditEntries] = await Promise.all([
-    prisma.user.findMany({
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-      orderBy: { createdAt: "asc" },
-    }),
-    isAdmin
-      ? prisma.auditLog.findMany({
-          orderBy: { createdAt: "desc" },
-          take: 25,
-          include: { user: { select: { name: true } } },
-        })
-      : Promise.resolve([]),
-  ]);
-
-  // Registration is open, so without this a MEMBER could register a throwaway
-  // account and read every address that has ever signed up. Names and roles
-  // stay visible as team context; an address is PII and does not.
-  const roster = members.map((m) => ({
-    id: m.id,
-    name: m.name,
-    role: m.role,
-    email: isAdmin || m.id === user.id ? m.email : null,
-  }));
+  // The roster's addresses are redacted, and the audit log filtered to this
+  // workspace, inside the loader. Nothing here decides what may be seen.
+  const { isAdmin, roster, auditEntries } = await loadSettings(ctx);
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -71,7 +50,7 @@ export default async function SettingsPage() {
               <p className="text-[13px] text-ink-faint">{user.email}</p>
             </div>
             <Badge className="ml-auto border-accent/25 bg-accent-soft text-accent">
-              {user.role.toLowerCase()}
+              {ctx.role.toLowerCase()}
             </Badge>
           </div>
         </Card>
@@ -130,9 +109,9 @@ export default async function SettingsPage() {
                     <p className="truncate text-[12px] text-ink-faint">{m.email}</p>
                   ) : null}
                 </div>
-                {m.role === "ADMIN" ? (
+                {m.isAdmin ? (
                   <Badge className="border-accent/25 bg-accent-soft text-accent">
-                    <ShieldCheck className="h-3 w-3" /> admin
+                    <ShieldCheck className="h-3 w-3" /> {m.role.toLowerCase()}
                   </Badge>
                 ) : (
                   <Badge className="border-edge-strong/60 bg-surface-2 text-ink-faint">
@@ -160,7 +139,7 @@ export default async function SettingsPage() {
           <Card>
             <CardHeader
               title="Audit log"
-              subtitle="Latest 25 events (admins only)"
+              subtitle="Latest 25 workspace events (admins only)"
             />
             {auditEntries.length === 0 ? (
               <p className="px-5 pb-5 text-[13px] text-ink-faint">

@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
-import { prisma } from "@/lib/db";
 import { OPEN_STAGES } from "@/lib/constants";
 import { formatCurrency, fullName } from "@/lib/utils";
+import { requireWorkspacePage } from "@/lib/workspace-context";
+import { loadDealsBoard } from "@/server/queries/deals";
 import { PageHeader } from "@/components/page-header";
 import { KanbanBoard } from "@/components/kanban/board";
 import type { BoardDeal } from "@/components/kanban/deal-card";
@@ -9,23 +10,8 @@ import type { BoardDeal } from "@/components/kanban/deal-card";
 export const metadata: Metadata = { title: "Deals" };
 
 export default async function DealsPage() {
-  const [deals, contacts, companies] = await Promise.all([
-    prisma.deal.findMany({
-      include: {
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        company: { select: { id: true, name: true } },
-      },
-      orderBy: { position: "asc" },
-    }),
-    prisma.contact.findMany({
-      select: { id: true, firstName: true, lastName: true },
-      orderBy: { firstName: "asc" },
-    }),
-    prisma.company.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
+  const ctx = await requireWorkspacePage();
+  const { deals, contacts, companies } = await loadDealsBoard(ctx);
 
   const boardDeals: BoardDeal[] = deals.map((d) => ({
     id: d.id,

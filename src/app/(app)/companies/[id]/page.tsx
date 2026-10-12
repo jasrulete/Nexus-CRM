@@ -9,12 +9,12 @@ import {
   Pencil,
   Users,
 } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { formatCurrency, fullName, timeAgo } from "@/lib/utils";
 import { formatDealAmount } from "@/lib/money";
+import { requireWorkspacePage } from "@/lib/workspace-context";
 import { deleteCompany } from "@/server/actions/companies";
+import { loadCompanyDetail } from "@/server/queries/companies";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -33,26 +33,10 @@ export default async function CompanyDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const demoLocked = isLockedDemoAccount((await getCurrentUser()) ?? { email: "" });
+  const ctx = await requireWorkspacePage();
+  const demoLocked = isLockedDemoAccount(ctx.user);
 
-  const company = await prisma.company.findUnique({
-    where: { id },
-    include: {
-      owner: { select: { name: true } },
-      contacts: { orderBy: { updatedAt: "desc" } },
-      deals: { orderBy: { updatedAt: "desc" } },
-      activities: {
-        orderBy: { createdAt: "desc" },
-        take: 15,
-        include: {
-          user: { select: { name: true } },
-          contact: { select: { id: true, firstName: true, lastName: true } },
-          deal: { select: { id: true, title: true } },
-        },
-      },
-    },
-  });
-
+  const company = await loadCompanyDetail(ctx, id);
   if (!company) notFound();
 
   const openValue = company.deals
