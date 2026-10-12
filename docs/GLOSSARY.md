@@ -385,7 +385,8 @@ re-renders the page with the new score and the `<ScorePill>` updates from props.
 of truth instead of two.
 
 **A caveat to be honest about.** Every page in `(app)` is dynamically rendered, because the
-layout calls `getCurrentUser()`, which reads `cookies()`. So there is no full-page static
+layout calls `requireWorkspacePage()`, which reaches `getCurrentUser()` only through
+`getWorkspaceContext()`, and that reads `cookies()`. So there is no full-page static
 cache to bust. What `revalidatePath` is mainly doing here is refreshing the current render
 after the action and clearing the client-side Router Cache, so navigating back to a
 previously-visited route re-fetches instead of replaying a stale RSC payload. The precise
@@ -1621,7 +1622,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `SYSTEM_PREAMBLE` | same file | The system instruction sent with every request, telling the model to treat `<record>` and `<user-context>` content strictly as data and to take instructions only from outside those tags. Exported for the evaluation harness's echo check. |
 | `generateJson(prompt, { schema, jsonSchema })` | same file | The entry point for a structured reply. Sends the JSON Schema to the vendor (Gemini `responseJsonSchema`, Groq JSON mode), parses the whole reply and validates it with the zod `schema`. Returns `{ ok: true, data, provider }` or `{ ok: false, reason }`, where an unusable reply is `malformed` and moves the chain to the next provider first. Replaced the regex `extractJson` scan. |
 | **heuristic fallback** | [`src/lib/ai/heuristics.ts`](../src/lib/ai/heuristics.ts) | `heuristicLeadScore`, `heuristicEmailDraft`, `heuristicSummary` — deterministic rule-based implementations of all three AI features. Their output is labelled "rule-based" in the UI so a demo never passes rules off as a model. |
-| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
+| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`, or `capacity`, which the usage ledger reports when `AI_DAILY_CEILING` is reached, with no provider called). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
 | `aiRateLimited(userId)` | same file | 30 AI calls per user per hour, in memory and per instance: burst protection only. The quota controls are the `AiUsage` ledger's monthly allowance and `AI_DAILY_CEILING` ([`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts)). |
 | `splitDraft(draft)` | [`src/lib/email.ts`](../src/lib/email.ts) | Splits `"Subject: x\n\nbody"` — the shape `draftFollowUp` asks the model for — falling back to subject `"Following up"` if the pattern does not match. The model draft is shape-checked upstream by `generateDraft`, so the fallback now covers only the client-sent draft. |
 | `emailConfigured()` | same file | `Boolean(RESEND_API_KEY && EMAIL_FROM)`. When false, `sendFollowUp` takes the simulated path. |

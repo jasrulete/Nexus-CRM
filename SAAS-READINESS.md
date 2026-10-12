@@ -260,6 +260,7 @@ variable, by design — a clone or self-hosted instance is unaffected.
 |---|---|---|
 | `WORKSPACE_MODE=single` | Vercel (Production **and Preview**) | **Required.** Under `NODE_ENV=production` an unset value fails every request ("WORKSPACE_MODE is required in production"). `single` is the demo's one shared workspace; `multi` gives every sign-up its own. Preview needs it too once it has a database of its own (§4a) |
 | `DEMO_MODE=true` | Vercel (Production **and Preview**) | Demo account cannot delete records. Preview matters: the delete-lock is inert wherever this is unset — see §3a |
+| `AI_DAILY_CEILING` | Vercel (Production) | **Optional, owner-decided.** A deployment-wide cap on metered AI actions per UTC day, across all workspaces; at the cap AI answers in rule-based mode. Unset means no ceiling, which is the demo's state until the owner sets one: size it from whichever daily limit binds first in the Groq console (`docs/runbooks/2026-10-tenancy-phase-a.md`, "Decisions for the owner") |
 | `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
 | `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |
 | `EMAIL_FROM` | Vercel (Production) | Sender identity, e.g. `Nexus CRM <onboarding@resend.dev>` |
@@ -323,7 +324,12 @@ put previews straight back onto production data.
 | `TURSO_DATABASE_URL` | the **preview** database URL | Preview only |
 | `TURSO_AUTH_TOKEN` | the **preview** token | Preview only |
 | `ALLOW_REMOTE_DB` | `true` | Preview only |
+| `WORKSPACE_MODE` | `single` | Preview only |
 | `DEMO_MODE` | `true` | Preview only |
+
+`WORKSPACE_MODE` belongs here because a Vercel preview builds with
+`NODE_ENV=production`, where an unset value fails every request. `single` matches
+the demo the preview mirrors.
 
 `DEMO_MODE` belongs here too: it drives both the delete-lock and the shared-demo
 disclosure on the sign-up page, and a preview is exactly as public as production.

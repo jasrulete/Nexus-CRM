@@ -305,12 +305,16 @@ The cross-tenant suite (§9.1) proves this rather than assuming it.
 
 **`workspaceMode()`** lives in a module with no `server-only` or `next/*` imports, so the seed, the
 reset, `tsx` and the Docker esbuild bundle can all import it.
-- It throws on any value other than `single` or `multi`.
+- It throws on any value other than `single` or `multi` (after trimming whitespace; amended
+  2026-10-12, final review: a value piped from PowerShell or the Vercel CLI can carry a trailing CR or
+  newline).
 - Unset means `single`, **except when `NODE_ENV=production`, where unset fails**. A cloud deployment
   that lost the variable must not silently become single.
 - It is called at the top of instrumentation `register()` (before any early return), and by the seed,
   the reset and `add-demo-member`. All three refuse to run in `multi`.
-- Boot also fails when `WORKSPACE_MODE=multi` and `DEMO_MODE=true`.
+- Boot also fails when `WORKSPACE_MODE=multi` and `DEMO_MODE=true`. `DEMO_MODE` is read trimmed too,
+  here and in the demo guard, and the only value that counts as on is exactly `true` (amended
+  2026-10-12, final review: read raw, a piped `true\r\n` would count as off and unlock the demo account).
 - **In `single` mode, boot and `register()` both refuse if more than one Workspace exists**, or if any
   workspace has plan `PAID`, or its only workspace is not `DEFAULT_WORKSPACE_ID` (amended 2026-10-12, final
   review: a multi-mode database holding just its first sign-up's workspace must not take strangers).
@@ -436,7 +440,11 @@ Callers:
 no app code reads `isDemo`.
 - **The reset never writes it.** A unit test asserts this.
 - **The seed writes it only when `SEED_DEMO_WORKSPACE=true`.** Docker's `SEED_DEMO_DATA` path and CI
-  never set it, so a self-hoster's real workspace can never be marked resettable.
+  never set it, so seeding a self-hoster's workspace does not mark it resettable. *(Amended
+  2026-10-12: this is about the seed only. `scripts/mark-demo-workspace.ts` can still mark a real
+  install. Its guard relies on the demo account not being seeded on real installs, and on the script
+  being run only against the demo database. A self-host seeded with the demo data has exactly the
+  shape it accepts.)*
 - **On the existing demo database**, a one-off script sets it, run with the user's go after M1's
   verify gate (§10). `scripts/mark-demo-workspace.ts` sets `isDemo = 1` only if exactly one workspace
   exists and the demo account is a member of it; otherwise it refuses.

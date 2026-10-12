@@ -273,8 +273,11 @@ row and not of the request.
 ## 4. Why Server Actions instead of API routes
 
 `README.md` calls this "Server Actions everywhere — no hand-rolled API routes."
-There is exactly one route handler in the tree, `src/app/api/health/route.ts`,
-and it exists because an uptime monitor cannot invoke a Server Action.
+There are exactly two route handlers in the tree. `src/app/api/health/route.ts`
+exists because an uptime monitor cannot invoke a Server Action.
+`src/app/auth/signout-stale/route.ts` exists because cookies can only change in a
+Route Handler or Server Function, never during render, and a page that finds a
+stale session has to clear it and redirect.
 
 The reasoning, in order of how much it actually matters:
 
@@ -936,8 +939,11 @@ scoped client, in the order spec §7 sets:
 `denied` are not, so a workspace never pays for an outage, and a row left
 `pending` by a killed function stays charged, which fails closed. Both limits are
 counted in the database, so unlike the rate limiter below they hold across
-instances and deploys. They are the quota controls; a provider-side spend cap on
-each key is the last line behind them.
+instances and deploys. They are the quota controls where they apply: the
+allowance only in multi mode, the ceiling only once it is set. The demo is meant
+to set its own ceiling (spec §7) but has none until the owner does (the Phase A
+runbook, "Decisions for the owner"). A provider-side spend cap on each key is the
+last line behind them.
 
 ### Rate limiting — `src/lib/rate-limit.ts`
 
@@ -991,7 +997,8 @@ There is very little caching, and that is a design position rather than an
 oversight.
 
 **Nothing under `(app)` is statically rendered.** `src/app/(app)/layout.tsx` calls
-`getCurrentUser()`, which reads `cookies()`, which makes the whole segment
+`requireWorkspacePage()`, which reaches `getCurrentUser()` only through
+`getWorkspaceContext()`, and that reads `cookies()`, which makes the whole segment
 dynamic. Every dashboard, list and detail page is rendered per request against
 live Prisma queries. For a CRM whose numbers a human acts on, showing a cached
 pipeline total would be worse than showing a slow one.
@@ -1251,9 +1258,12 @@ Four refinements worth naming:
   non-zero, before any write, unless the database holds exactly one workspace and
   its `isDemo` is true. No app code reads `isDemo`, the reset never writes it, and
   the seed sets it only with `SEED_DEMO_WORKSPACE=true`; on the existing demo
-  database a person runs `scripts/mark-demo-workspace.ts` once. So a self-hosted
-  install, or a secret pointed at the wrong database, cannot be wiped by this
-  workflow.
+  database a person runs `scripts/mark-demo-workspace.ts` once. So seeding a
+  self-hosted install does not make it resettable, and a secret pointed at any
+  other unmarked database is refused. What keeps a real install from being marked
+  is outside the reset: the mark script's guard relies on the demo account not
+  being seeded on real installs, and on the script being run only against the demo
+  database.
 - **The audit log is pruned, not emptied.** It used to be
   `auditLog.deleteMany()` with no filter, which gave the "full audit trail" the
   Settings page advertises a maximum retention of 24 hours, and destroyed real
@@ -1770,17 +1780,19 @@ script is exercised end-to-end by CI.
 **The rate limiter is per-instance and in-memory.** `src/lib/rate-limit.ts` keeps
 buckets in a module-level `Map`, so on Vercel every lambda instance has its own
 and every deploy resets them all. It is not a real limit on serverless. For AI
-spend that no longer matters: the `ai:{userId}` bucket is burst protection only
-(30 per user per hour, multiplied by however many instances are warm, and by open
-registration at 5 accounts per IP per 15 minutes, each with a fresh 30). The quota
-is held by the `AiUsage` ledger (§9): the monthly allowance per workspace in multi
-mode, and `AI_DAILY_CEILING` across the deployment in any mode, both counted in the
-database. Unset, the ceiling is no limit, so the demo sets its own (spec §7), or the
-shared Groq quota has no deployment-wide cap. A provider-side spend cap on each key
-is the last line behind both. For the login and register buckets the per-instance
-limit still matters: *acceptable because* free-tier traffic is one warm instance and
-nobody is attacking a portfolio demo. A durable limiter (Upstash has a free tier) is
-the other half.
+spend the `ai:{userId}` bucket is burst protection only (30 per user per hour,
+multiplied by however many instances are warm, and by open registration at 5
+accounts per IP per 15 minutes, each with a fresh 30). The quota controls are the
+`AiUsage` ledger's (§9), counted in the database: the monthly allowance per
+workspace in multi mode, and `AI_DAILY_CEILING` across the deployment in any mode.
+The demo has neither today. Single mode has no allowance, and the ceiling is
+unset until the owner sets one: the demo is meant to set its own (spec §7), and
+that is still an owner decision (the Phase A runbook, "Decisions for the owner").
+Until then the burst bucket and the provider-side spend cap on each key are all
+the demo has, and the shared Groq quota has no deployment-wide cap. For the
+login and register buckets the per-instance limit still matters: *acceptable
+because* free-tier traffic is one warm instance and nobody is attacking a
+portfolio demo. A durable limiter (Upstash has a free tier) is the other half.
 
 **Two prompt-size amplifiers.** `loadContactContext` loads *every* deal on a
 contact with no `take`, so a contact with a thousand deals ships a very large

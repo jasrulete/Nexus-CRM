@@ -103,16 +103,25 @@ The product recognises three kinds of visitor and three workspace roles — `OWN
 ### 5.1 Anonymous visitor
 
 Sees `/`, `/login`, `/register` and nothing else. `src/proxy.ts` holds
-`PUBLIC_PATHS = new Set(["/", "/login", "/register"])` plus two explicit
-exemptions — `/api/health` (so uptime monitors work signed out) and `/monitoring`
-(the Sentry browser tunnel, which must carry reports from signed-out visitors
-too). Everything else redirects to `/login`.
+`PUBLIC_PATHS = new Set(["/", "/login", "/register"])` plus four explicit
+exemptions that pass through whether or not a session cookie exists:
+`/api/health` (so uptime monitors work signed out), `/monitoring` (the Sentry
+browser tunnel, which must carry reports from signed-out visitors too),
+`/opengraph-image` (the landing page's share image, which social scrapers fetch
+signed out) and `/auth/signout-stale` (which clears a stale session cookie and
+redirects to `/login`). The matcher also skips Next internals and static assets
+(`_next/static`, `_next/image`, `favicon.ico`, `theme-init.js` and image
+extensions). Everything else without a session cookie redirects to `/login`.
 
 Note the proxy is an *optimistic* gate: it tests only whether the session cookie
-exists. Authoritative validation happens in `src/app/(app)/layout.tsx` via
-`getCurrentUser()`, which hashes the cookie token and looks it up in the
-`Session` table. A forged cookie gets past the proxy and then bounces off the
-layout.
+exists. Authoritative validation happens on the server, in every page under
+`src/app/(app)`: each calls `requireWorkspacePage()` (`src/lib/workspace-context.ts`),
+which reaches `getCurrentUser()`, hashes the cookie token and looks it up in the
+`Session` table. A layout does not re-run on navigation and does not stop a page
+rendering, so the layout's own call (for the header) is not the gate. A forged or
+stale cookie gets past the proxy and then redirects through `/auth/signout-stale`,
+which deletes it and lands on `/login`. Server actions validate through
+`requireWorkspace()`, which throws `UNAUTHORIZED`.
 
 ### 5.2 Demo visitor (signed in as `demo@nexuscrm.dev`)
 
