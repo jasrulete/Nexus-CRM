@@ -838,9 +838,10 @@ Ordered roughly by how likely each is to produce a wrong number a human would ac
    count of 0 returns `STALE_RECORD` through `ActionState`. A submit with no version is refused
    rather than treated as last-write-wins. See `src/lib/concurrency.ts`.
 6. ~~**The audit write is outside the transaction it describes.**~~ **Fixed** for state changes:
-   `audit(entry, tx?)` joins the caller's transaction, so a mutation and its entry commit or roll
-   back together. Entries with no transaction to join (logins, AI usage) stay best-effort but now
-   report a failed write to Sentry instead of swallowing it.
+   `auditTx(tx, entry)` writes through the caller's transaction, so a mutation and its entry commit
+   or roll back together. `audit(db, entry)`, for entries with no transaction to join (the creates,
+   AI usage), and `auditPlatform` (the `auth.*` events) stay best-effort but report a failed write to
+   Sentry instead of swallowing it.
 7. **Enum-like columns have no database constraint.** Any script writing through Prisma can put
    arbitrary strings in `status`, `stage`, `type`, `size`, `source`. The failure mode is silent
    under-reporting, not a crash.

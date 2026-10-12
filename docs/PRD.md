@@ -71,7 +71,7 @@ visible: *be fully explorable by a stranger without being abusable by one.*
 | G2 | The demo survives being used by strangers | `assertNotLockedDemoAccount` on all five delete actions; nightly rebuild in `.github/workflows/reset-demo.yml` |
 | G3 | AI features work with no API key at all | `generateText()` returns `{ ok: false, reason: "not_configured" }` with no key; every caller falls back to `src/lib/ai/heuristics.ts`, carries the reason as `degraded`, and the UI labels the result by that reason |
 | G4 | Running cost is exactly zero, permanently | Vercel Hobby + Turso free tier + Gemini/Groq free tiers + GitHub Actions; no paid dependency anywhere in `package.json` |
-| G5 | Every mutation is validated, authorised and audited server-side | `requireUser()` → zod schema in `src/lib/validation.ts` → `canMutate()` → `audit()`. The chain is complete in five of the six action files; `ai.ts` authenticates, validates ids and audits but performs **no ownership check** — `scoreContact` writes `aiScore*` onto any contact the caller can name. Tracked as a gap, not a design decision. |
+| G5 | Every mutation is validated, authorised and audited server-side | `requireWorkspace()` → zod schema in `src/lib/validation.ts` → `canMutate()` → `audit()` / `auditTx()`. The chain is complete wherever an action changes a record. In `ai.ts`, `scoreContact` — the only AI action that writes fields (`aiScore*`) on the record itself — takes the same `canMutate` check; the read-only AI actions do not, because reads are workspace-wide, and `sendFollowUp` appends an Activity, which any member of the workspace may create (amended 2026-10-11: this row used to track `scoreContact`'s missing ownership check as a gap). |
 | G6 | Security claims made in the UI are literally true | The Settings "Security" card lists five controls; the 2026-08-21 pass fixed SECURITY.md rather than deleting the claims (see SAAS-READINESS.md §3a) |
 | G7 | The thing you can deploy is the thing that was tested | Playwright runs against `.next/standalone` via `npm run start:standalone`, the same bundle the Dockerfile ships |
 
@@ -625,10 +625,11 @@ No new column was needed. See `src/lib/concurrency.ts`.
 
 ### 11.8 ~~Audit writes sit outside their transaction~~ — resolved for state changes
 
-`audit()` accepts the caller's transaction client. Every delete, and the deal
-update and move, write their audit entry inside the same transaction as the
-mutation, so a change cannot commit without its record. Best-effort entries
-(logins, AI usage) stay outside but now report failures to Sentry instead of
+`auditTx(tx, entry)` writes through the caller's transaction client. Every
+delete, and the deal update and move, write their audit entry inside the same
+transaction as the mutation, so a change cannot commit without its record.
+Best-effort entries (`audit(db, entry)` for the creates and AI usage,
+`auditPlatform` for logins) stay outside but report failures to Sentry instead of
 swallowing them.
 
 ### 11.9 Migration application is non-atomic

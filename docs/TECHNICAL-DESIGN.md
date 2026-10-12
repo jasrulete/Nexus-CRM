@@ -149,7 +149,7 @@ sequenceDiagram
     participant B as Browser
     participant P as src/proxy.ts
     participant R as RSC page / Server Action
-    participant S as requireUser · session.ts
+    participant S as session.ts · workspace-context.ts
     participant Z as zod · validation.ts
     participant A as canMutate · authz.ts
     participant PR as Prisma Client
@@ -163,17 +163,17 @@ sequenceDiagram
     else cookie present
         P->>R: NextResponse.next
     end
-    R->>S: getCurrentUser
+    R->>S: requireWorkspacePage, which calls getCurrentUser
     S->>PR: session.findUnique by sha256 tokenHash
     PR->>D: adapter chosen at module load
     D->>DB: SELECT
     DB-->>S: session plus user
     Note over S: expired, delete row and return null.<br/>Under 15 days left, extend expiresAt.<br/>Strip passwordHash.
-    S-->>R: safe user
+    S-->>R: workspace context, with the user, role, plan and a scoped db
     R-->>B: streamed RSC payload
 
     B->>R: Server Action POST to the same URL
-    R->>S: requireUser, throws UNAUTHORIZED if absent
+    R->>S: requireWorkspace, throws UNAUTHORIZED if absent
     R->>Z: schema.safeParse on the FormData
     alt invalid
         R-->>B: ActionState with field errors
@@ -187,7 +187,7 @@ sequenceDiagram
     end
     R->>PR: create, update or delete
     PR->>DB: parameterised SQL
-    R->>PR: audit entry, separate write, never throws
+    R->>PR: audit entry, in the transaction with auditTx or best-effort with audit
     R->>R: revalidatePath for the affected routes
     R-->>B: ActionState success plus a fresh RSC payload
 ```
@@ -239,9 +239,11 @@ round-trip for the session lookup.
 
 **4 — Mutation.**
 A form submits to a Server Action. The action's first line is always
-`await requireUser()`. Then `safeParse` on the FormData. Then, for anything that
-touches an existing row, a `findUnique` followed by `canMutate`. Then the Prisma
-write, then `audit(...)`, then `revalidatePath(...)`.
+`const ctx = await requireWorkspace()` — the user, workspace, role, plan and
+scoped `db`, resolved from the membership. Then `safeParse` on the FormData. Then,
+for anything that touches an existing row, a `findUnique` followed by `canMutate`.
+Then the Prisma write, then `audit(...)` (or `auditTx(...)` inside the
+transaction), then `revalidatePath(...)`.
 
 That order is not incidental. Authenticate before parsing, so an unauthenticated
 caller never causes work. Parse before loading, so a malformed id never reaches
@@ -272,9 +274,10 @@ wrapper, no chance of the client sending a field the server stopped reading. Whe
 
 **No public mutation surface to protect.** Server Action endpoints are addressed
 by a build-generated action id, not by a guessable path. There is no
-`/api/deals/:id` for anyone to probe. Combined with `requireUser()` as the first
-statement in all 22 actions under `src/server/actions/`, the authenticated
-surface is closed by construction.
+`/api/deals/:id` for anyone to probe. Combined with an authentication call as the
+first statement in all 22 actions under `src/server/actions/` (`requireWorkspace()`,
+or `requireUser()` for `extractFileText` and `currentAiProvider`, which never touch
+the database), the authenticated surface is closed by construction.
 
 **The progressive-enhancement story is real.** Forms use `useActionState`, so the
 `action` attribute is a genuine form action. Validation errors come back as
@@ -290,10 +293,11 @@ Action running a script rather than a protected endpoint (ADR-010).
 
 The 25 actions live in seven files under `src/server/actions/` (22 of them — the
 newest, `search.ts`, is the first read-only one: still an action rather than a
-route handler so it shares the `requireUser()` opener, the harness tests and
+route handler so it shares the `requireWorkspace()` opener, the harness tests and
 Next's origin check, and so results are POST-only and never URL-addressable) plus
-`src/lib/auth/actions.ts` (3). Every one of them begins with `requireUser()` except
-the three auth actions themselves, where `login` and `register` are the
+`src/lib/auth/actions.ts` (3). Every one of them begins with `requireWorkspace()`
+(`extractFileText` and `currentAiProvider` use `requireUser()`, since they never
+touch the database) except the three auth actions themselves, where `login` and `register` are the
 unauthenticated entry points and `logout` calls `getCurrentUser()` so it can
 audit who left.
 
@@ -368,6 +372,12 @@ with the user included, then:
    payload.
 
 `requireUser()` is `getCurrentUser()` plus `throw new Error("UNAUTHORIZED")`.
+`requireWorkspace()` (`src/lib/workspace-context.ts`) builds on it: it resolves the
+user's membership into a context — the user, `workspaceId`, role, plan and the
+scoped `db` — and throws the same `UNAUTHORIZED`. `requireWorkspacePage()` is the
+page variant: with no valid context it redirects through `/auth/signout-stale`
+(which clears the cookie) instead of throwing. Actions and pages use these;
+`requireUser()` is left to the two actions that never touch the database.
 
 ### The sliding-renewal limitation (known, unfixed)
 
@@ -518,7 +528,7 @@ delegates to:
 
 `src/lib/demo-guard.ts` blocks deletes for one hard-coded address
 (`demo@nexuscrm.dev`) and only when `DEMO_MODE === "true"`. Every delete action
-calls `assertNotLockedDemoAccount(user)` immediately after `requireUser()`.
+calls `assertNotLockedDemoAccount(ctx.user)` immediately after `requireWorkspace()`.
 Creating and editing stay allowed so the demo still feels live; the nightly reset
 cleans up what accumulates.
 
@@ -1021,17 +1031,24 @@ Source maps upload only when `SENTRY_AUTH_TOKEN` is present
 
 ### The audit log is not observability
 
-`src/lib/audit.ts` writes to the `AuditLog` table and **never throws** —
-*"auditing must not break the action it records."* It catches its own failure into
-`console.error`.
+`src/lib/audit.ts` has two writers for workspace entries, and they fail
+differently on purpose. `auditTx(tx, entry)` writes inside the mutation's
+transaction and a failure **propagates**, rolling the change back: the Settings
+page presents the log as the record of what happened, so a committed change with
+no entry would make it lie. `audit(db, entry)` is for entries with no
+transaction to join (the creates, AI usage): it is best-effort and **never
+throws**, because the action it records has already committed. Platform events
+(`auth.*`) go through `auditPlatform` (`src/lib/auth/platform-audit.ts`), which
+writes with no workspace through `systemDb` under the same best-effort rule.
 
-Two consequences worth being clear about. First, `console.error` is not captured
-by Sentry, so a failed audit write is invisible. Second, `audit()` runs **after
-and outside** the transaction it describes, so a deal can commit as WON with
-nothing in the log. Since the Settings page sells the audit log as a compliance
-story, absence of an entry currently proves nothing. `IMPROVEMENT-PLAN.md` §3.6
-records both, and the minimum fix — `Sentry.captureException` on the swallow — is
-one line and is not done.
+A swallowed failure is reported to Sentry (tag `subsystem: audit`) as well as the
+console, since `onRequestError` never sees a swallowed error. Two things worth
+being clear about. First, a best-effort entry can still be missing if the write
+fails, so absence of an entry proves nothing for the creates, AI usage or
+sign-ins; the transactional ones (every delete, the deal update and move) carry no
+such gap. Second, the log is a product feature for workspace admins, not
+observability: it says what a user did, and the platform's `auth.*` events never
+reach a workspace's Settings page. `IMPROVEMENT-PLAN.md` §3.6 records the history.
 
 ### Health
 
@@ -1344,13 +1361,14 @@ as a session-management solution.
 the proxy, validate next to the data. (c) No proxy; redirect from each layout.
 
 **Decision.** (b). `proxy.ts` calls `request.cookies.has(SESSION_COOKIE)` and
-nothing else. `src/app/(app)/layout.tsx` calls `getCurrentUser()` and every
-Server Action calls `requireUser()`.
+nothing else. `src/app/(app)/layout.tsx` calls `requireWorkspacePage()`
+(which wraps `getCurrentUser()`) and every Server Action calls `requireWorkspace()`
+(or `requireUser()`, for the two that never touch the database).
 
 **Consequences.** The gate is fast and stateless, and it is honest about being
 cosmetic: a forged cookie gets a redirect *toward* the app and then fails at the
 layout. The security property lives next to the data, where it belongs — an
-attacker who reaches an action directly still hits `requireUser()`. The cost is
+attacker who reaches an action directly still hits `requireWorkspace()`. The cost is
 that the rule is expressed twice: a new authenticated route must be covered by
 the matcher *and* live under `(app)`. Two real bugs came from the matcher
 (`theme-init.js`, and `/monitoring` needing its own exemption), which is the
@@ -1530,6 +1548,10 @@ design so the user never loses typed input. The remaining risk is unchanged: a
 new action still has to remember to call it. There is no framework-level
 enforcement, only a shared helper and a unit test.
 
+*Amended 2026-10-11 (ADR-013): the signature is now `canMutate(ownerId, actor)`, with
+`actor = { id, role }` from the membership via `actorOf(ctx)`; OWNER and ADMIN count
+as admin.*
+
 ### ADR-013 — Shared-database tenancy behind a fail-closed scoped client, in two deployment modes
 
 **Status.** Accepted 2026-10-11. Supersedes ADR-009.
@@ -1658,11 +1680,12 @@ Verified that a millisecond-precision timestamp survives the ISO round-trip and
 still matches its row; without that, every save would have looked like a
 conflict.
 
-**Audit completeness — resolved for state changes.** `audit(entry, tx?)` takes
+**Audit completeness — resolved for state changes.** `auditTx(tx, entry)` takes
 the caller's transaction client; every delete and the deal update and move write
 their entry inside the transaction that makes the change, so a deal cannot
 commit as WON with nothing in the log. Entries that have no transaction to join
-(logins, AI usage) remain best-effort, but a failed write is now
+(`audit(db, entry)` for the creates and AI usage, `auditPlatform` for sign-ins)
+remain best-effort, but a failed write is now
 `Sentry.captureException`'d rather than dropped into `console.error`, so absence
 of an entry is at least visible somewhere.
 

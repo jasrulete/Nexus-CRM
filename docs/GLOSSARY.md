@@ -160,8 +160,9 @@ page means creating a folder — the gate comes free.
 > **If asked: "isn't a layout check enough on its own?"**
 > No, and the code does not treat it as enough. A layout runs for page navigations; a
 > Server Action invoked directly does not go through it. That is why every action in
-> `src/server/actions/` independently calls `requireUser()`. The layout check is for the
-> *UI*; `requireUser()` is for the *data*.
+> `src/server/actions/` independently authenticates itself, with `requireWorkspace()` (or
+> `requireUser()` for the two that never touch the database). The layout check is for the
+> *UI*; the action's own check is for the *data*.
 
 #### `proxy.ts` — and why this project has it instead of `middleware.ts`
 
@@ -233,8 +234,11 @@ does not have to use your UI. They can post to the action id directly, with what
 arguments they like, in any order, with no form, from anywhere. Which means:
 
 1. **Every action must authenticate itself.** All 22 actions under `src/server/actions/`
-   open with `await requireUser()` — even `currentAiProvider()`, which returns nothing more
-   than the string `"gemini"`. The three exceptions are the auth actions in
+   open by authenticating: 20 with `await requireWorkspace()`, which resolves the user's
+   workspace, role, plan and scoped `db` from their membership, and two —
+   `extractFileText` and `currentAiProvider()` — with `await requireUser()`, because they
+   never touch the database. Even `currentAiProvider()`, which returns nothing more than a
+   provider name, authenticates. The three exceptions are the auth actions in
    [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts), and they have to be:
    `login` and `register` are the unauthenticated entry points, and `logout` uses
    `getCurrentUser()` so it can audit who left without throwing when nobody is signed in.
@@ -275,7 +279,7 @@ matching on `"FORBIDDEN"` to show *"Only the owner or an admin can delete this."
 
 > **If asked: "what stops someone calling a Server Action directly?"**
 > Nothing, and nothing should — it is an endpoint. What stops them *doing damage* is that
-> the endpoint authenticates (`requireUser`), authorizes (`canMutate`) and validates (zod)
+> the endpoint authenticates (`requireWorkspace`), authorizes (`canMutate`) and validates (zod)
 > without any help from the client. Next.js also blocks cross-origin invocation via an
 > `Origin`/`Host` check (see CSRF below), and the action ids are unguessable per build —
 > but neither of those is the control I would rely on, and neither replaces the three
@@ -476,12 +480,13 @@ missing positions — and reading outside it, as the code once did, was a lost u
 concurrent drags. `createDeal` reads the last position inside the transaction that inserts for
 the same reason; `deals-ordering.test.ts` proves both under concurrent writes.
 
-**The audit write joins the transaction.** `audit(entry, tx?)`
-([`src/lib/audit.ts`](../src/lib/audit.ts)) has two modes. Given the caller's transaction
-client it writes through it, so a mutation and its entry commit or roll back together — a
-change cannot exist without its record. Without one (logins, AI usage: there is no business
-transaction to join) it stays best-effort and never throws, but a failed write is reported to
-Sentry rather than swallowed.
+**The audit write joins the transaction.** [`src/lib/audit.ts`](../src/lib/audit.ts) has two
+writers for workspace entries. `auditTx(tx, entry)` writes through the caller's transaction
+client, so a mutation and its entry commit or roll back together — a change cannot exist
+without its record, and a failed write propagates. `audit(db, entry)`, where there is no
+business transaction to join (the creates, AI usage), writes through the scoped client,
+stays best-effort and never throws, but a failed write is reported to Sentry rather than
+swallowed. Platform events (`auth.*`) go through `auditPlatform` instead, with no workspace.
 
 > **If asked: "why are some audit writes still outside a transaction?"**
 > Because a failed login must still be logged while the surrounding request is failing, and
@@ -744,7 +749,7 @@ wrote in this repo:
 
 1. **`SameSite=Lax`** — the browser will not attach `nexus_session` to a cross-site POST,
    and every Server Action is a POST. The forged request arrives unauthenticated and
-   `requireUser()` rejects it.
+   `requireWorkspace()` rejects it.
 2. **Next.js's own Server Action origin check** — the framework compares the `Origin`
    header against the `Host` header and refuses mismatches, so a cross-origin action
    invocation is rejected before your code runs.
@@ -863,12 +868,15 @@ target). For multi-instance production use, back this with Redis or a database."
 
 **What it is.** An append-only record of who did what to which record, when.
 
-**Here.** [`src/lib/audit.ts`](../src/lib/audit.ts) exposes one function, called from every
-mutating action:
+**Here.** [`src/lib/audit.ts`](../src/lib/audit.ts) exposes `audit(db, entry)` and
+`auditTx(tx, entry)`, called from every mutating action, and
+[`src/lib/auth/platform-audit.ts`](../src/lib/auth/platform-audit.ts) adds `auditPlatform`
+for the `auth.*` events:
 
 ```ts
-await audit({ action: "deal.stage_change", entityType: "deal", entityId: id,
-              userId: user.id, metadata: { from: existing.stage, to: data.stage } });
+await auditTx(tx, { action: "deal.stage_change", entityType: "deal", entityId: id,
+                    workspaceId: ctx.workspaceId, userId: ctx.user.id,
+                    metadata: { from: existing.stage, to: data.stage } });
 ```
 
 `action` is a dotted verb string — `auth.login`, `auth.login_failed`, `auth.register`,
@@ -1542,7 +1550,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | Term | Where | What it means |
 |---|---|---|
 | `getCurrentUser()` | [`src/lib/auth/session.ts`](../src/lib/auth/session.ts) | Reads the `nexus_session` cookie, SHA-256s it, looks up the `Session` row, checks expiry, attempts (ineffectively — see Sliding expiry) to extend the row if under 15 days remain, and returns the user **with `passwordHash` stripped**. Returns `null` when there is no valid session. Wrapped in React `cache()`, so calling it from a layout, a page and an action costs one query. |
-| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. The first line of every Server Action. Use it wherever a `null` user is a bug rather than a state to render. |
+| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. Used only by the two actions that never touch the database and are cross-tenant-exempt, `extractFileText` and `currentAiProvider`. Every other action opens with `requireWorkspace()` (see "Workspaces and tenancy"), which builds on it. |
 | `createSession(userId)` | same file | Generates 32 random bytes (base64url), stores `sha256(token)` plus a 255-char-truncated user agent, sets the cookie. |
 | `destroySession()` | same file | Deletes the session row by token hash and clears the cookie. `.catch(() => {})` on the delete so signing out never fails on an already-gone row. |
 | `SESSION_DAYS` / `RENEW_BELOW_DAYS` | same file | 30 and 15. Session lifetime, and the threshold below which a request extends the **database row**. Because the cookie is not re-issued, the renewal has no effect and the real lifetime is a fixed 30 days. |
@@ -1554,7 +1562,8 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `IP_ATTEMPT_LIMIT` / `PAIR_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 100 **attempts** per source (successes included, charged before the compare), then 10 and 20 **failed** logins per 15 minutes for the source-and-email pair and the account. The account one survives forwarded-for spoofing. |
 | `peekLimit` / `rateLimit` / `sweepExpiredBuckets` | [`src/lib/rate-limit.ts`](../src/lib/rate-limit.ts) | Read standing without consuming / increment and report / opportunistic map cleanup every 5 minutes. |
 | `recordBlock(contact)` | [`src/lib/ai/prompt.ts`](../src/lib/ai/prompt.ts) | Serialises a contact and its company, deals and last 10 activities into a `<record>…</record>` fenced block for the prompt. Each activity is truncated to 300 chars. |
-| `audit(entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends to `AuditLog`. `metadata` is `JSON.stringify`'d into a `String?` column. **Never throws** — a failed log must not break the action it records. Called after (and outside) the write it describes. |
+| `audit(db, entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends a workspace entry to `AuditLog` through the caller's scoped client (`ctx.db`), so it lands in the caller's workspace; `entry.workspaceId` is required. `metadata` is `JSON.stringify`'d into a `String?` column. **Best-effort and never throws** — the action it records has already committed, so a failed write is swallowed, but reported to Sentry (tag `subsystem: audit`) as well as the console. Used by the creates, `updateContact`, `updateCompany`, `toggleTask` and the AI actions' usage entries. |
+| `auditTx(tx, entry)` | same file | The same row written through the `tx` of the caller's `$transaction` callback (never the outer client). **A failure propagates** and rolls the mutation back, so a state change cannot commit without its record. Used by every delete, `updateDeal` and `moveDeal`. |
 
 ### Workspaces and tenancy
 
@@ -1568,9 +1577,9 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `AiUsage` | `AiUsage` model; [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | One row per metered AI action, reserved as `pending` before the provider call, then settled `answered` / `rejected` / `fallback`; `denied` (monthly allowance spent) and `capacity` (`AI_DAILY_CEILING` reached) rows record refusals. Only `pending`, `answered` and `rejected` are charged: a chain where any attempt got a billed reply from a provider (a 2xx, or Groq's 400 `json_validate_failed`) but no usable output (malformed or empty) settles `rejected`, because the provider did the work, while `fallback` means no attempt got a billed reply (a 429, an error status, a timeout, no key). |
 | `scopeToWorkspace(base, id)` / `forWorkspace(id)` | [`src/lib/tenancy.ts`](../src/lib/tenancy.ts), [`src/lib/db.ts`](../src/lib/db.ts) | The scoped client. Adds `workspaceId` to every tenant query, verifies it on creates, allows plain-column writes only, and throws on raw SQL, global models and unknown operations. The only database handle application code gets. |
 | `systemDb` | [`src/lib/db.ts`](../src/lib/db.ts) | The unscoped client. Importable only from an exact allowlist (the auth session and actions, `auditPlatform`, the workspace context and bootstrap, `system-queries.ts`, the health probe, and the `/auth/signout-stale` route), enforced by `src/lib/import-guard.test.ts`. |
-| `getWorkspaceContext()` / `requireWorkspace()` / `requireWorkspacePage()` | [`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts) | Per request: the user, their workspace, role, plan and `db` (the scoped client). No valid context: actions throw `UNAUTHORIZED`; pages go through `/auth/signout-stale` (`STALE_SESSION_PATH`), which clears the session cookie and lands on `/login`. A direct `/login` redirect would loop, because the proxy sends any cookie-holder from `/login` back to `/dashboard`. A session with no membership joins the one workspace in `single` mode, and is signed out the same way in `multi` mode. |
+| `getWorkspaceContext()` / `requireWorkspace()` / `requireWorkspacePage()` | [`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts) | Per request: the user, their workspace, role, plan and `db` (the scoped client). `requireWorkspace()` is the first line of 20 of the 22 Server Actions; `requireWorkspacePage()` opens every `(app)` page, the `(app)` layout and the deal page's `generateMetadata`. No valid context: actions throw `UNAUTHORIZED`; pages go through `/auth/signout-stale` (`STALE_SESSION_PATH`), which clears the session cookie and lands on `/login`. A direct `/login` redirect would loop, because the proxy sends any cookie-holder from `/login` back to `/dashboard`. A session with no membership joins the one workspace in `single` mode, and is signed out the same way in `multi` mode. |
 | `isWorkspaceAdmin(role)` | [`src/lib/authz.ts`](../src/lib/authz.ts) | `role` is `OWNER` or `ADMIN`. Every role check in the app goes through it or `canMutate`. |
-| `auditPlatform(entry)` | [`src/lib/auth/platform-audit.ts`](../src/lib/auth/platform-audit.ts) | Writes the `auth.*` events with no workspace, so no workspace ever sees them. Every other audit entry carries its workspace. |
+| `auditPlatform(entry)` | [`src/lib/auth/platform-audit.ts`](../src/lib/auth/platform-audit.ts) | Writes the `auth.*` events (sign-up, sign-in, failed sign-in, sign-out) with a null workspace, through `systemDb`, so no workspace ever sees them. Best-effort like `audit`: a failed write goes to Sentry. It throws a `TypeError` for any action that is not `auth.*`. Every other audit entry carries its workspace (`audit`, `auditTx`). |
 
 ### Forms and action results
 
