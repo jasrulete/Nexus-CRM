@@ -96,7 +96,8 @@ export async function backfillWorkspace(db: PrismaClient): Promise<BackfillCount
     return { memberships: 0, companies: 0, contacts: 0, deals: 0, activities: 0, tasks: 0, auditLogs: 0 };
   }
 
-  // Refuses more than one workspace, or any PAID one: this is a single-mode tool.
+  // Refuses more than one workspace, any PAID one, or a lone one that is not
+  // DEFAULT_WORKSPACE_ID: this is a single-mode tool.
   const { id: workspaceId } = await ensureSingleWorkspace(db);
 
   // The same rows M1's catch-up writes: id `mem_<userId>`, MEMBER, and the

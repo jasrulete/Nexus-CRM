@@ -132,14 +132,25 @@ describe("register, single mode", () => {
   });
 
   it("joins an existing install's workspace as MEMBER", async () => {
-    await makeWorkspace(prisma, { id: "ws_existing", slug: "existing" });
+    await makeWorkspace(prisma, { id: DEFAULT_WORKSPACE_ID, slug: "existing" });
     await prisma.user.create({ data: { email: "old@example.com", name: "Old", passwordHash: "x" } });
     const old = await prisma.user.findUniqueOrThrow({ where: { email: "old@example.com" } });
-    await prisma.membership.create({ data: { workspaceId: "ws_existing", userId: old.id, role: "ADMIN" } });
+    await prisma.membership.create({ data: { workspaceId: DEFAULT_WORKSPACE_ID, userId: old.id, role: "ADMIN" } });
 
     await signUp("New Person", "new@example.com");
 
-    expect(await membershipOf("new@example.com")).toMatchObject({ workspaceId: "ws_existing", role: "MEMBER" });
+    expect(await membershipOf("new@example.com")).toMatchObject({ workspaceId: DEFAULT_WORKSPACE_ID, role: "MEMBER" });
+  });
+
+  it("refuses to join a lone workspace a multi-mode sign-up created, and rolls the user back", async () => {
+    const alice = await makeWorkspace(prisma, { name: "Alice's workspace" });
+    expect(alice.id).not.toBe(DEFAULT_WORKSPACE_ID);
+
+    await expect(signUp("Bob Stranger", "bob@example.com")).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
+
+    expect(await prisma.user.count()).toBe(0);
+    expect(await prisma.membership.count()).toBe(0);
+    expect(trace.sessions).toEqual([]);
   });
 
   it("gives exactly one OWNER and one workspace when two first sign-ups race", async () => {

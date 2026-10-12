@@ -54,7 +54,8 @@ type NewAccount = { name: string; email: string; passwordHash: string };
  * first sign-ups racing cannot both see an empty workspace.
  *
  * The user is created first, so a refusal from the workspace checks (more than
- * one workspace, or a PAID one) rolls the whole sign-up back.
+ * one workspace, a PAID one, or a lone one single mode did not create) rolls
+ * the whole sign-up back.
  */
 async function joinSingleWorkspace(tx: Prisma.TransactionClient, account: NewAccount): Promise<string> {
   const user = await tx.user.create({ data: account, select: { id: true } });

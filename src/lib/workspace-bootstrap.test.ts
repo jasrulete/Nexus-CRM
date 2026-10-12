@@ -65,10 +65,23 @@ describe("ensureSingleWorkspace", () => {
     });
   });
 
-  it("returns the one existing workspace, whatever its id", async () => {
-    await prisma.workspace.create({ data: { id: "ws_other", name: "Other", slug: "other" } });
+  it("returns the existing default workspace and creates no other", async () => {
+    await prisma.workspace.create({ data: { id: DEFAULT_WORKSPACE_ID, name: "Renamed", slug: "renamed" } });
 
-    expect(await ensureSingleWorkspace(prisma)).toEqual({ id: "ws_other" });
+    expect(await ensureSingleWorkspace(prisma)).toEqual({ id: DEFAULT_WORKSPACE_ID });
+    expect(await prisma.workspace.count()).toBe(1);
+  });
+
+  // A multi-mode sign-up's workspace has a cuid id. A single-mode deployment
+  // pointed at that database must not join strangers to it.
+  it("refuses a lone FREE workspace that single mode did not create", async () => {
+    const lone = await prisma.workspace.create({ data: { name: "Alice's workspace", slug: "alice-1a2b3c4d" } });
+    expect(lone).toMatchObject({ plan: "FREE" });
+    expect(lone.id).not.toBe(DEFAULT_WORKSPACE_ID);
+
+    await expect(ensureSingleWorkspace(prisma)).rejects.toThrow(
+      /^SINGLE_MODE_VIOLATION: .*its only workspace was not created by single mode/,
+    );
     expect(await prisma.workspace.count()).toBe(1);
   });
 
@@ -155,6 +168,14 @@ describe("ensureMember", () => {
     expect(await prisma.membership.count({ where: { userId: user.id } })).toBe(1);
   });
 
+  it("refuses a lone workspace that single mode did not create and writes no membership", async () => {
+    const user = await newUser();
+    await prisma.workspace.create({ data: { name: "Alice's workspace", slug: "alice-1a2b3c4d" } });
+
+    await expect(ensureMember(prisma, user.id, "MEMBER")).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
+    expect(await prisma.membership.count()).toBe(0);
+  });
+
   it("refuses when two workspaces exist and writes no membership", async () => {
     const user = await newUser();
     await prisma.workspace.create({ data: { id: "ws_a", name: "A", slug: "a" } });
@@ -215,7 +236,7 @@ describe("bootCheckSingleModeDatabase", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(bootCheckSingleModeDatabase(prisma)).resolves.toBeUndefined();
-    await prisma.workspace.create({ data: { id: "ws_one", name: "One", slug: "one" } });
+    await prisma.workspace.create({ data: { id: DEFAULT_WORKSPACE_ID, name: "One", slug: "one" } });
     await expect(bootCheckSingleModeDatabase(prisma)).resolves.toBeUndefined();
 
     expect(await prisma.workspace.count()).toBe(1);
@@ -230,6 +251,14 @@ describe("bootCheckSingleModeDatabase", () => {
     await prisma.workspace.create({ data: { id: "ws_b", name: "B", slug: "b" } });
     await expect(bootCheckSingleModeDatabase(prisma)).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
 
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a SINGLE_MODE_VIOLATION for a lone FREE workspace with a cuid id", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await prisma.workspace.create({ data: { name: "Alice's workspace", slug: "alice-1a2b3c4d" } });
+
+    await expect(bootCheckSingleModeDatabase(prisma)).rejects.toThrow(/^SINGLE_MODE_VIOLATION/);
     expect(log).not.toHaveBeenCalled();
   });
 

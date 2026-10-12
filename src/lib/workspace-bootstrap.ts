@@ -35,8 +35,14 @@ class SingleModeViolationError extends Error {}
 
 /**
  * Throws unless the database is a valid single-mode database: at most one
- * workspace, and none on the PAID plan. Returns that workspace, or null when
- * there is none yet. Read-only, so boot can run it.
+ * workspace, none on the PAID plan, and that one with the fixed id
+ * DEFAULT_WORKSPACE_ID. Returns that workspace, or null when there is none
+ * yet. Read-only, so boot can run it.
+ *
+ * The id check matters while a multi-mode database holds only its first
+ * sign-up's workspace (a cuid id): without it, a single-mode deployment
+ * pointed at that database would join every new registrant to that customer's
+ * workspace.
  */
 export async function assertSingleModeDatabase(
   db: Pick<BootstrapDb, "workspace">,
@@ -54,6 +60,11 @@ export async function assertSingleModeDatabase(
   if (workspaces[0]?.plan === "PAID") {
     throw new SingleModeViolationError(
       "SINGLE_MODE_VIOLATION: the workspace is on the PAID plan, so this database belongs to a multi-mode deployment",
+    );
+  }
+  if (workspaces[0] && workspaces[0].id !== DEFAULT_WORKSPACE_ID) {
+    throw new SingleModeViolationError(
+      "SINGLE_MODE_VIOLATION: its only workspace was not created by single mode, so this database belongs to a multi-mode deployment",
     );
   }
   return workspaces[0] ? { id: workspaces[0].id } : null;
