@@ -21,6 +21,9 @@ Written 2026-10-12, before any step was run.
   until phase A is verified live (spec §10, phase B).
 - **Identity.** Every `gh` command runs as `jasrulete`, then switches back:
   `gh auth switch --user jasrulete 2>&1 | Out-Null` before, `gh auth switch --user <work-account> 2>&1 | Out-Null` after.
+  The switch's own output is discarded, so a failed switch is silent: every block that switches then runs
+  its `gh` (and `git push`) commands only if `gh api user --jq .login` prints `jasrulete`, and otherwise
+  prints `STOP: …` and runs nothing.
 - **Shell.** PowerShell 7 at the repo root. `.env` holds the production `TURSO_DATABASE_URL` and
   `TURSO_AUTH_TOKEN`. A variable set with `$env:` wins over `.env` (dotenv never overrides), so every step
   that sets one unsets it again. An unset variable is not an empty one: dotenv fills it from `.env`, which
@@ -28,24 +31,33 @@ Written 2026-10-12, before any step was run.
   line (next rule). This runbook unsets with `$env:NAME = $null` (the same as `Remove-Item Env:NAME`) and
   deletes a file with `[System.IO.File]::Delete((Join-Path $PWD '<file>'))` (the same as
   `Remove-Item <file>`), because some shells block `Remove-Item`. Use whichever form your shell allows.
+- **Node 24 first.** This machine's default `node` is v22, which cannot load better-sqlite3, so
+  `scripts/verify-m1.ts` would crash after `db:push:turso` has already applied M1 to production. The session
+  block below puts Node 24 first on `PATH` (`$env:Path = "C:\Program Files\nodejs;" + $env:Path`) and checks
+  that `node -v` starts with `v24`, or prints `STOP:`; `Assert-Target` checks it again before every remote
+  command and refuses under any other version.
 - **Gate every remote command on its target.** The scripts print only `local` or `remote` as their target
   (`scripts/mark-demo-workspace.ts`, `scripts/backfill-workspace.ts` and `npm run demo:reset` do), so a run
   against a Turso branch reads exactly like a run against production, and a printed hostname does not stop
   the command that follows it. So each command that reaches Turso (steps 0, 2, 3, 4, 5, 8 and 9) runs
   inside an `if` that checks the exact expected hostname, by hostname only and never the token, and
-  otherwise prints `STOP: …` and runs nothing; step 7's merge runs only if `gh pr checks` exits 0. Define
-  the helpers once per PowerShell session (a function lasts only as long as the session; define them again
-  in a new one):
+  otherwise prints `STOP: …` and runs nothing; step 7's merge runs only if
+  `gh pr checks --required` exits 0. Start every PowerShell session with this block, before any other block
+  of this runbook (the PATH change and the functions last only as long as the session; run it again in a
+  new one):
 
   ```powershell
+  $env:Path = "C:\Program Files\nodejs;" + $env:Path
+  if (-not ((node -v) -like 'v24*')) { "STOP: node -v is $(node -v), not v24. Fix PATH before anything else." }
   function Get-HostOf($url) {
     if ($url) { try { ([uri]"$url".Trim()).Host } catch { } }
   }
-  # The host the remote scripts will use: the shell's value, else the one in .env.
+  # The host the remote scripts will use: the shell's value, else the one in .env. dotenv keeps
+  # the last of repeated lines, so this reads the last one too.
   function Get-TargetHost {
     $url = $env:TURSO_DATABASE_URL
     if (-not $url) {
-      $line = Select-String -Path .env -Pattern '^\s*TURSO_DATABASE_URL\s*=' -ErrorAction SilentlyContinue | Select-Object -First 1
+      $line = Select-String -Path .env -Pattern '^\s*TURSO_DATABASE_URL\s*=' -ErrorAction SilentlyContinue | Select-Object -Last 1
       if ($line) { $url = ($line.Line -split '=', 2)[1].Trim().Trim('"', "'") }
     }
     Get-HostOf $url
@@ -58,6 +70,7 @@ Written 2026-10-12, before any step was run.
   }
   # $true only if the target host matches -Expect (a -like pattern; an exact host works too).
   # -NeedToken also requires TURSO_AUTH_TOKEN to be set. Prints hosts, never the token.
+  # Also refuses unless node is v24 (see "Node 24 first").
   function Assert-Target {
     param([string]$Expect, [switch]$NeedToken)
     $actual = Get-TargetHost
@@ -65,20 +78,40 @@ Written 2026-10-12, before any step was run.
     Write-Host "expected:          $Expect"
     $ok = [bool]$actual -and [bool]$Expect -and ($actual -like $Expect)
     if ($ok -and $NeedToken -and -not $env:TURSO_AUTH_TOKEN) { $ok = $false; Write-Host "TURSO_AUTH_TOKEN is empty." }
+    if ($ok -and -not ((node -v) -like 'v24*')) { $ok = $false; Write-Host "node -v is not v24." }
     if (-not $ok) { Write-Host "STOP: this is not the expected database. Nothing was run; tell the owner." }
+    return $ok
+  }
+  # $true only if this checkout is the PR's head commit and prisma/migrations holds exactly the
+  # four directories phase A ships, unmodified. db-push-turso applies every local directory the
+  # remote ledger lacks, so a stray directory here would reach the database.
+  function Assert-Checkout {
+    $expected = '20260715164036_init', '20260725150849_add_deal_task_fk_indexes',
+      '20260823151943_add_deal_base_value_and_fx_rate', '20261011180555_workspaces_expand'
+    $dirs = @((Get-ChildItem prisma/migrations -Directory).Name | Sort-Object)
+    $head = git rev-parse HEAD
+    $prHead = ((git ls-remote origin refs/heads/feat/multi-tenancy-core) -split '\s+')[0]
+    $dirty = git status --porcelain -- prisma/migrations
+    Write-Host "HEAD:       $head"
+    Write-Host "PR head:    $prHead"
+    Write-Host "migrations: $($dirs -join ', ')"
+    $ok = (($dirs -join ',') -ceq ($expected -join ',')) -and [bool]$head -and ($head -eq $prHead) -and -not $dirty
+    if (-not $ok) { Write-Host "STOP: the checkout is not the PR head with exactly the four phase-A migrations. Nothing was pushed; tell the owner." }
     return $ok
   }
   ```
 
   Production steps (0, 2, 4, 5, 8, 9) compare against `$prodHost = Get-ProdHost`, taken before the remote
   command. Step 3 compares against the rehearsal branch's name. An empty `$prodHost` (Turso not signed in)
-  fails the check, so nothing runs.
+  fails the check, so nothing runs. Steps 3 and 4 also run `Assert-Checkout` before the push: the PR head
+  (read from the pushed branch) is the commit that was reviewed.
 - **Record.** After each step, write the UTC time and the evidence into HANDOVER §7s.
 
 ## Before step 0 (local only)
 
 - The local `dev.db` is migrated and seeded on the phase-A schema, since the single-mode e2e project signs
-  in to it as the demo account. With no Nexus server running:
+  in to it as the demo account. In a session started with the session block above, and with no Nexus
+  server running:
 
   ```powershell
   New-Item -ItemType Directory -Force backups | Out-Null
@@ -128,7 +161,7 @@ Written 2026-10-12, before any step was run.
 ### Before step V — link the Vercel CLI to the demo project (a precondition, not a step)
 
 The checkout has no `.vercel/` folder (it is git-ignored), and every `vercel env` command below needs the
-link. It only reads from Vercel and writes that git-ignored folder.
+link. Answered as below, it only reads from Vercel and writes that git-ignored folder.
 
 ```powershell
 npx vercel --version
@@ -136,20 +169,38 @@ npx vercel link
 Get-Content .vercel/project.json
 ```
 
-Choose the Vercel project that serves nexus-crm-jer2x.vercel.app (dashboard → the project → Domains lists
-it). Success: `projectName` in `.vercel/project.json` is that project's name. If it is any other project,
-stop: no `vercel env` command may run until it is right.
+Answer its prompts like this (the wording is Vercel CLI 59.20's; read `npx vercel link --help` first if
+yours differs):
+
+- Create a new project, or link an existing one: **link the existing project**. Never create one: steps V
+  and 6 would then configure a project that serves nothing.
+- Which project: the one that serves nexus-crm-jer2x.vercel.app (dashboard → the project → Domains lists
+  it).
+- Pull the environment variables into `.env.local`: **No**. That writes the project's variables into the
+  checkout, next to the production credentials already in `.env`.
+
+Success: `projectName` in `.vercel/project.json` is that project's name, and its `projectId` equals the
+Project ID on the dashboard (the project → Settings → General). If either differs, stop: no `vercel env`
+command may run until it is right.
 
 ### Step V — set `WORKSPACE_MODE=single` on the demo's Vercel project, Preview and Production (GO; before step P)
 
-Pushing the branch in step P makes Vercel build a preview deployment of it, and the phase-A build refuses to
-boot under `NODE_ENV=production` without the variable; the merge in step 7 does the same for Production. So
-it is set for both environments before anything is pushed. The live (old) build ignores the variable, so
+The merge in step 7 deploys the phase-A build to Production, and that build refuses to boot under
+`NODE_ENV=production` without the variable, so Production needs it before the merge. Preview gets it too,
+but not because the step-P preview would fail to boot without it: that preview never boots. It fails at
+build, by design, because `src/lib/db-adapter.ts` refuses every non-production Vercel build (README,
+"Deploying to Vercel"). Preview gets the variable so that once it has a database of its own
+(SAAS-READINESS §4a) its builds boot the way Production's do. The live (old) build ignores the variable, so
 setting it now is harmless and needs no redeploy.
 
+Read `npx vercel env add --help` first. Vercel CLI 59.20 takes the value as `--value`, which avoids piping
+it (a value piped from PowerShell can carry a trailing newline). If your version has no `--value`, use the
+dashboard instead.
+
 ```powershell
-"single" | npx vercel env add WORKSPACE_MODE production
-"single" | npx vercel env add WORKSPACE_MODE preview
+npx vercel env add --help
+npx vercel env add WORKSPACE_MODE production --value single
+npx vercel env add WORKSPACE_MODE preview --value single
 npx vercel env ls
 ```
 
@@ -162,15 +213,22 @@ Preview.
 
 ```powershell
 gh auth switch --user jasrulete 2>&1 | Out-Null
-git push -u origin feat/multi-tenancy-core
-gh pr create -R jasrulete/Nexus-CRM --base main --head feat/multi-tenancy-core --title "feat: multi-tenancy core, phase A (M1 and workspace-scoped code)" --body "Phase A of docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md: migration M1, the fail-closed workspace-scoped client, WORKSPACE_MODE=single|multi, plan limits and AI metering, the cross-tenant suite. Do not merge before runbook step 7 (docs/runbooks/2026-10-tenancy-phase-a.md).
+if ((gh api user --jq .login) -eq 'jasrulete') {
+  git push -u origin feat/multi-tenancy-core
+  gh pr create -R jasrulete/Nexus-CRM --base main --head feat/multi-tenancy-core --title "feat: multi-tenancy core, phase A (M1 and workspace-scoped code)" --body "Phase A of docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md: migration M1, the fail-closed workspace-scoped client, WORKSPACE_MODE=single|multi, plan limits and AI metering, the cross-tenant suite. Do not merge before runbook step 7 (docs/runbooks/2026-10-tenancy-phase-a.md).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)"
-gh pr checks feat/multi-tenancy-core -R jasrulete/Nexus-CRM --watch
+  gh pr checks feat/multi-tenancy-core -R jasrulete/Nexus-CRM --watch
+} else {
+  "STOP: gh is not signed in as jasrulete. Nothing was pushed."
+}
 gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
 
-Success: `ci` and `Analyze JavaScript/TypeScript` pass. Do not merge.
+Success: `ci` and `Analyze JavaScript/TypeScript` pass. The `Vercel` preview check fails, by design:
+`src/lib/db-adapter.ts` refuses every non-production Vercel build, so the preview fails while it builds
+(README, "Deploying to Vercel"). So `--watch`, like a plain `gh pr checks`, ends with a non-zero exit even
+when both of those pass; that alone is not a reason to stop. Do not merge.
 
 ### Step 0 — read the production pragmas (GO; read-only)
 
@@ -195,8 +253,12 @@ The reset on `main` is still the old one, and it would reseed demo rows with no 
 
 ```powershell
 gh auth switch --user jasrulete 2>&1 | Out-Null
-gh workflow disable reset-demo.yml -R jasrulete/Nexus-CRM
-gh workflow list --all -R jasrulete/Nexus-CRM
+if ((gh api user --jq .login) -eq 'jasrulete') {
+  gh workflow disable reset-demo.yml -R jasrulete/Nexus-CRM
+  gh workflow list --all -R jasrulete/Nexus-CRM
+} else {
+  "STOP: gh is not signed in as jasrulete. Nothing was run."
+}
 gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
 
@@ -225,8 +287,9 @@ the step: leave that database for the owner to look at, and let the owner decide
 ```powershell
 $backup = (Get-ChildItem backups -Filter 'turso-backup-pre-m1-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
 "backup: $backup"
+$checkout = Assert-Checkout
 $created = $false
-if ($backup) {
+if ($backup -and $checkout) {
   turso db create nexus-crm-m1-rehearsal --from-db nexus-crm
   $created = ($LASTEXITCODE -eq 0)
 }
@@ -238,7 +301,7 @@ if ($created) {
 $env:ALLOW_REMOTE_DB = "true"
 "target: $env:TURSO_DATABASE_URL"
 $pushed = $false
-if (Assert-Target -Expect 'nexus-crm-m1-rehearsal-*' -NeedToken) {
+if ($checkout -and (Assert-Target -Expect 'nexus-crm-m1-rehearsal-*' -NeedToken)) {
   npm run db:push:turso
   $pushed = ($LASTEXITCODE -eq 0)
 }
@@ -252,15 +315,17 @@ Why the gate matters: if `turso db create` or `turso db show` fails, the variabl
 `npm run db:push:turso` would then load the production URL and token from `.env` and apply M1 to
 production under a go that was given for the rehearsal. It has no `ALLOW_REMOTE_DB` check of its own.
 
-Success: the backup line names the `turso-backup-pre-m1-…json` file step 2 wrote; the target line names
-`nexus-crm-m1-rehearsal`, and so do the host lines `Assert-Target` prints; `Applied 1 migration(s) to
+Success: the backup line names the `turso-backup-pre-m1-…json` file step 2 wrote; `Assert-Checkout`
+prints the same SHA for `HEAD` and the PR head, and exactly the four migration directories; the target
+line names `nexus-crm-m1-rehearsal`, and so do the host lines `Assert-Target` prints; `Applied 1 migration(s) to
 libsql://nexus-crm-m1-rehearsal-…`; every verify check passes and the last line is `ALL M1 CHECKS PASSED`
 (three new tables; a workspace exists if and only if a user does; one membership per user with its role
 copied; no null `workspaceId` outside `auth.*` audit rows; no drift; and the CRM row counts — Company,
 Contact, Deal, Activity, Task — equal the backup's). If the push or the verify fails, stop: production is
 untouched, and the failure goes to the owner with the output. A failure of the row-count check alone usually
-means a visitor changed CRM rows on the live demo after step 2: give the owner both sets of counts; the fix
-is a fresh step 2 and then this step again.
+means a visitor changed CRM rows on the live demo after step 2: give the owner both sets of counts. The
+fix, after the owner destroys the failed rehearsal database (until then `turso db create` refuses the
+name and the gate stops this step), is a fresh step 2 and then this step again.
 
 Only after that success, destroy the rehearsal database. If the rehearsal failed, do not run this: the
 failed database stays for the owner to inspect.
@@ -288,8 +353,11 @@ Show-Target
 turso db show nexus-crm
 ```
 
-Run, only after that check. It prints the restore point immediately before the push; record it in HANDOVER
-§7s, because the restore needs it:
+Run, only after that check. It prints a restore point just before the push; record it in HANDOVER §7s,
+because the restore needs it. The time comes from this machine's clock, which is not authoritative, so the
+block subtracts a five-minute safety margin: a clock up to five minutes fast still gives a point before
+the push. A restore to it also loses what was written in those five minutes, and the restore section
+checks that the copy it builds really is from before M1.
 
 ```powershell
 $backup = (Get-ChildItem backups -Filter 'turso-backup-pre-m1-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
@@ -297,8 +365,8 @@ $backup = (Get-ChildItem backups -Filter 'turso-backup-pre-m1-*.json' | Sort-Obj
 "target from .env (must print nothing here): $env:TURSO_DATABASE_URL"
 $prodHost = Get-ProdHost
 $pushed = $false
-if ($backup -and (Assert-Target -Expect $prodHost)) {
-  "RESTORE POINT (UTC), record it: " + [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+if ($backup -and (Assert-Checkout) -and (Assert-Target -Expect $prodHost)) {
+  "RESTORE POINT (UTC, this machine's clock minus 5 minutes), record it: " + [DateTime]::UtcNow.AddMinutes(-5).ToString("yyyy-MM-ddTHH:mm:ssZ")
   npm run db:push:turso
   $pushed = ($LASTEXITCODE -eq 0)
 }
@@ -307,7 +375,8 @@ if ($pushed -and (Assert-Target -Expect $prodHost)) {
 }
 ```
 
-Success: the backup line names the file step 2 wrote; the two host lines `Assert-Target` prints are
+Success: the backup line names the file step 2 wrote; `Assert-Checkout` prints the same SHA for `HEAD`
+and the PR head, and exactly the four migration directories; the two host lines `Assert-Target` prints are
 identical; the `RESTORE POINT` line is recorded; `Applied 1 migration(s) to libsql://nexus-crm-…`, then
 every verify check passes and the last line is `ALL M1 CHECKS PASSED`, the CRM row counts against that
 backup included. Then open the demo, click **Try the demo**, and check the dashboard and the board render
@@ -347,16 +416,25 @@ Success: `WORKSPACE_MODE` is listed in both. If it is missing from either, add i
 
 ### Step 7 (spec step 7) — merge, and confirm the new build is the one serving (GO)
 
-The merge runs only if `gh pr checks` exits 0, which it does only when every check has passed (a failing or
-pending check gives another exit code; if a check is only pending, wait and run the block again):
+The merge runs only if `gh pr checks --required` exits 0, which it does only when every required check
+has passed. Branch protection on `main` requires two: `ci` and `Analyze JavaScript/TypeScript`. The
+`Vercel` preview check is not required, and it is red by design: `src/lib/db-adapter.ts` refuses every
+non-production Vercel build, so the preview fails while it builds (README, "Deploying to Vercel"). That is
+why a plain `gh pr checks`, or `--watch`, exits non-zero even when both required checks pass, and why the
+gate reads the required checks only. A failing or pending required check gives another exit code; if one
+is only pending, wait and run the block again.
 
 ```powershell
 gh auth switch --user jasrulete 2>&1 | Out-Null
-gh pr checks feat/multi-tenancy-core -R jasrulete/Nexus-CRM
-if ($LASTEXITCODE -eq 0) {
-  gh pr merge feat/multi-tenancy-core --merge -R jasrulete/Nexus-CRM
+if ((gh api user --jq .login) -eq 'jasrulete') {
+  gh pr checks feat/multi-tenancy-core -R jasrulete/Nexus-CRM --required
+  if ($LASTEXITCODE -eq 0) {
+    gh pr merge feat/multi-tenancy-core --merge -R jasrulete/Nexus-CRM
+  } else {
+    "STOP: a required check has not passed. Not merging."
+  }
 } else {
-  "STOP: not every check has passed. Not merging."
+  "STOP: gh is not signed in as jasrulete. Not merging."
 }
 gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
@@ -409,10 +487,9 @@ line is `ALL M1 CHECKS PASSED`. A second run of the backfill prints zeros. The v
 the pre-M1 backup. Session, User and AuditLog have grown from that traffic too; that growth is expected, and
 `verify-m1` never compares those tables.
 
-This step runs while the phase-A deploy is live. Its membership upsert can hit a unique-constraint error
-(Prisma `P2002`) if the live app joins the same user at the same moment. If the backfill fails that way, run
-the block again: the script is idempotent, so the second run skips whatever the first already wrote. Any
-other error: stop.
+This step runs while the phase-A deploy is live. If step 8 fails with a unique-constraint error
+(`UNIQUE constraint failed`, `P2002`, or `P2039` on Turso), re-run it; it is idempotent. Any other error:
+stop.
 
 ### Step 9 (spec step 9) — one manual reset, then re-enable the nightly (GO)
 
@@ -431,8 +508,12 @@ Run the next block only if the one above printed `Demo workspace reset.`:
 
 ```powershell
 gh auth switch --user jasrulete 2>&1 | Out-Null
-gh workflow enable reset-demo.yml -R jasrulete/Nexus-CRM
-gh workflow list --all -R jasrulete/Nexus-CRM
+if ((gh api user --jq .login) -eq 'jasrulete') {
+  gh workflow enable reset-demo.yml -R jasrulete/Nexus-CRM
+  gh workflow list --all -R jasrulete/Nexus-CRM
+} else {
+  "STOP: gh is not signed in as jasrulete. Nothing was run."
+}
 gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
 
@@ -446,7 +527,10 @@ workspace line and `Demo workspace reset.`
   re-enable the reset (step 9's `gh workflow enable` commands): the old reset works on M1's schema. A later
   phase-A attempt restarts at step 1 (disable the nightly again; it stays off until step 9, spec §10),
   skips whatever of steps 2 to 5 is already done and recorded, then runs steps 6 to 9, step 8's catch-up
-  included.
+  included. If the old nightly ran while phase A was paused, it reseeded the demo's CRM rows with no
+  workspace, so after the restart's merge **Try the demo** shows an empty dashboard until step 8 stamps
+  them. Step 7's dashboard check may then show an empty demo: that is expected, not a reason to stop. Run
+  step 8 straight after the deploy is confirmed, then repeat step 7's browser check.
 - **After step 7:** the first response to a live deployment that errors or refuses to boot is Vercel's
   instant rollback, before anything else: promote the previous Production deployment (dashboard → the
   project → Deployments → the last good Production deployment → ⋯ → Promote to Production / Instant
@@ -466,7 +550,8 @@ since that time, including accounts registered since: the owner decides whether 
 part below needs its own GO.
 
 Part 1 builds the restored copy and checks it. It does not change production. Set `$restoreFrom` to the
-recorded time, in the format `turso db create --help` gives for `--timestamp`:
+recorded time (it already includes step 4's five-minute margin), in the format `turso db create --help`
+gives for `--timestamp`:
 
 ```powershell
 $restoreFrom = "<the RESTORE POINT recorded before step 4's push>"
@@ -492,24 +577,52 @@ if ($created) {
 ```
 
 `verify-m1` is no use here: the restored copy is from before M1, so its first check ("new tables") fails
-and it stops there, before it reaches the row counts. Compare the counts instead, side by side:
+and it stops there, before it reaches the row counts. Instead, confirm the copy really is from before M1
+(a post-M1 copy would pass the count comparison), then compare the counts side by side. The block selects
+both files itself, so it also works in a new session:
 
 ```powershell
+$backup = (Get-ChildItem backups -Filter 'turso-backup-pre-m1-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
 $restored = (Get-ChildItem backups -Filter 'turso-backup-restored-check-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+"backup:   $backup"
+"restored: $restored"
 $a = Get-Content $backup -Raw | ConvertFrom-Json
 $b = Get-Content $restored -Raw | ConvertFrom-Json
+$tables = $b.data.PSObject.Properties.Name
+$m1Rows = @($b.data._turso_migrations.rows | Where-Object { $_.name -eq '20261011180555_workspaces_expand' })
+if (($tables -contains 'Workspace') -or ($tables -contains 'Membership') -or ($tables -contains 'AiUsage') -or ($m1Rows.Count -gt 0)) {
+  "STOP: the restored copy already has M1 (its tables or its ledger row). It is not from before the push."
+} else {
+  "pre-M1: no Workspace, Membership or AiUsage table, and no M1 row in _turso_migrations."
+}
 foreach ($t in 'Company', 'Contact', 'Deal', 'Activity', 'Task') {
   "{0,-9} step 2: {1,5}   restored: {2,5}" -f $t, $a.data.$t.rows.Count, $b.data.$t.rows.Count
 }
 ```
 
-The two columns should be equal, or differ only by what visitors wrote between step 2 and the restore
-point. Anything else: stop and tell the owner.
+Success: the `pre-M1:` line, then two columns that are equal, or differ only by what visitors wrote between
+step 2 and the restore point. A `STOP:` line, or anything else: stop and tell the owner.
 
-Part 2 points production at the restored copy (its own GO): in the Vercel project, set Production's
-`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to the restored database's URL and a token for it
-(`turso db tokens create nexus-crm-restored`), then redeploy the current Production deployment (env changes
-reach only new deployments; `npx vercel env --help` and `npx vercel redeploy --help` give the CLI forms).
+Part 2 points production at the restored copy (its own GO).
+
+**Precondition: a pre-phase-A build is serving.** The restored copy is from before M1, and the phase-A
+build's boot check refuses a database that lacks M1's tables, so every request would fail. If step 7 ran,
+roll it back first ("Rolling back", after step 7: promote the last pre-phase-A Production deployment), and
+confirm with `npx vercel inspect nexus-crm-jer2x.vercel.app` that it is the one serving.
+
+Then, in the Vercel project, set Production's `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to the restored
+database's URL and a token for it (`turso db tokens create nexus-crm-restored`), and redeploy that
+pre-phase-A deployment (env changes reach only new deployments; `npx vercel env --help` and
+`npx vercel redeploy --help` give the CLI forms). After an instant rollback Vercel stops assigning the
+production domain to new deployments on its own, so run `npx vercel inspect nexus-crm-jer2x.vercel.app`
+again: it must name the redeployment. If it names an older one, promote the redeployment explicitly
+(dashboard → Deployments → the redeployment → ⋯ → Promote to Production) and inspect again.
+
+Then confirm production reads the restored database: run `turso db inspect nexus-crm-restored` (read
+`turso db inspect --help` first; the Turso dashboard's usage view for the database shows the same), sign in
+with **Try the demo** and open a few pages, and run it again. Its rows-read count must have grown. If it
+has not, production still reads the old database: stop and tell the owner, and do not destroy anything.
+
 Update the GitHub Actions secrets of the same names too, before step 9 re-enables the nightly, and `.env`
 for the local scripts. The restored database is a pre-M1 copy, so step 3 and step 4 are repeated against
 it, and the `nexus-crm` name in `Get-ProdHost` and in the step commands must then name the restored
