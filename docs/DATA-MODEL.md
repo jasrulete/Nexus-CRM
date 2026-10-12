@@ -114,11 +114,11 @@ Three tables arrived with migration M1:
 | --- | --- | --- |
 | `Workspace` | One tenant | `slug` is unique. `plan` is `FREE` or `PAID`; only spec 3's billing webhook will write `PAID`. `isDemo` is the nightly reset's permission bit and nothing else — no application code reads it. In `single` mode the one workspace is `ws_default` ("Default workspace", slug `default`) |
 | `Membership` | A user's place in a workspace | `role` is `OWNER`, `ADMIN` or `MEMBER` and is the authoritative role. `userId` is unique, so a person belongs to exactly one workspace in this release |
-| `AiUsage` | One metered AI action | `action` (`score`, `summary`, `draft`), `outcome` (`pending`, `answered`, `rejected`, `fallback`, `capacity`, `denied`), the provider that answered and token counts. Indexed on `(workspaceId, createdAt)` for the monthly allowance and on `(createdAt)` for the deployment-wide daily ceiling. Only `pending`, `answered` and `rejected` are charged, so an outage never costs a workspace its allowance: a chain that got a 2xx reply from any provider but no usable output (malformed or empty) settles `rejected` and is charged, because the provider did the work, while `fallback` means no 2xx reply at all |
+| `AiUsage` | One metered AI action | `action` (`score`, `summary`, `draft`), `outcome` (`pending`, `answered`, `rejected`, `fallback`, `capacity`, `denied`), the provider that answered and token counts. Indexed on `(workspaceId, createdAt)` for the monthly allowance and on `(createdAt)` for the deployment-wide daily ceiling. Only `pending`, `answered` and `rejected` are charged, so an outage never costs a workspace its allowance: a chain where any attempt got a billed reply from a provider (a 2xx, or Groq's 400 `json_validate_failed`) but no usable output (malformed or empty) settles `rejected` and is charged, because the provider did the work, while `fallback` means no attempt got a billed reply (a 429, an error status, a timeout, no key) |
 
 **`workspaceId` on the CRM tables.** `Company`, `Contact`, `Deal`, `Activity` and `Task` carry
 `workspaceId`. In M1 it is a nullable, indexed plain column with **no relation**, so the migration
-was `ALTER TABLE … ADD COLUMN` plus `CREATE INDEX` and rebuilt no table. M2 makes it `NOT NULL`, adds
+was `ALTER TABLE … ADD COLUMN` plus `CREATE INDEX` (and a `DROP INDEX` of `Contact_status_idx` and `Deal_stage_idx`, which composite indexes replace) and rebuilt no table. M2 makes it `NOT NULL`, adds
 the `Workspace` relation and, if the phase-A spike proved them, composite `(workspaceId, parentId)`
 keys so a child can only point at a parent in its own workspace. Until then that rule is the
 application's: every relation id a form supplies is resolved through the caller's scoped client, so
@@ -434,9 +434,9 @@ by hand. Two of the four in the second migration exist because the first migrati
 | `Company.ownerId` | index | Cascade delete only — the companies list does not filter by owner |
 | `Contact.ownerId` | index | Cascade delete only |
 | `Contact.companyId` | index | Company detail page: `include: { contacts: … }` compiles to `WHERE companyId = ?` |
-| `Contact.status` | index | The status filter chips on `/contacts` |
+| `Contact.workspaceId, status` | composite (M1) | The status filter chips on `/contacts`. Replaces the single-column `Contact.status` index, which M1 dropped |
 | `Deal.ownerId` | index | Cascade delete only |
-| `Deal.stage` | index | Dashboard `where: { stage: { in: [...] } }` (twice), `createDeal`'s "find the last position in this column", `moveDeal`'s column read, companies list's open-pipeline subquery |
+| `Deal.workspaceId, stage, position` | composite (M1) | Replaces the single-column `Deal.stage` index, which M1 dropped; `position` now sits in the index too. Serves the stage queries: dashboard `where: { stage: { in: [...] } }` (twice), `createDeal`'s "find the last position in this column", `moveDeal`'s column read, companies list's open-pipeline subquery |
 | `Deal.contactId` | index (migration 2) | Contact detail page's deals list |
 | `Deal.companyId` | index (migration 2) | Company detail page's deals list; companies list's per-row open-pipeline value |
 | `Activity.contactId` | index | Contact timeline |
@@ -446,7 +446,10 @@ by hand. Two of the four in the second migration exist because the first migrati
 | `Task.contactId` | index (migration 2) | Contact detail page's open tasks |
 | `Task.dealId` | index (migration 2) | Deal-scoped tasks |
 | `AuditLog.entityType, entityId` | composite | **Nothing in the app queries it.** It is for forensic lookup ("everything that happened to this deal") that no page exposes yet |
-| `AuditLog.createdAt` | index | The settings page's newest-25, and the nightly prune's `createdAt < cutoff` |
+| `AuditLog.createdAt` | index | The nightly prune's `createdAt < cutoff`. The settings page's newest-25 now uses the M1 composite `AuditLog.workspaceId, createdAt` |
+| `Task.workspaceId, assigneeId, done` | composite (M1) | The same "My tasks" predicate behind the workspace filter the scoped client adds; the older `assigneeId, done` index stays beside it |
+| Other M1 `workspaceId` composites | composite (M1) | `workspaceId, updatedAt` on `Company`, `Contact` and `Deal`; `workspaceId, createdAt` on `Contact` and `Activity`. Every query through the scoped client carries `workspaceId`, so they lead with it; they back the `updatedAt` sorts of the contacts, companies and search lists and the `createdAt` sort of the activity feed |
+| `Membership.workspaceId`, `Membership.workspaceId, userId` (unique), `AiUsage.workspaceId, createdAt`, `AiUsage.createdAt`, `Workspace.slug` (unique), `Membership.userId` (unique) | M1 | The roster read, one membership per user, the monthly allowance count (`workspaceId, createdAt`), the deployment-wide daily ceiling (`createdAt`) and the unique slug |
 
 Notable gaps, all of them fine at demo scale and all of them full scans:
 
@@ -455,12 +458,15 @@ Notable gaps, all of them fine at demo scale and all of them full scans:
   index can serve. Results are capped at five per type, so the payload is bounded; the scan is
   not, and `%`/`_` in a query act as wildcards. The free upgrade is an FTS5 virtual table kept
   in step by triggers in one migration, queried with `MATCH`. See `src/server/actions/search.ts`.
-- **`Activity.createdAt` has no index**, yet the dashboard does
-  `orderBy: { createdAt: "desc" }, take: 8` over the whole table on every load.
+- **`Activity.createdAt` has no index of its own**, yet the dashboard does
+  `orderBy: { createdAt: "desc" }, take: 8` on every load. Since M1 the workspace filter the
+  scoped client adds lets `Activity.workspaceId, createdAt` serve it, over the workspace's rows
+  rather than the whole table.
 - **`Activity.userId` has no index**, so deleting a user must scan `Activity` to cascade.
 - **`AuditLog.userId` has no index**, so both the SetNull on user delete and the nightly prune's
   `OR: [{ createdAt: { lt: cutoff } }, { userId: demoUserId }]` scan the table.
-- **`Contact.updatedAt` / `Company.updatedAt` have no index**, and both list pages sort by them.
+- **`Contact.updatedAt` / `Company.updatedAt` have no index of their own**, and both list pages sort
+  by them; since M1 the `workspaceId, updatedAt` composites serve that sort within a workspace.
 - Search uses Prisma's `contains`, which compiles to SQL `LIKE '%q%'` — unindexable by
   construction. There is no `mode: "insensitive"` on the SQLite provider; SQLite's built-in `LIKE`
   folds case for ASCII letters only, so accented characters compare case-sensitively.
@@ -469,7 +475,8 @@ Notable gaps, all of them fine at demo scale and all of them full scans:
 
 ## The enum-like string columns
 
-Five columns model a closed set of values and none of them is constrained by the database:
+Ten columns model a closed set of values (nine in use; `User.role` is deprecated) and none of
+them is constrained by the database:
 
 | Column | Allowed values | Enforced by |
 | --- | --- | --- |
@@ -478,7 +485,11 @@ Five columns model a closed set of values and none of them is constrained by the
 | `Deal.stage` | LEAD, QUALIFIED, PROPOSAL, NEGOTIATION, WON, LOST | `dealSchema.stage`, `dealMoveSchema.stage` |
 | `Activity.type` | NOTE, CALL, EMAIL, MEETING | `activitySchema.type: z.enum(ACTIVITY_TYPES)` |
 | `Company.size` | 1-10, 11-50, 51-200, 201-1000, 1000+ | `companySchema.size: z.enum(COMPANY_SIZES)` |
-| `User.role` | ADMIN, MEMBER | *no schema* — set by server code only, never from a form |
+| `Membership.role` | OWNER, ADMIN, MEMBER | *no schema* — the `MembershipRole` type in `src/lib/workspace-bootstrap.ts`, and `toMembershipRole()` reads any other stored value as MEMBER. Set by server code only, never from a form |
+| `Workspace.plan` | FREE, PAID | *no schema* — the `Plan` type in `src/lib/plans.ts`; `limitsFor()` holds an unknown value to FREE. Only spec 3's billing webhook will write PAID |
+| `AiUsage.action` | score, summary, draft | *no schema* — the `AiAction` type in `src/lib/ai/usage.ts`. Set by server code only |
+| `AiUsage.outcome` | pending, answered, rejected, fallback, capacity, denied | *no schema* — the `AiOutcome` type in `src/lib/ai/usage.ts`; `CHARGED_AI_OUTCOMES` in `src/lib/system-queries.ts` names the three that count (pending, answered, rejected). Set by server code only |
+| `User.role` | ADMIN, MEMBER (legacy) | **Deprecated.** Nothing reads or writes it from phase A on; the role that counts is `Membership.role` |
 
 The values live once in [`src/lib/constants.ts`](../src/lib/constants.ts) as `as const` tuples,
 which zod consumes directly and TypeScript narrows into the `DealStage` / `ContactStatus` /
@@ -490,7 +501,8 @@ column order.
 **The constraint exists only at the form boundary.** Anything that writes through the Prisma
 client without passing through zod can put any string in these columns. That is not hypothetical:
 `prisma/seed-data.ts` writes `status: "QUALIFIED"` and `stage: "PROPOSAL"` as bare string
-literals, and `prisma/add-demo-member.ts` writes `role: "MEMBER"` the same way. Today the literals
+literals, and passes the bare membership roles `"ADMIN"` (`seedInstall`) and `"MEMBER"`
+(`ensureDemoMember`) to `ensureMember` the same way. Today the literals
 happen to be correct; nothing checks them, and a typo in a seed would ship.
 
 What happens if a junk value does land — say a deal with `stage: 'PENDING'`:
@@ -763,7 +775,7 @@ stops serving you.
 | `20260715164036_init` | 2026-07-15 | All eight tables; two UNIQUE indexes (`User.email`, `Session.tokenHash`) and twelve secondary indexes | Initial schema |
 | `20260725150849_add_deal_task_fk_indexes` | 2026-07-25 | `Deal.contactId`, `Deal.companyId`, `Task.contactId`, `Task.dealId` | Prisma does not index foreign keys automatically. These four are exactly the columns the contact-detail and company-detail pages filter on via `include`, so without them each detail page scanned `Deal` and `Task` |
 | `20260823151943_add_deal_base_value_and_fx_rate` | 2026-08-23 | `Deal.baseValue`, `Deal.fxRate` (a Prisma table rebuild of `Deal`); backfill `baseValue = value`, `fxRate = 1` | Multi-currency with the rate frozen at write time |
-| `20261011180555_workspaces_expand` | 2026-10-11 | `Workspace`, `Membership`, `AiUsage`; a nullable, indexed `workspaceId` on `Company`, `Contact`, `Deal`, `Activity`, `Task` and `AuditLog`. Data: the default workspace (only if a user exists), one membership per user with its role copied, every CRM row and every non-`auth.*` audit row stamped with the default workspace | Phase A of multi-tenancy. Additive only: no table rebuild, so the build before it runs unchanged on the schema after it |
+| `20261011180555_workspaces_expand` | 2026-10-11 | `Workspace`, `Membership`, `AiUsage`; a nullable, indexed `workspaceId` on `Company`, `Contact`, `Deal`, `Activity`, `Task` and `AuditLog`. Data: the default workspace (only if a user exists), one membership per user with its role copied, every CRM row and every non-`auth.*` audit row stamped with the default workspace | Phase A of multi-tenancy. Additive for columns and tables (two single-column indexes, `Contact_status_idx` and `Deal_stage_idx`, are replaced by composites); no table rebuild, so the build before it runs unchanged on the schema after it |
 
 All forward-only, with no down migrations. `20260823151943_add_deal_base_value_and_fx_rate` and M1
 carry data backfills; M1 is additive, so the build before it runs unchanged on the schema after it.

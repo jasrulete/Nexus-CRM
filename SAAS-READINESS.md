@@ -343,7 +343,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 | Gap | Why it's acceptable now | What "real SaaS" needs |
 |---|---|---|
 | **Visitor-created records live until the next nightly reset** — up to ~24 hours of clutter (deleting is already blocked, §2) | The reset clears everything each night, so the worst case is one day of stray records on a demo | A shorter reset interval, which GitHub Actions supports well below daily, or per-visitor sandboxing so nobody sees anyone else's edits |
-| **Open registration into one shared workspace** — anyone can self-register and see all CRM data | It's a single-tenant showcase, not customer data | Invite-only registration, or real multi-tenancy (below) |
+| **Open registration into one shared workspace** — anyone can self-register and see all CRM data | That is the demo deployment's choice (`WORKSPACE_MODE=single`: one shared workspace of invented data), not customer data. A `multi`-mode deployment gives every sign-up a private workspace — see §6 | Invite-only registration, or `multi` mode for real customers (§6) |
 | **In-memory rate limiter** resets per deploy and is per-instance | Free-tier single instance | Redis/Upstash-backed limiter |
 | **No backups configured** | Turso has its own snapshots | Documented restore procedure, tested |
 | **3 advisories in the `prisma` CLI chain** (`prisma`, `@prisma/config`, `deepmerge-ts`) | npm's only fix is a downgrade to Prisma 6.12; `prisma` is a devDependency, so none of it ships to production (corrected 2026-08-21 — see §3a) | Track the next Prisma 7 patch |

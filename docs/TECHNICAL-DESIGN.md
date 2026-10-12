@@ -500,8 +500,9 @@ see the constraint behind it.
 
 ### Where authorization is *not* ownership
 
-Two reads are role-gated rather than ownership-gated, both on
-`src/app/(app)/settings/page.tsx`:
+Two reads are role-gated rather than ownership-gated, both in `loadSettings`
+(`src/server/queries/settings.ts`), which `src/app/(app)/settings/page.tsx`
+delegates to:
 
 - The **audit log** card queries only when `isWorkspaceAdmin`, through the scoped
   client, so it shows the workspace's events and never the platform's sign-in
@@ -537,11 +538,14 @@ drive most of the
 design:
 
 **SQLite has no enum type.** The header comment says so. `Deal.stage`,
-`Contact.status`, `Activity.type`, `Company.size`, `User.role` and
-`Contact.source` are all `String`, and the *only* thing constraining them is the
-zod `z.enum(...)` in `src/lib/validation.ts` built from the tuples in
-`src/lib/constants.ts`. There are no CHECK constraints. Seed and reset scripts
-write these values directly and bypass zod entirely.
+`Contact.status`, `Activity.type`, `Company.size`, `Contact.source`,
+`Membership.role`, `Workspace.plan` and `AiUsage.action` / `outcome` (and the
+deprecated `User.role`) are all `String`, and the *only* thing constraining the
+form-set ones is the zod `z.enum(...)` in `src/lib/validation.ts` built from the
+tuples in `src/lib/constants.ts`. The server-set ones — membership role, plan, AI
+action and outcome — are held only by TypeScript types, since no form can set
+them. There are no CHECK constraints. Seed and reset scripts write these values
+directly and bypass zod entirely.
 
 **Every CRM row hangs off a `User` and belongs to a workspace** (`workspaceId`; see
 ADR-013 and DATA-MODEL § Workspaces and tenancy).
@@ -616,8 +620,9 @@ unless you scope them.
 `systemDb` is `new PrismaClient({ adapter: createDbAdapter() })`, stashed on
 `globalThis` outside production so hot reload does not open a new connection pool
 on every edit. It is unscoped, and only an exact allowlist of files may import it:
-the auth code, the workspace context and bootstrap, `system-queries.ts` and the
-health probe (enforced by `src/lib/import-guard.test.ts`). Everything else uses
+the auth code, the workspace context and bootstrap, `system-queries.ts`, the
+health probe and the `/auth/signout-stale` route handler (enforced by
+`src/lib/import-guard.test.ts`). Everything else uses
 `forWorkspace(workspaceId)` — `scopeToWorkspace(systemDb, workspaceId)` — which it
 receives as `ctx.db` from `getWorkspaceContext()`. See ADR-013.
 
@@ -1554,7 +1559,14 @@ The guards, outermost first:
    it), rejects writes to `workspaceId`, rejects any non-scalar write key so no
    nested relation write can cross a workspace, and throws on raw SQL, on the
    global models (`User`, `Session`, `Workspace`) and on any operation it does not
-   know.
+   know. It also walks `select`, `include`, `where` and `orderBy` for nested
+   access, because the callback fires only for the top-level model: under any
+   relation whose target is a global model (a record's owner, a membership's
+   workspace) only scalar fields are allowed — `true`, or a `select` of the
+   target's scalars — and a relation key, `include`, `_count` or a nested
+   relation filter there throws `TenancyViolation`, since a user's back-relations
+   reach every workspace's rows. The relation-target table behind the walk is
+   static, and `src/lib/tenancy-map.test.ts` holds it to `prisma/schema.prisma`.
 2. Application code gets only that client, as `ctx.db` from
    `getWorkspaceContext()`. The unscoped `systemDb` may be imported only from an
    exact allowlist, and only `src/lib/db.ts` and the test harness may construct a
@@ -1577,9 +1589,11 @@ filter, which is what guards 1–4 close. The costs: every migration now runs on
 demo database and on the cloud database; on the production driver every query in
 an interactive transaction must go through that transaction's `tx` (pinned by
 `src/server/libsql-driver.test.ts`); `User.role` stays as a dead column; and nested
-`include`/`select` reads are invisible to the extension, safe only because no write
-can link rows across workspaces — which the cross-tenant suite proves rather than
-assumes.
+reads between tenant models are not re-scoped hop by hop, so they are safe only
+because no write can link rows across workspaces (the same-workspace link checks)
+— which the cross-tenant suite proves rather than assumes. Nested reads through a
+global model are not left to that argument: the walk in guard 1 limits them to
+scalar fields.
 
 ---
 

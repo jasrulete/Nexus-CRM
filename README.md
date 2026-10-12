@@ -139,7 +139,7 @@ silently change mode. Development defaults to `single`. The Docker image sets
 | Variable | Default | Effect |
 |---|---|---|
 | `WORKSPACE_MODE` | `single` in development; **required** in production | `single` or `multi`, as above. `multi` refuses to boot with `DEMO_MODE=true` |
-| `AI_DAILY_CEILING` | unset (no ceiling) | Deployment-wide cap on AI actions per UTC day, across all workspaces. At the cap, AI features answer in rule-based mode, labelled "daily AI capacity reached" |
+| `AI_DAILY_CEILING` | unset (no ceiling) | Deployment-wide cap on AI actions per UTC day, across all workspaces. At the cap, AI features answer in rule-based mode, labelled "daily AI capacity reached". A value that is not a whole number fails closed as 0, so every AI action takes that capacity fallback |
 | `SEED_DEMO_WORKSPACE` | unset | `true` marks the seeded workspace as the demo, the only thing that lets the nightly reset rebuild it. For the public demo's database only — never set it on a real install |
 
 The seed and reset scripts (`db:seed`, `db:add-member`, `demo:reset`) refuse to

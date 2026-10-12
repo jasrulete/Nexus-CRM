@@ -96,10 +96,13 @@ script/connect sources — AI providers are called **server-side only**),
 
 ## Auditability
 
-`AuditLog` records logins (including failures), logouts, registrations, all
-create/update/delete operations, stage changes and AI usage — with actor,
-entity, timestamp and a JSON metadata snippet. Admins can review the latest
-events in Settings.
+`AuditLog` records all create/update/delete operations, stage changes and AI
+usage — with actor, entity, timestamp and a JSON metadata snippet — against the
+acting user's workspace. Sign-ups, sign-ins (including failures) and sign-outs
+are platform events (`auth.*`): they are recorded with no workspace and never
+appear in Settings, so nobody sees the address a failed sign-in came from.
+Workspace admins can review the latest 25 events of their own workspace in
+Settings.
 
 ## Known trade-offs (single-instance, free-tier scope)
 

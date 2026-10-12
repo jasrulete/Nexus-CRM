@@ -387,8 +387,9 @@ query, not three.
 **What it is.** An ORM with a declarative schema file. You describe models; a code generator
 produces a fully-typed client; a migration tool turns schema changes into versioned SQL.
 
-**The schema.** [`prisma/schema.prisma`](../prisma/schema.prisma) defines eight models:
-`User`, `Session`, `Company`, `Contact`, `Deal`, `Activity`, `Task`, `AuditLog`. Its first
+**The schema.** [`prisma/schema.prisma`](../prisma/schema.prisma) defines eleven models:
+`User`, `Session`, `Workspace`, `Membership`, `Company`, `Contact`, `Deal`, `Activity`, `Task`,
+`AuditLog`, `AiUsage`. Its first
 comment records the constraint that shapes several later decisions:
 
 > *SQLite does not support enums — enum-like fields are strings validated with zod at the
@@ -408,8 +409,9 @@ is generated *into the source tree*, not into `node_modules/.prisma`. That is wh
 to `"postinstall": "prisma generate"` in [`package.json`](../package.json), so it runs after
 every `npm install` and on every Vercel build.
 
-**Migrations.** [`prisma/migrations/`](../prisma/migrations) holds two so far —
-`20260715164036_init` and `20260725150849_add_deal_task_fk_indexes` — plus
+**Migrations.** [`prisma/migrations/`](../prisma/migrations) holds four so far —
+`20260715164036_init`, `20260725150849_add_deal_task_fk_indexes`,
+`20260823151943_add_deal_base_value_and_fx_rate` and `20261011180555_workspaces_expand` — plus
 `migration_lock.toml` pinning `provider = "sqlite"`. `npm run db:migrate` (`prisma migrate
 dev`) is the authoring command; CI runs `npx prisma migrate deploy` to apply them. Neither
 of those reaches production, which is its own topic — see `_turso_migrations` and
@@ -540,7 +542,7 @@ permanently: SQLite is a file, Turso has a free tier.
 **The cost of that choice**, stated plainly: SQLite has one writer at a time, no `ENUM`, no
 native `JSON` column (hence `AuditLog.metadata` being a `String?` holding
 `JSON.stringify(...)` — see [`src/lib/audit.ts`](../src/lib/audit.ts)), and much weaker
-concurrency than Postgres. For a single-tenant portfolio CRM that is invisible. For a real
+concurrency than Postgres. For a portfolio or self-hosted single-workspace CRM that is invisible. For a real
 multi-user SaaS it would not be.
 
 > **If asked: "would you use SQLite in production?"**
@@ -880,9 +882,12 @@ await audit({ action: "deal.stage_change", entityType: "deal", entityId: id,
 `auth.login_failed` is written with **no** `userId` at all (there may be no such user) but
 with `entityId: email` and `metadata: { ip }`.
 
-Admins see the latest 25 entries on `/settings`
-([`src/app/(app)/settings/page.tsx`](../src/app/(app)/settings/page.tsx)); the query is
-gated on `isAdmin`.
+Workspace admins see the latest 25 entries of their own workspace on `/settings`
+(`loadSettings` in [`src/server/queries/settings.ts`](../src/server/queries/settings.ts), which
+[the page](../src/app/(app)/settings/page.tsx) calls); the query runs only for
+`isWorkspaceAdmin` and goes through the scoped client. The `auth.*` events are written by
+`auditPlatform` with no workspace, so they never appear there — which is how a failed
+sign-in's IP stays off every Settings page.
 
 **The retention story is worth telling**, because it is a good bug. The nightly demo reset
 used to call `auditLog.deleteMany()` with no filter — wiping *everyone's* trail, including
@@ -922,13 +927,16 @@ owner check while their delete siblings did."*
 The other IDOR-flavoured fix on this branch is on `/settings`: the Team card selected
 `email` for every user with no admin condition, three lines above an audit query that *was*
 gated. Registration is open, so any throwaway account could read every address that had ever
-signed up. Now:
+signed up. Now, in `loadSettings` (`src/server/queries/settings.ts`):
 
 ```ts
-email: isAdmin || m.id === user.id ? m.email : null
+const showEmails = isAdmin && !isLockedDemoAccount(ctx.user);
+email: showEmails || m.user.id === ctx.user.id ? m.user.email : null
 ```
 
-Names and roles stay visible as team context; addresses are PII and do not.
+Names and roles stay visible as team context; addresses are PII and do not. The roster lists
+only the viewer's workspace, and the locked demo account — an `ADMIN` with a published
+password — sees no address but its own.
 
 ---
 
@@ -1557,7 +1565,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | **Workspace modes** — `WORKSPACE_MODE` / `workspaceMode()` | [`src/lib/workspace-mode.ts`](../src/lib/workspace-mode.ts) | `single` (self-hosting, the public demo: one workspace everyone joins) or `multi` (the hosted cloud: a private workspace per sign-up). Required under `NODE_ENV=production`. The seed and reset scripts refuse `multi`. |
 | **Plans** — `PLAN_LIMITS` | [`src/lib/plans.ts`](../src/lib/plans.ts) | `FREE`: 1 member, 200 contacts, 100 companies, 100 deals, 30 AI actions a month. `PAID`: 10, 10,000, 5,000, 5,000, 600. Enforced only in `multi` mode; `Workspace.plan` changes only through spec 3's billing webhook. |
 | **`isDemo`** | `Workspace.isDemo` | The nightly reset's permission bit and nothing else: no app code reads it, the reset never writes it, the seed sets it only with `SEED_DEMO_WORKSPACE=true`, and `scripts/mark-demo-workspace.ts` sets it once on the demo database. The reset refuses any database whose only workspace lacks it. |
-| `AiUsage` | `AiUsage` model; [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | One row per metered AI action, reserved as `pending` before the provider call, then settled `answered` / `rejected` / `fallback`; `denied` (monthly allowance spent) and `capacity` (`AI_DAILY_CEILING` reached) rows record refusals. Only `pending`, `answered` and `rejected` are charged: a chain that got a 2xx reply from any provider but no usable output (malformed or empty) settles `rejected`, because the provider did the work, while `fallback` means no 2xx reply at all (a 429, an error, a timeout, no key). |
+| `AiUsage` | `AiUsage` model; [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | One row per metered AI action, reserved as `pending` before the provider call, then settled `answered` / `rejected` / `fallback`; `denied` (monthly allowance spent) and `capacity` (`AI_DAILY_CEILING` reached) rows record refusals. Only `pending`, `answered` and `rejected` are charged: a chain where any attempt got a billed reply from a provider (a 2xx, or Groq's 400 `json_validate_failed`) but no usable output (malformed or empty) settles `rejected`, because the provider did the work, while `fallback` means no attempt got a billed reply (a 429, an error status, a timeout, no key). |
 | `scopeToWorkspace(base, id)` / `forWorkspace(id)` | [`src/lib/tenancy.ts`](../src/lib/tenancy.ts), [`src/lib/db.ts`](../src/lib/db.ts) | The scoped client. Adds `workspaceId` to every tenant query, verifies it on creates, allows plain-column writes only, and throws on raw SQL, global models and unknown operations. The only database handle application code gets. |
 | `systemDb` | [`src/lib/db.ts`](../src/lib/db.ts) | The unscoped client. Importable only from an exact allowlist (the auth session and actions, `auditPlatform`, the workspace context and bootstrap, `system-queries.ts`, the health probe, and the `/auth/signout-stale` route), enforced by `src/lib/import-guard.test.ts`. |
 | `getWorkspaceContext()` / `requireWorkspace()` / `requireWorkspacePage()` | [`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts) | Per request: the user, their workspace, role, plan and `db` (the scoped client). No valid context: actions throw `UNAUTHORIZED`; pages go through `/auth/signout-stale` (`STALE_SESSION_PATH`), which clears the session cookie and lands on `/login`. A direct `/login` redirect would loop, because the proxy sends any cookie-holder from `/login` back to `/dashboard`. A session with no membership joins the one workspace in `single` mode, and is signed out the same way in `multi` mode. |
@@ -1664,7 +1672,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `VERCEL_PROJECT_PRODUCTION_URL` | [`src/app/layout.tsx`](../src/app/layout.tsx) | Builds `metadataBase` for OpenGraph URLs; falls back to `http://localhost:3000`. |
 | `DEMO_MODE` | [`src/lib/demo-guard.ts`](../src/lib/demo-guard.ts) | `"true"` locks the demo account out of deleting. Set on Vercel Production **and Preview** — the guard is inert wherever it is unset. **Not documented in `.env.example`.** |
 | `WORKSPACE_MODE` | [`src/lib/workspace-mode.ts`](../src/lib/workspace-mode.ts) | `single` or `multi`. **Required when `NODE_ENV=production`** — unset there fails at boot, so a cloud deployment that lost it can never silently turn single. Unset in development means `single`. Read at runtime, never inlined. The Docker image bakes `single`; `multi` refuses to boot with `DEMO_MODE=true`. |
-| `AI_DAILY_CEILING` | [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | Optional deployment-wide cap on metered AI actions per UTC day, across all workspaces. At the cap an AI action answers in rule-based mode, labelled "daily AI capacity reached". Unset means no ceiling. |
+| `AI_DAILY_CEILING` | [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | Optional deployment-wide cap on metered AI actions per UTC day, across all workspaces. At the cap an AI action answers in rule-based mode, labelled "daily AI capacity reached". Unset or blank means no ceiling; a value that is not a whole number fails closed as 0, so every AI action takes that capacity fallback. |
 | `SEED_DEMO_WORKSPACE` | [`prisma/seed.ts`](../prisma/seed.ts) | `"true"` marks the seeded workspace `isDemo`, the only thing that lets the nightly reset rebuild it. For the public demo's database only; Docker's `SEED_DEMO_DATA` path and CI never set it. |
 | `GEMINI_API_KEY` / `GROQ_API_KEY` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | Set one or both. Gemini is tried first; Groq takes over when Gemini fails (error status, rejected fetch, or an empty reply) — which, with Gemini's small daily quota, is the normal case. |
 | `AI_MODEL` | same | Overrides the default model of the **primary** provider only (defaults: `gemini-3.6-flash`, `openai/gpt-oss-120b`); a fallback always uses its own default, since a Gemini model name sent to Groq is a 404. The Gemini default is the current model by name: the `-latest` rolling alias returned 503 "high demand" for hours on 2026-09-06 while the named model answered, and when a named model retires Google's 404 names its successor. |
