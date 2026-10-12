@@ -114,13 +114,10 @@ const EXPECTED_ACTIONS = [
 ];
 
 const called = new Set<string>();
-// Built from a constant, not a "src/"-headed template: Task 19's caseKeyLiterals reads any template
-// that starts with "src/" and contains "#" as a dynamic cross-tenant case key and fails the run.
-const ACTIONS_DIR = "src/server/actions/";
 
 /** Calls one export of src/server/actions/<module>.ts, and records that it was called. */
 function call<T>(module: string, name: string, act: () => Promise<T>): Promise<T> {
-  called.add(`${ACTIONS_DIR}${module}.ts#${name}`);
+  called.add(`src/server/actions/${module}.ts#${name}`);
   return act();
 }
 

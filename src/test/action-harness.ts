@@ -66,16 +66,17 @@ export type TestUser = {
  * call `applyRemaining()` to run the later migrations exactly as every runner
  * runs them (spec §9.8). The generated client only knows the current schema,
  * so use `prisma` once every migration has been applied.
+ *
+ * `tempPrefix` names the temp directory (default "nexus-actions-"), so a file
+ * whose databases can outlive their run can sweep its own leftovers.
  */
-export function createTestDatabase(opts: { through?: string } = {}): {
+export function createTestDatabase(opts: { through?: string; tempPrefix?: string } = {}): {
   prisma: PrismaClient;
   file: string;
   applyRemaining(): void;
   destroy(): Promise<void>;
 } {
-  const dir = mkdtempSync(join(tmpdir(), "nexus-actions-"));
-  const file = join(dir, "test.db");
-
+  // `through` is checked before the temp directory exists, so a bad name leaves nothing behind.
   const names = readdirSync(MIGRATIONS_DIR)
     .filter((n) => statSync(join(MIGRATIONS_DIR, n)).isDirectory())
     .sort();
@@ -87,6 +88,9 @@ export function createTestDatabase(opts: { through?: string } = {}): {
     }
     cut = at + 1;
   }
+
+  const dir = mkdtempSync(join(tmpdir(), opts.tempPrefix ?? "nexus-actions-"));
+  const file = join(dir, "test.db");
   let pending = names.slice(cut);
   applyMigrations(file, names.slice(0, cut));
 

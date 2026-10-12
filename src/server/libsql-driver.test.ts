@@ -23,6 +23,9 @@
  * spans two clients, so SQLite's own locking decides the race.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PrismaLibSql } from "@prisma/adapter-libsql";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@/generated/prisma/client";
@@ -31,11 +34,38 @@ import { createTestDatabase, formData } from "@/test/action-harness";
 /** libSQL parses `file:` URLs itself: forward slashes keep a Windows drive path from reading as a URL authority. */
 const fileUrl = (file: string) => `file:${file.split("\\").join("/")}`;
 
-const harness = createTestDatabase();
+/**
+ * On Windows a closed libSQL connection keeps its file locked until the closed
+ * Database object is garbage-collected, so destroyHarness often cannot remove
+ * this file's databases. They get their own temp-dir prefix, and each run
+ * first removes the ones earlier runs left, once they are an hour old (a
+ * younger one may belong to a run still in progress). Best effort: any error
+ * is ignored. Linux (CI) unlinks open files, so nothing is left there.
+ */
+const LIBSQL_TEMP_PREFIX = "nexus-libsql-";
+function sweepStaleLibsqlDirs() {
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  try {
+    for (const name of readdirSync(tmpdir())) {
+      if (!name.startsWith(LIBSQL_TEMP_PREFIX)) continue;
+      const dir = join(tmpdir(), name);
+      try {
+        if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Still locked, or already gone: the next run tries again.
+      }
+    }
+  } catch {
+    // An unreadable temp directory only means nothing is swept.
+  }
+}
+sweepStaleLibsqlDirs();
+
+const harness = createTestDatabase({ tempPrefix: LIBSQL_TEMP_PREFIX });
 const libsql = new PrismaClient({ adapter: new PrismaLibSql({ url: fileUrl(harness.file) }) });
 
 // A fresh install for the sign-up race, and two clients of its own on it.
-const fresh = createTestDatabase();
+const fresh = createTestDatabase({ tempPrefix: LIBSQL_TEMP_PREFIX });
 const racers = [
   new PrismaClient({ adapter: new PrismaLibSql({ url: fileUrl(fresh.file) }) }),
   new PrismaClient({ adapter: new PrismaLibSql({ url: fileUrl(fresh.file) }) }),
@@ -106,22 +136,17 @@ const { createContact, deleteContact } = await import("@/server/actions/contacts
 const { createDeal, moveDeal } = await import("@/server/actions/deals");
 
 /**
- * Removes a harness database. On Windows a libSQL file can stay locked for a
- * moment after its client closed, and the delete fails with EPERM, so that one
- * error is retried a few times and then let go. This is clean-up only: every
- * other error, and everything in a test body, still fails.
+ * Removes a harness database. On Windows the file stays locked after its
+ * libSQL client closed, until that connection is garbage-collected, so waiting
+ * and retrying does not help: an EPERM leaves the directory for the next run's
+ * sweep (sweepStaleLibsqlDirs). This is clean-up only: every other error, and
+ * everything in a test body, still fails.
  */
 async function destroyHarness(database: { destroy(): Promise<void> }) {
-  const attempts = 5;
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await database.destroy();
-      return;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      if (attempt === attempts) return;
-      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
-    }
+  try {
+    await database.destroy();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
   }
 }
 

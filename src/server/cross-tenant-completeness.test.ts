@@ -7,8 +7,8 @@
  * trusting a list. It enumerates every value export of every module with a
  * top-level "use server" directive under src/, and of every loader under
  * src/server/queries/, and requires each one to be either named by a case key
- * — a string literal "src/<module>#<export>" in some *.test.ts file, which is
- * what registerCrossTenantCase() is called with — or listed in
+ * — the string literal "src/<module>#<export>" that a registerCrossTenantCase()
+ * call in some *.test.ts file passes as its first argument — or listed in
  * CROSS_TENANT_EXEMPT as never touching the database.
  *
  * The keys are read statically because vitest isolates test files: the
@@ -92,6 +92,33 @@ describe("cross-tenant suite completeness", () => {
       missing,
       "Add a cross-tenant case (registerCrossTenantCase), or, for an export that never touches the database, a CROSS_TENANT_EXEMPT entry",
     ).toEqual([]);
+  });
+
+  it("reads a key only from registerCrossTenantCase's first argument", () => {
+    const scan = (text: string) => caseKeyLiterals(parseSource("src/server/actions/example.test.ts", text));
+
+    expect(scan('registerCrossTenantCase("src/server/actions/x.ts#a");')).toEqual({
+      keys: ["src/server/actions/x.ts#a"],
+      dynamic: [],
+    });
+    // A key-shaped literal anywhere else (a test title, a constant, a second
+    // argument) registers nothing.
+    expect(
+      scan(
+        [
+          'it("covers src/server/actions/x.ts#b", () => {});',
+          'const key = "src/server/actions/x.ts#c";',
+          'registerCrossTenantCase("src/server/actions/x.ts#d", "src/server/actions/x.ts#e");',
+        ].join("\n"),
+      ),
+    ).toEqual({ keys: ["src/server/actions/x.ts#d"], dynamic: [] });
+  });
+
+  it("flags a template key, and ignores templates that are not keys", () => {
+    const scan = (text: string) => caseKeyLiterals(parseSource("src/server/actions/example.test.ts", text));
+
+    expect(scan("registerCrossTenantCase(`src/server/actions/${name}.ts#a`);")).toEqual({ keys: [], dynamic: [1] });
+    expect(scan("called.add(`src/server/actions/${name}.ts#${action}`);")).toEqual({ keys: [], dynamic: [] });
   });
 
   it("names no export that does not exist, in a case or an exemption", () => {

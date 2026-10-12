@@ -248,20 +248,28 @@ export function valueExports(sf: ts.SourceFile): string[] {
 }
 
 /**
- * Case keys written as string literals in a file, and the lines of template
- * literals that build a key at run time (which a static scan cannot read).
- * A literal is a key when it matches CASE_KEY — the same regex
- * registerCrossTenantCase() validates with, imported from cross-tenant.ts, so
- * the scan and the registration can never disagree on what a key is.
+ * The case keys a file registers: the first argument of each
+ * `registerCrossTenantCase(…)` call, when it is a string literal matching
+ * CASE_KEY — the same regex registerCrossTenantCase() validates with, imported
+ * from cross-tenant.ts, so the scan and the registration can never disagree on
+ * what a key is. A key-shaped literal anywhere else (a test title, a constant)
+ * registers nothing. `dynamic` lists the lines where that first argument is a
+ * template with substitutions, which a static scan cannot read. Any other
+ * argument (a variable, a concatenation) is not read either, so an export
+ * registered only that way shows up as missing.
  */
 export function caseKeyLiterals(sf: ts.SourceFile): { keys: string[]; dynamic: number[] } {
   const keys: string[] = [];
   const dynamic: number[] = [];
   const visit = (node: ts.Node) => {
-    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && CASE_KEY.test(node.text)) {
-      keys.push(node.text);
-    } else if (ts.isTemplateExpression(node) && node.head.text.startsWith("src/") && node.getText(sf).includes("#")) {
-      dynamic.push(lineOf(sf, node));
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "registerCrossTenantCase"
+    ) {
+      const [key] = node.arguments;
+      if (key && ts.isStringLiteralLike(key) && CASE_KEY.test(key.text)) keys.push(key.text);
+      else if (key && ts.isTemplateExpression(key)) dynamic.push(lineOf(sf, key));
     }
     ts.forEachChild(node, visit);
   };

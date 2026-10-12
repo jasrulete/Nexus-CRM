@@ -94,9 +94,6 @@ describe("snapshotWorkspace", () => {
 });
 
 describe("the case registry", () => {
-  // Task 19's scan collects every literal in a test file that matches CASE_KEY.
-  // So these name real exports (a missing one is flagged as stale), and neither
-  // is a server action or a loader (a key here would count as its case).
   it.each([
     "src/lib/workspace-mode.ts#workspaceMode",
     // Route groups, dynamic segments and .tsx are part of the shared pattern.

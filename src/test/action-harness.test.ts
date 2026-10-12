@@ -4,11 +4,18 @@
  * SQL (spec §9.8), and applyRemaining() then runs the later migrations the way
  * every runner runs them.
  */
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import Database from "better-sqlite3";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_WORKSPACE_ID } from "@/lib/workspace-bootstrap";
 import { createTestDatabase, makeUser, makeWorkspace, truncateAll } from "./action-harness";
+
+// The real node:fs, with mkdtempSync observable: whether a call made a temp
+// directory cannot be read back from %TEMP% while other test files run.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, mkdtempSync: vi.fn(actual.mkdtempSync) };
+});
 
 // Chosen to be independent of M1: the migration after it adds Deal.baseValue.
 const FK_INDEXES = "20260725150849_add_deal_task_fk_indexes";
@@ -67,8 +74,11 @@ describe("createTestDatabase({ through })", () => {
     }
   });
 
-  it("refuses a migration name that does not exist", () => {
+  it("refuses a migration name that does not exist, before making a temp directory", () => {
+    vi.mocked(mkdtempSync).mockClear();
+
     expect(() => createTestDatabase({ through: "nope" })).toThrow('createTestDatabase: no migration directory named "nope"');
+    expect(mkdtempSync).not.toHaveBeenCalled();
   });
 
   it("still builds the full schema by default", async () => {

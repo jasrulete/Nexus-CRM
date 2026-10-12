@@ -148,8 +148,8 @@ export const crossTenantCases = new Set<string>();
 /**
  * The shape of a case key: "src/", a module path (route groups, dynamic
  * segments and @slots allowed; .ts or .tsx), "#", and an export name. Task 19's
- * completeness scanner matches string literals in test sources against this
- * same pattern.
+ * completeness scanner matches the first argument of each
+ * registerCrossTenantCase() call in the test sources against this same pattern.
  */
 export const CASE_KEY = /^src\/[\w./()[\]@-]+\.tsx?#[A-Za-z_$][\w$]*$/;
 
