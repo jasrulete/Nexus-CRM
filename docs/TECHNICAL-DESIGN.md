@@ -40,13 +40,14 @@ Three constraints shape almost every decision in the codebase:
    `RESEND_API_KEY` means "Send to yourself" logs the draft instead of mailing
    it (`src/lib/email.ts`). `npm install && npx prisma migrate dev && npm run
    dev` is the whole setup.
-3. **It is single-tenant by design.** There is no `Workspace` or `Organization`
-   model in `prisma/schema.prisma`. Every user who registers joins *the same*
-   shared dataset and sees every company, contact and deal in it. Ownership
-   columns exist (`ownerId`, `assigneeId`, `userId`) and govern who may *change*
-   a row, not who may *see* it. This is a showcase workspace, not a product with
-   customers, and `SAAS-READINESS.md` §6 names multi-tenancy as the single
-   biggest architectural gap and the hardest thing to retrofit.
+3. **One workspace per deployment, or one per sign-up.** Every CRM row carries a
+   `workspaceId`, and application code only ever holds a client scoped to the
+   signed-in user's workspace (ADR-013). `WORKSPACE_MODE=single` — self-hosting
+   and the public demo — keeps exactly one workspace that every registrant joins,
+   so those deployments behave as they always have. `WORKSPACE_MODE=multi` — the
+   hosted cloud, on its own deployment and database — gives every sign-up a
+   private one. Inside a workspace, ownership columns (`ownerId`, `assigneeId`,
+   `userId`) govern who may *change* a row, not who may *see* it.
 
 A production deployment is publicly linked with published demo credentials
 (`README.md`), which is why `DEMO_MODE` and the nightly reset exist at all — see
@@ -69,8 +70,8 @@ A production deployment is publicly linked with published demo credentials
 | PDF text | `unpdf` | Targets serverless runtimes; `pdf-parse` assumes a filesystem |
 
 Verified state of the tree at the time of writing: typecheck passes, ESLint
-passes, 461 unit tests across 33 files pass, the production build succeeds, and
-45 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
+passes, 1189 unit tests across 67 files pass, the production build succeeds, and
+48 Playwright e2e tests pass against the Docker standalone artifact. `npm audit`
 reports 3 high advisories, all three inside the `prisma` CLI — a devDependency,
 so none of it ships to production. npm's only offered fix is a downgrade to
 Prisma 6, which is rejected.
@@ -89,7 +90,7 @@ flowchart TB
 
     subgraph gh["GitHub"]
         REPO["Repo: jasrulete/Nexus-CRM"]
-        CI["CI workflow<br/>lint, typecheck, 461 unit tests,<br/>eval harness, build, 45 e2e vs standalone"]
+        CI["CI workflow<br/>lint, typecheck, 1189 unit tests,<br/>eval harness, build, 48 e2e vs standalone"]
         RESET["reset-demo workflow<br/>cron 19:00 UTC"]
         EVAL["eval-live workflow<br/>cron 08:30 UTC (runs ~13:00), real providers"]
         REPO --> CI
@@ -414,9 +415,11 @@ also means every expired session row persists indefinitely.
 - **Which IP header is trusted.** `clientIp()` prefers `x-vercel-forwarded-for`
   then `x-real-ip` — both platform-set — and only falls back to
   `x-forwarded-for`, which any client can forge, for self-hosting and local dev.
-- **First account becomes ADMIN.** `register` checks `prisma.user.count() === 0`.
-  There is no admin-promotion UI, so on a fresh instance this is the only way to
-  get an admin.
+- **The first account owns the workspace.** In `single` mode `register` joins
+  every registrant to the one workspace inside its transaction, and the first
+  member becomes `OWNER`; in `multi` mode every sign-up creates its own workspace
+  and owns it. There is no promotion UI, so on a fresh install this is the only
+  way to get an owner.
 
 Registration is open. Anyone can create a MEMBER account on the live demo. That
 is a deliberate demo affordance and the reason for the Settings email-visibility
@@ -428,16 +431,22 @@ fix described in §6.
 
 ### The model in one function
 
-`src/lib/authz.ts` is 23 lines:
+`src/lib/authz.ts`:
 
 ```ts
-export function canMutate(ownerId: string, user: { id: string; role: string }): boolean {
-  return ownerId === user.id || user.role === "ADMIN";
+export function isWorkspaceAdmin(role: string): boolean {
+  return role === "OWNER" || role === "ADMIN";
+}
+export function canMutate(ownerId: string, actor: { id: string; role: string }): boolean {
+  return ownerId === actor.id || isWorkspaceAdmin(actor.role);
 }
 export const NOT_YOURS = "You can only edit records you own.";
 ```
 
-Roles are `ADMIN` and `MEMBER`, stored as a string on `User.role`.
+Roles are `OWNER`, `ADMIN` and `MEMBER`, stored on `Membership.role`; the actor's role
+comes from `getWorkspaceContext()`. `User.role` is deprecated and unused. Every role
+check in the app goes through these two functions, so a global admin's reach ends at
+their own workspace.
 
 The file's doc comment records why it exists, and it is the most instructive
 comment in the repository: the five delete actions each carried their own copy of
@@ -494,9 +503,12 @@ see the constraint behind it.
 Two reads are role-gated rather than ownership-gated, both on
 `src/app/(app)/settings/page.tsx`:
 
-- The **audit log** card queries only when `isAdmin`.
-- The **team roster** shows every member's name and role to everyone, but the
-  email address only to admins and to the user's own row. The comment explains
+- The **audit log** card queries only when `isWorkspaceAdmin`, through the scoped
+  client, so it shows the workspace's events and never the platform's sign-in
+  events (which carry no workspace).
+- The **team roster** lists the workspace's members by name and role to everyone,
+  but the email address only to workspace admins and to the user's own row, and
+  never to the locked demo account. The comment explains
   the threat: registration is open, so without this a throwaway MEMBER account
   could read every address that has ever signed up. An e2e test registers a fresh
   MEMBER and asserts it.
@@ -519,7 +531,9 @@ module into it would pull it into the browser bundle.
 
 ### Schema shape
 
-`prisma/schema.prisma` — eight models. Two structural facts drive most of the
+`prisma/schema.prisma` — eleven models (eight until the 2026-10-11 tenancy
+migration M1 added `Workspace`, `Membership` and `AiUsage`). Two structural facts
+drive most of the
 design:
 
 **SQLite has no enum type.** The header comment says so. `Deal.stage`,
@@ -529,7 +543,8 @@ zod `z.enum(...)` in `src/lib/validation.ts` built from the tuples in
 `src/lib/constants.ts`. There are no CHECK constraints. Seed and reset scripts
 write these values directly and bypass zod entirely.
 
-**Every CRM row hangs off a `User`, and nothing hangs off a workspace.**
+**Every CRM row hangs off a `User` and belongs to a workspace** (`workspaceId`; see
+ADR-013 and DATA-MODEL § Workspaces and tenancy).
 `Company`, `Contact` and `Deal` have `ownerId` with `onDelete: Cascade`;
 `Contact.companyId` and `Deal.contactId`/`companyId` use `onDelete: SetNull` so
 deleting a company does not take its contacts with it. `AuditLog.userId` is
@@ -596,11 +611,23 @@ is, and the non-production one is a paragraph of instructions: give previews a
 Preview environment only, because Vercel applies variables to every environment
 unless you scope them.
 
-### The client singleton — `src/lib/db.ts`
+### The clients — `src/lib/db.ts`
 
-Eleven lines. `new PrismaClient({ adapter: createDbAdapter() })`, stashed on
+`systemDb` is `new PrismaClient({ adapter: createDbAdapter() })`, stashed on
 `globalThis` outside production so hot reload does not open a new connection pool
-on every edit.
+on every edit. It is unscoped, and only an exact allowlist of files may import it:
+the auth code, the workspace context and bootstrap, `system-queries.ts` and the
+health probe (enforced by `src/lib/import-guard.test.ts`). Everything else uses
+`forWorkspace(workspaceId)` — `scopeToWorkspace(systemDb, workspaceId)` — which it
+receives as `ctx.db` from `getWorkspaceContext()`. See ADR-013.
+
+On Turso the driver adapter holds one lock for every query and every interactive
+transaction until the transaction commits, so inside a `$transaction` callback
+every query must go through that callback's `tx`; a query through any other
+client waits for the transaction's own lock until it times out.
+`src/server/libsql-driver.test.ts` runs the transactional paths on that driver:
+both sign-up modes, the create actions, `deleteContact`, `deleteCompany` and
+`moveDeal`.
 
 The adapter is built **at module scope**. That is why a misconfigured Vercel
 environment fails at build rather than at the first query — a deliberate
@@ -1135,13 +1162,22 @@ failure. All action `uses:` are pinned to commit SHAs.
 ### The nightly demo reset
 
 `.github/workflows/reset-demo.yml` runs at 19:00 UTC (03:00 Manila) and on
-`workflow_dispatch`. `scripts/reset-demo.ts` deletes every CRM row in
-foreign-key-safe order — activities, tasks, deals, contacts, companies — then
-re-seeds. `User` and `Session` are never touched, because production holds real
-logins alongside the demo account.
+`workflow_dispatch`. `scripts/reset-demo.ts` is a thin wrapper over
+`src/lib/demo-reset.ts`: `assertResettable()` first, then `resetDemoWorkspace()`,
+which deletes the demo workspace's CRM rows (and any an older build left with no
+workspace) in foreign-key-safe order — activities, tasks, deals, contacts,
+companies — then re-seeds. `User` and `Session` are never touched, because
+production holds real logins alongside the demo account.
 
-Three refinements worth naming:
+Four refinements worth naming:
 
+- **It refuses unless the database is the demo.** `assertResettable()` exits
+  non-zero, before any write, unless the database holds exactly one workspace and
+  its `isDemo` is true. No app code reads `isDemo`, the reset never writes it, and
+  the seed sets it only with `SEED_DEMO_WORKSPACE=true`; on the existing demo
+  database a person runs `scripts/mark-demo-workspace.ts` once. So a self-hosted
+  install, or a secret pointed at the wrong database, cannot be wiped by this
+  workflow.
 - **The audit log is pruned, not emptied.** It used to be
   `auditLog.deleteMany()` with no filter, which gave the "full audit trail" the
   Settings page advertises a maximum retention of 24 hours, and destroyed real
@@ -1160,11 +1196,12 @@ Three refinements worth naming:
   runs before the check, so this should be impossible — but a reset that silently
   emptied `User` would lock everyone out, so it throws instead.
 
-`prisma/seed-data.ts` exports `ensureDemoUser()`, which **pins** the demo
-account's role to `ADMIN` rather than inferring it from `userCount === 0`. The
-original inference meant that re-seeding alongside other accounts would quietly
-bring the published demo back as a `MEMBER` — a latent bug that only became
-routine once the nightly reset existed.
+The demo account's role is **pinned**, not inferred: the seed gives it an `ADMIN`
+membership and the reset re-upserts that membership as `ADMIN`. Inferring it from
+"is this the first user" meant that re-seeding alongside other accounts would
+quietly bring the published demo back as a `MEMBER` — a latent bug that only
+became routine once the nightly reset existed. Since 2026-10-11 the role lives on
+`Membership`, and `ensureDemoUser()` no longer writes the deprecated `User.role`.
 
 ---
 
@@ -1172,13 +1209,16 @@ routine once the nightly reset existed.
 
 | Suite | Runner | Scope |
 |---|---|---|
-| 461 unit tests, 33 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
-| 45 e2e tests, 4 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette) |
+| 1189 unit tests, 67 files | vitest, `environment: "node"` | Pure server modules (heuristics, provider, prompt, label, eval verdict rules, authz, db-adapter, demo-guard, email, file-context, rate-limit, reset-guard, sentry-options, utils, validation, money, fx, months, search, concurrency, migration-ledger) and the server actions + seed against a real migrations-built SQLite (`src/test/action-harness.ts`) |
+| 48 e2e tests, 5 files | Playwright, chromium | `auth.spec.ts`, `crm.spec.ts`, `marketing.spec.ts`, `multi-isolation.spec.ts`, `accessibility.spec.ts` (axe scans of every page, both themes, an open dialog, the open search palette). `multi-isolation.spec.ts` is the 3-test `multi` project on a second server in `WORKSPACE_MODE=multi` with its own database: two sign-ups that cannot read each other's workspace, plus a stale-session case for a page load and one for a submitted server action. Both servers blank `ALLOW_REMOTE_DB` and the Turso variables, and each sign-up context sends its own client IP. It runs in CI, and locally with `E2E_MULTI=1` after a build |
 | AI evaluation harness, 71 checks | vitest, `vitest.eval.config.ts`, `npm run eval` | `src/eval/ai.eval.test.ts` runs 13 fixture contacts (`src/eval/fixtures/contacts.json`, 3 of them adversarial) through the real score / summarise / draft actions on the migrations-built SQLite. Property assertions, not golden strings. Keyless by default (the real chain reports `not_configured`, the heuristic path runs); `EVAL_LIVE=1` calls the real providers, nightly via `eval-live.yml` as one leg per provider with only that provider's key in scope |
 
 `vitest.config.ts` aliases `server-only` to `src/test/server-only-stub.ts`,
 because that package throws outside an RSC bundler and every interesting module
-here imports it.
+here imports it. It also sets `testTimeout` and `hookTimeout` to 30 s: files run
+in parallel and several tests do real work (password hashing, migrations replayed
+into fresh databases), which takes seconds under load and trips the 5 s and 10 s
+defaults intermittently. It is a hang guard, not a speed target.
 
 Playwright runs `fullyParallel: false` with one worker, because the suite shares
 one seeded SQLite database. Its `webServer` config differs by mode on purpose,
@@ -1401,6 +1441,9 @@ now literally true.
 
 ### ADR-009 — One shared workspace, no tenant model
 
+**Status: superseded 2026-10-11 by ADR-013.** Kept for its reasoning; a `single`-mode
+deployment still behaves exactly as described here.
+
 **Context.** A CRM that sells to companies needs tenancy. This one is a portfolio
 demo that a stranger should be able to open and use in 30 seconds.
 
@@ -1481,6 +1524,62 @@ for forms, throw for deletes, `{ ok: false }` for the kanban — and that is by
 design so the user never loses typed input. The remaining risk is unchanged: a
 new action still has to remember to call it. There is no framework-level
 enforcement, only a shared helper and a unit test.
+
+### ADR-013 — Shared-database tenancy behind a fail-closed scoped client, in two deployment modes
+
+**Status.** Accepted 2026-10-11. Supersedes ADR-009.
+
+**Context.** The owner decided to make Nexus sellable as open-core: self-hosting
+stays free and MIT, and a hosted cloud plan is sold. Paying workspaces must never
+see each other's data. The public demo — its URL is in job applications — and
+every self-hosted install must keep working as before. Spec:
+`docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md`.
+
+**Options.** (a) A database per workspace. (b) A deployment per customer. (c) One
+shared database with `workspaceId` on every tenant row, behind layered guards.
+
+**Decision.** (c), in two modes chosen by `WORKSPACE_MODE`, which is required in
+production:
+
+- `single` — self-hosting and the public demo: exactly one workspace, every
+  registrant joins it, plan limits off.
+- `multi` — the hosted cloud, on its own deployment and database: one workspace
+  per sign-up, plan limits enforced.
+
+The guards, outermost first:
+
+1. `scopeToWorkspace` (`src/lib/tenancy.ts`), one top-level `$allOperations` query
+   extension over a model map that covers every model. It ANDs the bound
+   `workspaceId` into every tenant query, verifies it on creates (never stamps
+   it), rejects writes to `workspaceId`, rejects any non-scalar write key so no
+   nested relation write can cross a workspace, and throws on raw SQL, on the
+   global models (`User`, `Session`, `Workspace`) and on any operation it does not
+   know.
+2. Application code gets only that client, as `ctx.db` from
+   `getWorkspaceContext()`. The unscoped `systemDb` may be imported only from an
+   exact allowlist, and only `src/lib/db.ts` and the test harness may construct a
+   client; `src/lib/import-guard.test.ts` enforces both.
+3. Relation ids from forms are resolved through the scoped client before any
+   write, so another workspace's id is "not found".
+4. A cross-tenant suite calls every server action and page loader as workspace A
+   with workspace B's ids, and `src/server/cross-tenant-completeness.test.ts`
+   fails when a new export has no case.
+5. In phase B (M2), the database itself: `NOT NULL`, the `Workspace` relation and,
+   if the spike proved them, same-workspace composite keys.
+
+**Consequences.** It works on Turso and on a SQLite file, so self-hosting is
+unchanged, and one migration serves every deployment. Database-per-workspace was
+rejected because Turso's multi-DB schemas are deprecated and Prisma Migrate cannot
+drive Turso, so every migration would loop over every database by hand, and users
+would need a central database anyway; deployment-per-customer rules out self-serve
+sign-up and the free plan. The known weakness of a shared database is a missed
+filter, which is what guards 1–4 close. The costs: every migration now runs on the
+demo database and on the cloud database; on the production driver every query in
+an interactive transaction must go through that transaction's `tx` (pinned by
+`src/server/libsql-driver.test.ts`); `User.role` stays as a dead column; and nested
+`include`/`select` reads are invisible to the extension, safe only because no write
+can link rows across workspaces — which the cross-tenant suite proves rather than
+assumes.
 
 ---
 
@@ -1620,9 +1719,9 @@ SHA-256 pre-hash.
 **No component tests exist.** `vitest.config.ts` sets `include: ["src/**/*.test.ts"]`
 and `environment: "node"` — so a `.tsx` test would be neither collected by the
 glob nor given a DOM to render into. Everything under `src/components/` is
-covered only by the 45 e2e tests. *Acceptable because* the components are thin
+covered only by the 48 e2e tests. *Acceptable because* the components are thin
 and the e2e suite covers the flows that matter. *The honest framing* is that
-"461 unit tests" means 461 tests of server modules and server actions — none of a rendered component.
+"1189 unit tests" means 1189 tests of server modules and server actions — none of a rendered component.
 
 **The kanban keyboard path — resolved.** `board.tsx` registers a
 `KeyboardSensor` beside the `PointerSensor` with a board-aware coordinate
@@ -1640,7 +1739,7 @@ retuned to pass WCAG AA in both roles.
 matches on `e.message.includes("FORBIDDEN")`, and Next.js redacts errors crossing
 the server/client boundary in production builds. Whether the raw prefix reaches
 the browser from a production build has not been verified — the delete-forbidden
-path is not among the 45 e2e tests, though the *edit*-forbidden path is. If it
+path is not among the 48 e2e tests, though the *edit*-forbidden path is. If it
 does not survive, the user sees "Something went wrong. Try again." instead of the
 specific reason, which is a degradation rather than a security failure.
 

@@ -14,17 +14,23 @@ built behaviour and the stated intent disagree, that disagreement is recorded in
 
 ## 1. What the product is
 
-Nexus CRM is a single-tenant customer relationship manager: contacts, companies,
-deals on a drag-and-drop pipeline, an activity timeline, tasks, and an AI layer
-that scores leads, summarises relationships and drafts follow-up email. It runs
+Nexus CRM is a customer relationship manager: contacts, companies, deals on a
+drag-and-drop pipeline, an activity timeline, tasks, and an AI layer that scores
+leads, summarises relationships and drafts follow-up email. The public demo runs
 end to end on free infrastructure — Vercel Hobby plus a Turso free-tier SQLite
-database — and can also be self-hosted from a single `docker compose up`.
+database — and the product can also be self-hosted from a single
+`docker compose up`.
 
-"Single tenant" is a design decision, not an omission. There is no `Workspace` or
-`Organization` model in `prisma/schema.prisma`. Every CRM row carries an
-`ownerId` (or `assigneeId`, or `userId`) pointing at a `User`, and every user in
-the database shares one dataset. Ownership controls *who may change a record*, not
-*who may see it*.
+**Amended 2026-10-11** (multi-tenancy core,
+`docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md`). One codebase now
+runs in two deployment modes, chosen by `WORKSPACE_MODE`. In `single` mode —
+self-hosting and the public demo — the database holds exactly one workspace and
+every account that registers joins it, so the product behaves as it always has.
+In `multi` mode — the hosted cloud plan, on its own deployment and database —
+every sign-up gets a private workspace. Every CRM row carries a `workspaceId`, and
+application code only ever reads and writes through a client scoped to the
+signed-in user's workspace. Inside a workspace, ownership still controls *who may
+change a record*, not *who may see it*.
 
 ---
 
@@ -78,8 +84,8 @@ correct to *not* build.
 
 | Non-goal | Why not |
 |---|---|
-| Multi-tenancy | Retrofitting a workspace scope touches every query in the app. It only matters if someone pays, and nobody has. Deferring it costs one honest sentence; building it costs one to two weeks that produce no visible product surface. |
-| Billing | Meaningless without multi-tenancy. Stripe integration in a portfolio app demonstrates reading Stripe's docs, not judgement. |
+| ~~Multi-tenancy~~ — **superseded 2026-10-11** | The owner decided to make Nexus sellable as open-core: self-hosting stays free and MIT, and a hosted cloud plan is sold. A hosted plan needs isolated workspaces, so tenancy is now built (spec 1, `docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md`). The original reasoning was right for a portfolio piece nobody paid for; being sellable is now a goal too. |
+| ~~Billing~~ — **superseded 2026-10-11** | Same decision. A free plan and one paid plan, enforced per workspace (`src/lib/plans.ts`); the provider and its webhooks are spec 3. Stripe does not serve Philippines-based sellers, so it is Paddle first and Polar as runner-up. |
 | Per-record read scoping | Reads are workspace-wide **by design** — the shared demo has to show a populated pipeline to whoever signs in. A per-user view would show a new visitor an empty product. |
 | Email delivery to contacts | Published demo credentials + outbound email = spam relay, burned sending domain, terminated provider account. The recipient is hard-coded to the signed-in user. |
 | Persistent file attachments | Uploads are safe here *because nothing is stored*. Persisting them needs blob storage, retention rules, and the nightly reset extended to purge them — a design pass, not an increment (`src/lib/file-context.ts` header comment). |
@@ -90,7 +96,9 @@ correct to *not* build.
 
 ## 5. Personas and roles
 
-The product recognises three kinds of visitor and exactly two database roles.
+The product recognises three kinds of visitor and three workspace roles — `OWNER`,
+`ADMIN` and `MEMBER` — held on each account's `Membership` row (amended 2026-10-11;
+`User.role` is deprecated and unused).
 
 ### 5.1 Anonymous visitor
 
@@ -108,33 +116,42 @@ layout.
 
 ### 5.2 Demo visitor (signed in as `demo@nexuscrm.dev`)
 
-An `ADMIN` in every respect except deletion. The role is pinned, not inferred:
-`ensureDemoUser()` in `prisma/seed-data.ts` upserts with `update: { role: "ADMIN" }`
-because the original seed assigned admin only to the first-created user, and a
-re-seed alongside other accounts would have silently downgraded the published demo
-to `MEMBER`.
+An `ADMIN` of the demo deployment's one workspace in every respect except two:
+deletion (§8.2), and reading other members' email addresses (J3). The role is
+pinned, not inferred: `prisma/seed.ts` gives `demo@nexuscrm.dev` an `ADMIN`
+membership and the nightly reset re-upserts it as `ADMIN`, because the original
+seed assigned admin only to the first-created user, and a re-seed alongside other
+accounts would have silently downgraded the published demo to `MEMBER`. (Amended
+2026-10-11: the role moved from `User.role` to the membership.)
 
-### 5.3 ADMIN
+### 5.3 OWNER and ADMIN
 
-The first account ever registered becomes admin — `register()` in
-`src/lib/auth/actions.ts` reads `userCount === 0 ? "ADMIN" : "MEMBER"`. Admins
-additionally:
+Amended 2026-10-11. In `single` mode the first account registered becomes the
+workspace `OWNER` and every later one a `MEMBER` of the same workspace; in `multi`
+mode every sign-up creates its own workspace and is its `OWNER` (`register()` in
+`src/lib/auth/actions.ts`). Accounts that were `ADMIN` before the change are still
+`ADMIN`: the migration copied each role onto its membership and promoted nobody.
+In this release `OWNER` and `ADMIN` have the same powers (`isWorkspaceAdmin()` in
+`src/lib/authz.ts`). Workspace admins additionally:
 
-- pass `canMutate()` for **any** record regardless of owner (`src/lib/authz.ts`);
-- see every team member's email address on `/settings`;
-- see the audit log card on `/settings` (latest 25 events).
+- pass `canMutate()` for **any** record in their own workspace, regardless of owner;
+- see their workspace members' email addresses on `/settings` — except the locked
+  demo account under `DEMO_MODE`;
+- see the audit log card on `/settings` (the latest 25 events of their workspace).
 
 There is no UI to promote, demote, invite or remove a user. Role changes require
 direct database access.
 
 ### 5.4 MEMBER
 
-Every subsequent registration. A member can:
+Every later registration in `single` mode (in `multi` mode nobody joins another
+person's workspace until spec 3 adds invites). A member can:
 
 - read every contact, company, deal, activity and task in the workspace;
 - create records of any type;
-- edit and delete **only records they own** — `canMutate(ownerId, user)` returns
-  `ownerId === user.id || user.role === "ADMIN"`;
+- edit and delete **only records they own** — `canMutate(ownerId, actor)` returns
+  `ownerId === actor.id || isWorkspaceAdmin(actor.role)`, with the role read from
+  the actor's membership;
 - see other members' names and roles on `/settings`, but not their email
   addresses, and not the audit log.
 
@@ -155,13 +172,14 @@ value intact.
 
 ## 6. Information model
 
-Eight models in `prisma/schema.prisma`. SQLite has no enum type, so every
+Eleven models in `prisma/schema.prisma` (the 2026-10-11 tenancy migration added the
+last three). SQLite has no enum type, so every
 enum-like column is a `String` validated by zod at the boundary — the constants
 live in `src/lib/constants.ts` and the schemas in `src/lib/validation.ts`.
 
 | Model | Owning field | Notes |
 |---|---|---|
-| `User` | — | `role` is `"ADMIN"` or `"MEMBER"`; `passwordHash` is bcrypt cost 12 |
+| `User` | — | `role` is deprecated and unused since 2026-10-11 (the workspace role is on `Membership`); `passwordHash` is bcrypt cost 12 |
 | `Session` | `userId` | Stores `tokenHash` (SHA-256 of the cookie token), never the token |
 | `Company` | `ownerId` | `size` is one of five buckets |
 | `Contact` | `ownerId` | `status` LEAD/QUALIFIED/CUSTOMER/CHURNED; carries `aiScore`, `aiScoreReason`, `aiScoredAt` |
@@ -169,6 +187,12 @@ live in `src/lib/constants.ts` and the schemas in `src/lib/validation.ts`.
 | `Activity` | `userId` | NOTE/CALL/EMAIL/MEETING; attaches to a contact, deal and/or company |
 | `Task` | `assigneeId` | `done` flag, optional `dueDate`, optional contact/deal link |
 | `AuditLog` | `userId` (nullable) | `entityId` is a plain string with no foreign key — deliberately, so the log outlives the rows it describes |
+| `Workspace` | — | One tenant: `name`, a unique `slug`, `plan` (`FREE`/`PAID`) and `isDemo`, the nightly reset's permission bit. Exactly one in `single` mode |
+| `Membership` | `userId` (unique) | A user's role (`OWNER`/`ADMIN`/`MEMBER`) in one workspace; one workspace per person in this release |
+| `AiUsage` | `workspaceId` | One row per metered AI action, with its outcome and tokens; the monthly allowance and the daily ceiling count these |
+
+Every CRM row — and every audit row except platform sign-in events — also carries a
+`workspaceId`; see `docs/DATA-MODEL.md` § Workspaces and tenancy.
 
 Deleting a `Contact` cascades to its activities and tasks. Deleting a `Company`
 sets its contacts' and deals' `companyId` to null rather than deleting them — the
@@ -189,7 +213,7 @@ it, and acceptance criteria written as behaviour you can observe in a browser.
 | # | Acceptance criterion |
 |---|---|
 | A1 | Registering with a name ≥2 chars, a valid email and a password ≥8 chars creates the account and lands on `/dashboard`, already signed in |
-| A2 | The very first account created in an empty database is `ADMIN`; every later one is `MEMBER` |
+| A2 | In `single` mode the first account becomes the workspace `OWNER` and every later one a `MEMBER` of that same workspace — two first sign-ups racing still produce exactly one workspace and one `OWNER`. In `multi` mode every sign-up creates its own workspace, is its `OWNER`, and never joins an existing one (amended 2026-10-11) |
 | A3 | Registering an email that already exists shows *"This email is already registered"* on the email field |
 | A4 | Signing in with a wrong password shows *"Invalid email or password"* and stays on `/login` |
 | A5 | An unknown email takes the same measurable time as a known one — `login()` runs bcrypt against a constant `DUMMY_HASH` when no user is found |
@@ -361,8 +385,8 @@ The provider choice is an env var, not a code change: `GEMINI_API_KEY` wins,
 |---|---|
 | J1 | Profile card shows the signed-in user's name, email and role badge |
 | J2 | AI provider card names the connected provider, or explains rule-based mode and names the two free keys that would enable a model |
-| J3 | Team card lists everyone by name and role. Email addresses render **only** for admins and for the viewer's own row |
-| J4 | The audit log card renders only for admins, showing the latest 25 events with action code, actor name, a metadata snippet and relative time |
+| J3 | Team card lists the members of the viewer's workspace — nobody else — by name and role. Email addresses render only for workspace admins (`OWNER` or `ADMIN`) and on the viewer's own row; under `DEMO_MODE` the locked demo account is never shown other members' addresses, although it is an `ADMIN` (amended 2026-10-11) |
+| J4 | The audit log card renders only for workspace admins, showing the latest 25 events **of the viewer's workspace** with action code, actor name, a metadata snippet and relative time. Platform events (`auth.register`, `auth.login`, `auth.login_failed`, `auth.logout`) carry no workspace and never appear, so no visitor sees the address a failed sign-in came from (amended 2026-10-11) |
 | J5 | The Security card lists five controls, each of which is true of the code |
 
 There is no profile editing, no password change, no session revocation and no
@@ -416,7 +440,7 @@ is no back door.
 | # | Acceptance criterion |
 |---|---|
 | L1 | Clicking **Try the demo** on `/login` lands on `/dashboard` with a populated workspace: 6 companies, 12 contacts, deals across every stage, tasks and activity history (`prisma/seed-data.ts`) |
-| L2 | The demo account is `ADMIN`, so a visitor sees the audit log and the full team roster — nothing is hidden behind a role they cannot reach |
+| L2 | The demo account holds an `ADMIN` membership, so a visitor sees the workspace's audit log and its team roster by name. Two things stay hidden even from it, because its credentials are published: platform sign-in events (J4) and other members' email addresses (J3) (amended 2026-10-11) |
 | L3 | The demo credentials appear in three places that must agree: the README table, `login-form.tsx`, and `prisma/seed-data.ts` |
 
 ### 8.2 The delete lock
@@ -442,9 +466,9 @@ activities — see §11.
 
 | # | Acceptance criterion |
 |---|---|
-| L8 | Every CRM row is deleted in foreign-key-safe order and re-seeded, so the workspace a visitor sees each morning is the curated one |
+| L8 | The reset first refuses — non-zero exit, nothing written — unless the database holds exactly one workspace and it is marked `isDemo` (`assertResettable` in `src/lib/demo-reset.ts`). Then that workspace's CRM rows, plus any row an older build left with no workspace, are deleted in foreign-key-safe order and re-seeded, so the workspace a visitor sees each morning is the curated one. The reset never writes `isDemo`; only `scripts/mark-demo-workspace.ts`, run by a person, sets it (amended 2026-10-11) |
 | L9 | The `User` and `Session` tables are never touched — production holds real logins alongside the demo account |
-| L10 | `AuditLog` is **pruned, not emptied**: the demo account's own entries go (they describe rows being deleted), everything else ages out on a 30-day window (`auditPruneWhere` in `src/lib/reset-guard.ts`) |
+| L10 | `AuditLog` is **pruned, not emptied**: the demo account's own entries go (they describe rows being deleted), and every other entry — workspace or platform — ages out on a 30-day window (`auditPruneWhere` in `src/lib/reset-guard.ts`, applied by `resetDemoWorkspace` in `src/lib/demo-reset.ts`) |
 | L11 | The script refuses to touch a remote database unless `ALLOW_REMOTE_DB=true`, and throws if that flag is set with no `TURSO_DATABASE_URL` rather than guessing |
 | L12 | If the reset somehow leaves zero users, it throws instead of reporting success |
 
@@ -489,11 +513,15 @@ means per-instance and reset on every deploy — it raises the cost of casual ab
 but is not a real limit. A durable limiter needs Redis/Upstash; Upstash has a free
 tier, so this is a budget-compatible upgrade if it ever matters.
 
-### 9.3 Single tenant, shared workspace
+### 9.3 Workspaces: one per deployment, or one per sign-up
 
-Stated once more because it constrains every feature above: reads are
-workspace-wide, writes are owner-gated, and there is no tenant boundary to enforce.
-Do not describe this product as multi-tenant.
+Amended 2026-10-11. Reads are workspace-wide and writes are owner-gated *inside* a
+workspace, and the workspace is a real boundary: `scopeToWorkspace`
+(`src/lib/tenancy.ts`) scopes every query application code can make and fails
+closed, and a cross-tenant test suite calls every server action and page loader
+with another workspace's ids. Describe a `multi`-mode deployment — the hosted
+cloud — as multi-tenant. The public demo and a self-hosted install run in `single`
+mode: one shared workspace, exactly as before.
 
 ### 9.4 SQLite dialect
 
@@ -512,7 +540,7 @@ instrumentable. These are the observable proxies, all measurable for free.
 |---|---|---|
 | Time from landing page to a populated dashboard | ≤ 2 clicks, no form filling | Manually — it is currently **Try the live demo** → **Try the demo** |
 | Demo integrity each morning | The seeded workspace, unmodified by yesterday's visitors | The reset workflow's run log prints before/after row counts |
-| Build and test health | typecheck, eslint, 461 unit tests (coverage-gated), 45 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
+| Build and test health | typecheck, eslint, 1189 unit tests (coverage-gated), 48 e2e tests incl. axe scans, production build all green | GitHub Actions badge in the README |
 | Deployment-blocking regressions reaching production | Zero | e2e runs against the standalone artifact, the same bundle Docker ships |
 | Claims made in the UI that a reviewer can falsify | Zero | Manual audit; the two found so far (forecasting, SECURITY.md) were fixed by building the missing thing |
 | Cost to run | $0.00/month | Vercel, Turso, Sentry and GitHub billing pages |
@@ -632,8 +660,8 @@ second route.
 ### 11.12 No component tests exist
 
 Vitest is configured for `.ts` only and cannot collect `.tsx` in this setup, so all
-461 unit tests cover library modules and the server actions (against a real
-migrations-built SQLite). Component behaviour is covered exclusively by the 45
+1189 unit tests cover library modules and the server actions (against a real
+migrations-built SQLite). Component behaviour is covered exclusively by the 48
 Playwright tests.
 
 ### 11.13 No backup or restore runbook
@@ -655,14 +683,16 @@ are reachable.
 Restating §4 as an explicit deferral list, since these are the four a reviewer is
 most likely to ask about.
 
-**Multi-tenancy.** The single largest architectural gap and the hardest to
+**Multi-tenancy.** *Superseded 2026-10-11 — see §4; kept for the reasoning.* The
+single largest architectural gap and the hardest to
 retrofit: every query in the app would need a workspace scope. Correctly deferred
 because it delivers no user-visible feature — it is pure infrastructure whose only
 payoff is the ability to sell seats to strangers, which is not this project's goal.
 Doing it *after* billing would be the mistake; doing it never, until someone offers
 money, is the right call.
 
-**Billing.** Meaningless without multi-tenancy, since there is no per-tenant entity
+**Billing.** *Superseded 2026-10-11 — see §4; kept for the reasoning.* Meaningless
+without multi-tenancy, since there is no per-tenant entity
 to attach a subscription to. Also: a Stripe integration in a portfolio app
 demonstrates that you can follow Stripe's quickstart. The weighted forecast and the
 prompt-injection fencing demonstrate more per hour spent.
@@ -737,7 +767,7 @@ Genuine unknowns. Each needs a product decision, not an implementation.
 | `/companies` | companies (+ counts) | `createCompany` |
 | `/companies/[id]` | company + contacts + deals + activities | `updateCompany`, `deleteCompany`, `createActivity` |
 | `/deals` | deals, contacts, companies | `createDeal`, `updateDeal`, `moveDeal`, `deleteDeal` |
-| `/settings` | users, auditLog (admin only) | none |
+| `/settings` | the workspace's memberships (with user names), auditLog (workspace admins only, no platform events) | none |
 | `/api/health` | `SELECT 1` | none |
 | any app route | — | `logout` (via the account menu) |
 | any app route (⌘K palette) | contacts, companies, deals, activities — capped at 5 per type, via `searchRecords` | none |

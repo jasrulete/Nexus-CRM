@@ -5,6 +5,13 @@ what actually runs, in what order, and what a user sees on every branch, includi
 is written against the code on `fix/deployment-hardening` as it exists right now, not as a
 description of intent. Every claim below cites the file it comes from.
 
+> **Superseded in part, 2026-10-11.** This walkthrough predates the multi-tenancy core. Every CRM
+> row now also carries a `workspaceId`. A `single`-mode deployment (self-hosting, the public demo)
+> still behaves as described below — one shared workspace — except that its first registrant
+> becomes the workspace `OWNER` and roles live on `Membership`; a `multi`-mode deployment gives
+> every sign-up a private workspace. For the current rules see `docs/PRD.md` §5 and A2, and
+> `docs/DATA-MODEL.md` § Workspaces and tenancy.
+
 Nexus CRM is single-tenant: one shared workspace, no `Workspace` model. Every `Company`,
 `Contact`, `Deal`, `Task` and `Activity` row carries an `ownerId` (or `assigneeId`/`userId`)
 pointing at a `User`, but there is no tenant boundary above that — every signed-in user, `ADMIN`

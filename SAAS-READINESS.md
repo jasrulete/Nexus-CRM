@@ -17,7 +17,7 @@ Fifth pass: 2026-09-14 — the auth review's one finding (F1): a per-source logi
 a bounded bucket map (§3b).
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **461 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **1189 unit tests, 48 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -357,22 +357,38 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 Ranked by what would actually block charging money. None of these are bugs —
 they're unbuilt product surface.
 
-1. **Multi-tenancy** (~1–2 weeks). There is no `Workspace`/`Organization` model;
-   all users share one dataset. This is the single biggest architectural gap and
-   the hardest to retrofit — every query needs a workspace scope. Do this *before*
-   billing if you ever intend to sell it.
-2. **Billing** (~3–5 days). Stripe Checkout + webhook → subscription status on the
-   workspace + plan gating. Meaningless without #1.
-3. **Transactional email** (~1–2 days). Password reset, invites, verification.
-   Resend/Postmark. Password reset is the most-missed feature in any demo.
+1. **Multi-tenancy** — **in progress since 2026-10-11**
+   ([spec](docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md)). Phase A is
+   built: migration M1 (`Workspace`, `Membership`, `AiUsage`, a nullable `workspaceId` on
+   every tenant table), a fail-closed workspace-scoped client that is the only handle
+   application code gets, `WORKSPACE_MODE=single|multi`, free and paid plan limits, AI
+   metering, and a cross-tenant suite that enumerates every server action and page loader.
+   Its production rollout is [`docs/runbooks/2026-10-tenancy-phase-a.md`](docs/runbooks/2026-10-tenancy-phase-a.md),
+   one owner-approved step at a time. Phase B (M2: `NOT NULL`, the `Workspace` relation,
+   same-workspace composite keys) is a separate, later change.
+2. **Billing** (~3–5 days) — spec 3. A provider-neutral seam with Paddle first and Polar
+   as runner-up: Stripe does not serve Philippines-based sellers. Webhooks flip
+   `Workspace.plan`; the limits it unlocks already live in `src/lib/plans.ts`. Team
+   invites and member management come with it, since only the paid plan has more than
+   one member.
+3. **Transactional email** (~1–2 days) — spec 2. A custom domain, a verified sending
+   domain, email verification and password reset. Invites need it too.
 4. **Legal pages** (~2 hours). Terms + privacy policy, required before taking
    payment or personal data.
 
 ~~Error tracking~~ and ~~onboarding + landing page~~ — the two items this report
 recommended doing first — shipped on 2026-08-01 (§2).
 
-**Recommendation:** the portfolio-value work is done. Only start 1–3 when a real
-user has asked to pay; 4 only matters once you handle real personal data.
+Before the hosted cloud takes its first customer, outside all three specs: the cloud
+deployment itself and its host, written confirmation of Turso's terms for commercial
+use, the W13 prompt-injection nonce fence, an owner for the cloud's audit-log retention
+(the demo's nightly reset prunes the demo's; the cloud has no reset), and a two-sign-up
+isolation smoke test against the deployed cloud.
+
+**Recommendation (superseded 2026-10-11):** this said to start items 1–3 only once a
+real user asked to pay. The owner decided to go ahead regardless, as open-core:
+self-hosting stays free and MIT, and a hosted plan is sold. Item 4 is on the cloud's
+before-launch list, since the cloud will hold real personal data.
 
 ---
 

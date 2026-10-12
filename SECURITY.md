@@ -25,9 +25,15 @@ free, self-hosted, single-instance app.
   redirects — the **authoritative** check is `getCurrentUser()` /
   `requireUser()` which validates the token hash against the database in the
   app layout and inside **every server action**.
-- Roles: `ADMIN` / `MEMBER`. Destructive operations (deleting records you
-  don't own) require ownership or admin.
-- The first registered account becomes admin; later accounts are members.
+- Roles live on the workspace membership: `OWNER` / `ADMIN` / `MEMBER`.
+  Destructive operations (deleting records you don't own) require ownership
+  or a workspace admin (OWNER or ADMIN), and never reach another workspace.
+- Every query application code makes runs through a client scoped to the
+  signed-in user's workspace, which fails closed; an id from another workspace
+  is "not found".
+- In single mode (self-hosting, the public demo) the first registered account
+  becomes the workspace owner and later accounts are members; in multi mode
+  (the hosted cloud) every sign-up owns a private workspace.
 
 ## Input handling
 
