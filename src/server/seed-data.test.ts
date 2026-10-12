@@ -36,9 +36,23 @@ vi.mock("@/lib/auth/session", () => ({
 }));
 
 // No provider: scoreContact takes the same rule-based path the seed must match.
+// It asks generateJson, so that is the entry point faked; generateText is faked
+// too. Both answer what the real chain says with no key: not_configured, nothing
+// spent, nothing billed.
 vi.mock("@/lib/ai/provider", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/provider")>();
-  return { ...actual, aiProviderName: () => null, generateText: async () => null };
+  const noProvider = {
+    ok: false as const,
+    reason: "not_configured" as const,
+    usage: { inputTokens: 0, outputTokens: 0 },
+    billed: false,
+  };
+  return {
+    ...actual,
+    aiProviderName: () => null,
+    generateText: async () => noProvider,
+    generateJson: async () => noProvider,
+  };
 });
 
 const { scoreContact } = await import("./actions/ai");
@@ -52,9 +66,17 @@ afterAll(async () => {
 
 let userSeq = 0;
 beforeEach(async () => {
+  // Belt and braces with the mock above: a key in the shell must not reach a
+  // provider from this file.
+  vi.stubEnv("GEMINI_API_KEY", "");
+  vi.stubEnv("GROQ_API_KEY", "");
   await truncateAll(prisma);
   currentUser = await makeUser(prisma, { email: `demo${++userSeq}@example.com`, name: "Demo" });
   await seedDemoData(prisma, currentUser.id);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 /**
@@ -72,6 +94,30 @@ async function adoptSeededRows(workspaceId: string) {
   await prisma.activity.updateMany({ where, data });
   await prisma.task.updateMany({ where, data });
 }
+
+describe("the AI providers", () => {
+  // scoreContact asks generateJson, so the provider mock above has to cover it:
+  // a key exported in the shell that runs the suite would otherwise send the
+  // seeded data to Google or Groq. The keys here are placeholders and fetch is
+  // scripted to refuse, so nothing leaves the process even if the mock breaks.
+  it("are never reached, even with keys in the environment", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "placeholder-gemini-key");
+    vi.stubEnv("GROQ_API_KEY", "placeholder-groq-key");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("no network in this suite"));
+    await adoptSeededRows(currentUser.workspaceId);
+    const maya = await prisma.contact.findFirstOrThrow({
+      where: { email: "maya.okafor@northwind.io" },
+    });
+
+    const result = await scoreContact(maya.id);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "not_configured" });
+  });
+});
 
 describe("seeded lead scores", () => {
   it("scores most contacts with the rule-based scorer and leaves a few for the demo", async () => {
