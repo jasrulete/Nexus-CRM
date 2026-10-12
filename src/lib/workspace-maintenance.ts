@@ -33,8 +33,10 @@ export function assertScriptMode(
 /**
  * Sets Workspace.isDemo — the nightly reset's permission bit — on the existing
  * demo database, once, by hand (spec §10 step 5). Refuses unless exactly one
- * workspace exists and the published demo account is a member of it, so it
- * cannot mark a self-hoster's workspace, or a cloud database, as resettable.
+ * workspace exists and the published demo account is a member of it. That
+ * guard relies on the demo account not being seeded on real installs: a
+ * self-hosted install seeded with the demo data (the default docker-compose
+ * sets SEED_DEMO_DATA=true) has exactly that shape, and this would mark it.
  */
 export async function markDemoWorkspace(
   db: PrismaClient,
@@ -108,12 +110,15 @@ export async function backfillWorkspace(db: PrismaClient): Promise<BackfillCount
     orderBy: { createdAt: "asc" },
   });
   for (const u of missing) {
-    // Created through an upsert keyed on userId, with an empty update: if the
-    // live app's single-mode context joins the same user at the same moment,
-    // its row stands and this run does not fail on the unique userId.
+    // An upsert keyed on userId whose update is a deliberate no-op (the
+    // column rewritten to its own value), as in ensureMember: any field in
+    // `update` makes Prisma emit a single INSERT ... ON CONFLICT DO UPDATE, so
+    // if the live app's single-mode context joins the same user at the same
+    // moment, its row and role stand and this run does not fail on the unique
+    // userId. `update: {}` would compile to SELECT, INSERT, SELECT, which can.
     await db.membership.upsert({
       where: { userId: u.id },
-      update: {},
+      update: { userId: u.id },
       create: {
         id: `mem_${u.id}`,
         workspaceId,

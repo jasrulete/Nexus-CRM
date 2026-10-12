@@ -5,8 +5,10 @@
  * user's explicit go (docs/runbooks/2026-10-tenancy-phase-a.md, step 5).
  *
  * Refuses unless exactly one workspace exists and demo@nexuscrm.dev is a member
- * of it, so it cannot make a self-hosted or cloud workspace resettable.
- * Refuses to run when WORKSPACE_MODE=multi.
+ * of it. That guard relies on the demo account not being seeded on real
+ * installs: a self-hosted install seeded with the demo data (the default
+ * docker-compose sets SEED_DEMO_DATA=true) has exactly that shape, so run this
+ * only against the demo database. Refuses to run when WORKSPACE_MODE=multi.
  *
  * Local:  npx tsx scripts/mark-demo-workspace.ts
  * Remote: ALLOW_REMOTE_DB=true npx tsx scripts/mark-demo-workspace.ts

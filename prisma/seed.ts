@@ -9,7 +9,8 @@
  * because a cloud database must never receive the published demo login. The
  * seeded workspace is marked as the demo — the nightly reset's permission bit —
  * only when SEED_DEMO_WORKSPACE=true. Docker's SEED_DEMO_DATA boot and CI never
- * set it, so a self-hoster's workspace can never become resettable.
+ * set it, so a self-hoster's workspace can never become resettable by being
+ * seeded (scripts/mark-demo-workspace.ts can still mark one; see its header).
  */
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";

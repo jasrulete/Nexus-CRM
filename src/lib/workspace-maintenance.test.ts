@@ -4,13 +4,15 @@
  * (docs/runbooks/2026-10-tenancy-phase-a.md), so every refusal is pinned here
  * on a throwaway database first.
  */
+import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { PrismaClient } from "@/generated/prisma/client";
 import { createTestDatabase, makeUser, makeWorkspace, truncateAll } from "@/test/action-harness";
 import { DEMO_EMAIL } from "./demo-guard";
 import { DEFAULT_WORKSPACE_ID } from "./workspace-bootstrap";
 import { assertScriptMode, backfillWorkspace, markDemoWorkspace } from "./workspace-maintenance";
 
-const { prisma, destroy } = createTestDatabase();
+const { prisma, file, destroy } = createTestDatabase();
 
 beforeAll(async () => {
   await prisma.$connect();
@@ -186,6 +188,32 @@ describe("backfillWorkspace", () => {
     expect(
       (await prisma.auditLog.findFirstOrThrow({ where: { action: "auth.login" } })).workspaceId,
     ).toBeNull();
+  });
+
+  // Step 8 runs while the phase-A build is live, and its auto-join may write
+  // the same user's membership at the same moment. Only a single
+  // INSERT ... ON CONFLICT survives that; `update: {}` compiles to SELECT,
+  // INSERT, SELECT, whose INSERT fails on the unique userId. The in-process
+  // tests cannot race two instances, so read the SQL.
+  it("writes each missing membership as one INSERT ... ON CONFLICT", async () => {
+    await oldBuildWindow();
+    const queries: string[] = [];
+    const logged = new PrismaClient({
+      adapter: new PrismaBetterSqlite3({ url: `file:${file}` }),
+      log: [{ emit: "event", level: "query" }],
+    });
+    logged.$on("query", (event) => {
+      queries.push(event.query);
+    });
+    try {
+      await backfillWorkspace(logged);
+    } finally {
+      await logged.$disconnect();
+    }
+
+    const membershipWrites = queries.filter((q) => !q.startsWith("SELECT") && q.includes("`Membership`"));
+    expect(membershipWrites).toHaveLength(1);
+    expect(membershipWrites[0]).toMatch(/^INSERT INTO `main`\.`Membership`.* ON CONFLICT/);
   });
 
   it("changes nothing on a second run", async () => {
