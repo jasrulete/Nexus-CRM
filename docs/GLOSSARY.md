@@ -141,28 +141,36 @@ hex colours. Its comment explains why: it *replaces* the root layout, so it cann
 **What it is.** A folder wrapped in parentheses groups routes without contributing a URL
 segment. `(app)/deals/page.tsx` serves `/deals`, not `/app/deals`.
 
-**Here.** The split is the authentication boundary made structural:
+**Here.** The split separates the signed-in app from the sign-in screens:
 
 - **`src/app/(app)/`** — dashboard, contacts, companies, deals, settings. Its layout,
-  [`src/app/(app)/layout.tsx`](../src/app/(app)/layout.tsx), does
-  `const user = await getCurrentUser(); if (!user) redirect("/login");` before rendering
-  anything, then draws the sidebar, theme toggle and user menu. Every authed page inherits
-  that check by *existing in this folder*.
+  [`src/app/(app)/layout.tsx`](../src/app/(app)/layout.tsx), calls
+  `requireWorkspacePage()` to draw the sidebar, theme toggle and user menu, but it is **not
+  the auth gate**: under Next 16 partial rendering a layout does not re-run on client
+  navigation and does not stop a page from rendering. So every page in this folder calls
+  `requireWorkspacePage()` ([`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts))
+  itself and reads only through its loader in `src/server/queries/`;
+  [`src/server/queries/pages.test.ts`](../src/server/queries/pages.test.ts) fails if a page
+  does not.
 - **`src/app/(auth)/`** — login and register. Its layout is the split-screen marketing
   panel with the brand lockup and three feature bullets. No session check, obviously.
 - **`src/app/page.tsx`** — the public marketing page, in neither group, so it gets only the
   root layout.
 
-**Why.** The groups let one auth check cover a whole section of the app without repeating
-it per page, and let the two sections have completely different chrome. Adding a new authed
-page means creating a folder — the gate comes free.
+**Why.** The groups let the two sections have completely different chrome. They do not make
+the auth check free: adding a new authed page means creating a folder *and* calling
+`requireWorkspacePage()` at the top of the page, which `pages.test.ts` checks. A session it
+cannot use (a stale cookie, or in multi mode a user with no membership) is sent to
+`/auth/signout-stale`, which clears the cookie and lands on `/login`.
 
 > **If asked: "isn't a layout check enough on its own?"**
-> No, and the code does not treat it as enough. A layout runs for page navigations; a
-> Server Action invoked directly does not go through it. That is why every action in
-> `src/server/actions/` independently authenticates itself, with `requireWorkspace()` (or
-> `requireUser()` for the two that never touch the database). The layout check is for the
-> *UI*; the action's own check is for the *data*.
+> No, and the code does not rely on one. Under Next 16 partial rendering a layout does not
+> re-run on client navigation and does not stop a page from rendering, so every page checks
+> for itself with `requireWorkspacePage()`. A Server Action invoked directly goes through
+> neither a layout nor a page. That is why every action in `src/server/actions/`
+> independently authenticates itself, with `requireWorkspace()` (or `requireUser()` for the
+> two that never touch the database). The page's check is for what it renders; the
+> action's own check is for what it changes.
 
 #### `proxy.ts` — and why this project has it instead of `middleware.ts`
 
@@ -183,28 +191,35 @@ and redirects on that basis. Signed-out visitors to a private path go to `/login
 visitors who have a cookie and land on `/`, `/login` or `/register` get bounced to
 `/dashboard`.
 
-Two paths are waived before the cookie check, each for a stated reason:
+Four paths are waived before the cookie check, each for a stated reason:
 
 - `/api/health` — *"The liveness probe must answer monitors whether signed in or not."*
 - `/monitoring` — the Sentry browser tunnel. It cannot go in `PUBLIC_PATHS` because that
   branch redirects *authenticated* users to `/dashboard`, and error reports must flow for
   signed-in visitors too.
+- `/opengraph-image` — the landing page's share image. Social scrapers are never signed in,
+  and in `PUBLIC_PATHS` a signed-in fetch would get `/dashboard`'s HTML instead of the PNG.
+- `/auth/signout-stale` — the Route Handler that deletes a session which cannot reach a
+  workspace, then redirects to `/login`. It must run with or without a cookie, and
+  `PUBLIC_PATHS` would bounce the very cookie it exists to clear to `/dashboard`.
 
 The matcher also explicitly exempts `theme-init.js`, with a comment recording the bug that
 caused it: redirecting the theme script to `/login` left signed-out visitors stuck in light
 mode.
 
 **Why optimistic only.** The file's own docblock: *"Real session validation happens
-server-side in layouts and actions (getCurrentUser), so a forged cookie never grants access
-to data."* The proxy runs on a hot path for every request; doing a database round trip there
-would tax every navigation, and the Next.js docs explicitly say Proxy *"is not intended for
-slow data fetching"* and should not be a full authorization solution.
+server-side in every page (requireWorkspacePage) and action (requireWorkspace), both through
+getCurrentUser, so a forged cookie never grants access to data."* The proxy runs on a hot
+path for every request; doing a database round trip there would tax every navigation, and
+the Next.js docs explicitly say Proxy *"is not intended for slow data fetching"* and should
+not be a full authorization solution.
 
 > **If asked: "so anyone can forge a cookie and get in?"**
 > They can get past the *redirect*. They cannot get data. `getCurrentUser()`
 > (`src/lib/auth/session.ts`) hashes the cookie value with SHA-256 and looks it up in the
-> `Session` table; a forged token finds no row, returns `null`, and the `(app)` layout
-> redirects to `/login`. The proxy is a UX optimisation, not a security control — and the
+> `Session` table; a forged token finds no row, returns `null`, and the page's
+> `requireWorkspacePage()` sends the browser through `/auth/signout-stale`, which clears the
+> cookie, to `/login`. The proxy is a UX optimisation, not a security control — and the
 > code says so in a comment, which is the part worth pointing at.
 
 #### Server Actions — and the fact that they are real public HTTP endpoints
@@ -244,7 +259,7 @@ arguments they like, in any order, with no form, from anywhere. Which means:
    `getCurrentUser()` so it can audit who left without throwing when nobody is signed in.
 2. **Every action must authorize itself.** Being signed in is not permission to touch a
    specific row. Every update and delete does
-   `findUnique` → `canMutate(row.ownerId, user)` → refuse. See
+   `findUnique` → `canMutate(row.ownerId, actor)` → refuse. See
    [`src/lib/authz.ts`](../src/lib/authz.ts).
 3. **Every action must validate its arguments.** The `formData.get("value")` that arrives
    is `FormDataEntryValue | null`, not a number, no matter what the `<input type="number">`
@@ -263,10 +278,10 @@ the distinction deliberately. Compare the two refusals in
 
 ```ts
 // updateDeal — runs inside a useActionState form
-if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
+if (!canMutate(existing.ownerId, actor)) return { message: NOT_YOURS };
 
 // deleteDeal — called from a confirm dialog
-if (!canMutate(deal.ownerId, user)) {
+if (!canMutate(deal.ownerId, actor)) {
   throw new Error("FORBIDDEN: only the owner or an admin can delete");
 }
 ```
@@ -484,7 +499,8 @@ the same reason; `deals-ordering.test.ts` proves both under concurrent writes.
 writers for workspace entries. `auditTx(tx, entry)` writes through the caller's transaction
 client, so a mutation and its entry commit or roll back together — a change cannot exist
 without its record, and a failed write propagates. `audit(db, entry)`, where there is no
-business transaction to join (the creates, AI usage), writes through the scoped client,
+business transaction to join (the creates, `updateContact`, `updateCompany`, `toggleTask`
+and AI usage), writes through the scoped client,
 stays best-effort and never throws, but a failed write is reported to Sentry rather than
 swallowed. Platform events (`auth.*`) go through `auditPlatform` instead, with no workspace.
 
@@ -916,7 +932,7 @@ checking that *this* user is allowed to. Change the id in the URL, get someone e
 const id = idSchema.parse(dealId);                       // 1. shape only
 const deal = await prisma.deal.findUnique({ where: { id } });
 if (!deal) return;                                       // 2. exists?
-if (!canMutate(deal.ownerId, user)) { /* refuse */ }     // 3. allowed?
+if (!canMutate(deal.ownerId, actor)) { /* refuse */ }    // 3. allowed?
 ```
 
 Step 1 is *not* the defence and should not be described as one — `idSchema` is
@@ -1550,7 +1566,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | Term | Where | What it means |
 |---|---|---|
 | `getCurrentUser()` | [`src/lib/auth/session.ts`](../src/lib/auth/session.ts) | Reads the `nexus_session` cookie, SHA-256s it, looks up the `Session` row, checks expiry, attempts (ineffectively — see Sliding expiry) to extend the row if under 15 days remain, and returns the user **with `passwordHash` stripped**. Returns `null` when there is no valid session. Wrapped in React `cache()`, so calling it from a layout, a page and an action costs one query. |
-| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. Used only by the two actions that never touch the database and are cross-tenant-exempt, `extractFileText` and `currentAiProvider`. Every other action opens with `requireWorkspace()` (see "Workspaces and tenancy"), which builds on it. |
+| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. Used only by the two actions that never touch the database and are cross-tenant-exempt, `extractFileText` and `currentAiProvider`. Every other action opens with `requireWorkspace()` (see "Workspaces and tenancy"), which builds on `getCurrentUser()` through `getWorkspaceContext()`, not on this. |
 | `createSession(userId)` | same file | Generates 32 random bytes (base64url), stores `sha256(token)` plus a 255-char-truncated user agent, sets the cookie. |
 | `destroySession()` | same file | Deletes the session row by token hash and clears the cookie. `.catch(() => {})` on the delete so signing out never fails on an already-gone row. |
 | `SESSION_DAYS` / `RENEW_BELOW_DAYS` | same file | 30 and 15. Session lifetime, and the threshold below which a request extends the **database row**. Because the cookie is not re-issued, the renewal has no effect and the real lifetime is a fixed 30 days. |
@@ -1606,7 +1622,7 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `generateJson(prompt, { schema, jsonSchema })` | same file | The entry point for a structured reply. Sends the JSON Schema to the vendor (Gemini `responseJsonSchema`, Groq JSON mode), parses the whole reply and validates it with the zod `schema`. Returns `{ ok: true, data, provider }` or `{ ok: false, reason }`, where an unusable reply is `malformed` and moves the chain to the next provider first. Replaced the regex `extractJson` scan. |
 | **heuristic fallback** | [`src/lib/ai/heuristics.ts`](../src/lib/ai/heuristics.ts) | `heuristicLeadScore`, `heuristicEmailDraft`, `heuristicSummary` — deterministic rule-based implementations of all three AI features. Their output is labelled "rule-based" in the UI so a demo never passes rules off as a model. |
 | `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
-| `aiRateLimited(userId)` | same file | 30 AI calls per user per hour. Guards the free-tier quota. |
+| `aiRateLimited(userId)` | same file | 30 AI calls per user per hour, in memory and per instance: burst protection only. The quota controls are the `AiUsage` ledger's monthly allowance and `AI_DAILY_CEILING` ([`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts)). |
 | `splitDraft(draft)` | [`src/lib/email.ts`](../src/lib/email.ts) | Splits `"Subject: x\n\nbody"` — the shape `draftFollowUp` asks the model for — falling back to subject `"Following up"` if the pattern does not match. The model draft is shape-checked upstream by `generateDraft`, so the fallback now covers only the client-sent draft. |
 | `emailConfigured()` | same file | `Boolean(RESEND_API_KEY && EMAIL_FROM)`. When false, `sendFollowUp` takes the simulated path. |
 | **simulated send** | `sendFollowUp` in `src/server/actions/ai.ts` | When `isLockedDemoAccount(user)` or `!emailConfigured()`, no email goes out but the Activity is still written with a `[simulated send]` prefix — so the flow is visible in the demo. |

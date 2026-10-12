@@ -7,8 +7,9 @@ const PUBLIC_PATHS = new Set(["/", "/login", "/register"]);
 
 /**
  * Optimistic auth gate: checks only cookie *presence* for fast redirects.
- * Real session validation happens server-side in layouts and actions
- * (getCurrentUser), so a forged cookie never grants access to data.
+ * Real session validation happens server-side in every page
+ * (requireWorkspacePage) and action (requireWorkspace), both through
+ * getCurrentUser, so a forged cookie never grants access to data.
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

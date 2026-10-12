@@ -24,9 +24,11 @@ free, self-hosted, single-instance app.
 - The proxy (`src/proxy.ts`) only checks cookie **presence** for fast
   redirects — the **authoritative** check is `getCurrentUser()`, which
   validates the token hash against the database; every app page, the app layout and
-  **every server action** reaches it through `requireWorkspacePage()` /
-  `requireWorkspace()` (or `requireUser()` for the two actions that never touch
-  the database), which also resolve the user's workspace from their membership.
+  **every server action** except `login`, `register` and `logout` reaches it through
+  `requireWorkspacePage()` / `requireWorkspace()` (or `requireUser()` for the two
+  actions that never touch the database), which also resolve the user's workspace
+  from their membership. `login` and `register` run before there is a session, and
+  `logout` calls `getCurrentUser()` directly so it can end one without throwing.
 - Roles live on the workspace membership: `OWNER` / `ADMIN` / `MEMBER`.
   Destructive operations (deleting records you don't own) require ownership
   or a workspace admin (OWNER or ADMIN), and never reach another workspace.

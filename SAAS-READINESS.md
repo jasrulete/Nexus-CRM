@@ -252,11 +252,13 @@ trade-off in `SECURITY.md`.
 
 ## 4. Deploy checklist
 
-Every one of these is inert without its environment variable, by design — a
-clone or self-hosted instance is unaffected.
+Every one of these but `WORKSPACE_MODE` is inert without its environment
+variable, by design — a clone or self-hosted instance is unaffected.
+`WORKSPACE_MODE` is the exception: production requires it.
 
 | Variable | Where | Effect |
 |---|---|---|
+| `WORKSPACE_MODE=single` | Vercel (Production **and Preview**) | **Required.** Under `NODE_ENV=production` an unset value fails every request ("WORKSPACE_MODE is required in production"). `single` is the demo's one shared workspace; `multi` gives every sign-up its own. Preview needs it too once it has a database of its own (§4a) |
 | `DEMO_MODE=true` | Vercel (Production **and Preview**) | Demo account cannot delete records. Preview matters: the delete-lock is inert wherever this is unset — see §3a |
 | `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
 | `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |

@@ -628,7 +628,8 @@ No new column was needed. See `src/lib/concurrency.ts`.
 `auditTx(tx, entry)` writes through the caller's transaction client. Every
 delete, and the deal update and move, write their audit entry inside the same
 transaction as the mutation, so a change cannot commit without its record.
-Best-effort entries (`audit(db, entry)` for the creates and AI usage,
+Best-effort entries (`audit(db, entry)` for the creates, `updateContact`,
+`updateCompany`, `toggleTask` and AI usage,
 `auditPlatform` for logins) stay outside but report failures to Sentry instead of
 swallowing them.
 

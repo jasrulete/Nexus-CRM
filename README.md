@@ -69,8 +69,10 @@ npm run db:seed          # demo workspace + login
 npm run dev              # http://localhost:3000
 ```
 
-Sign in with the demo account above, or register — the **first account becomes
-the workspace owner**.
+Sign in with the demo account above, or register. After `db:seed`, the demo
+account is the workspace's admin and everyone who registers joins as a member.
+On an unseeded database (skip `db:seed`), the **first account to register
+becomes the workspace owner**.
 
 ### Enabling real AI (optional, still free)
 

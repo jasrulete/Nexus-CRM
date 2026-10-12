@@ -312,7 +312,8 @@ reset, `tsx` and the Docker esbuild bundle can all import it.
   the reset and `add-demo-member`. All three refuse to run in `multi`.
 - Boot also fails when `WORKSPACE_MODE=multi` and `DEMO_MODE=true`.
 - **In `single` mode, boot and `register()` both refuse if more than one Workspace exists**, or if any
-  workspace has plan `PAID`.
+  workspace has plan `PAID`, or its only workspace is not `DEFAULT_WORKSPACE_ID` (amended 2026-10-12, final
+  review: a multi-mode database holding just its first sign-up's workspace must not take strangers).
 
 | | `single` (self-host, public demo) | `multi` (paid cloud) |
 |---|---|---|
@@ -651,7 +652,7 @@ Self-hosters who upgrade across both releases get M1 and M2 back to back, which 
 | Risk | Handling |
 |---|---|
 | A missed scope leaks data | `scopeToWorkspace` fails closed (raw, global models and unknown operations throw; writes are plain columns only); §9.1 enumerates every action and loader; §9.3 bans raw clients in all of `src/` |
-| The cloud boots without `WORKSPACE_MODE` | Unset fails in production; single mode refuses more than one workspace or any PAID workspace |
+| The cloud boots without `WORKSPACE_MODE` | Unset fails in production; single mode refuses more than one workspace, any PAID workspace, or its only workspace is not `DEFAULT_WORKSPACE_ID` (amended 2026-10-12, final review) |
 | The nightly reset wipes customers | A separate demo DB; `isDemo` set only by a human-run script; the reset never writes it and refuses unless the only workspace is `isDemo` |
 | The production-driver deadlock | The §5.2 rule plus the §9.4 libSQL tests |
 | The old build writes in the expand window | Reset disabled; idempotent catch-up after deploy and again inside M2 |

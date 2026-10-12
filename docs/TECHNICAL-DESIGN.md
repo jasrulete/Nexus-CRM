@@ -195,12 +195,17 @@ sequenceDiagram
 ### Step by step
 
 **1 — The proxy gate (`src/proxy.ts`).**
-`PUBLIC_PATHS` is `/`, `/login`, `/register`. Two paths are exempted before the
+`PUBLIC_PATHS` is `/`, `/login`, `/register`. Four paths are exempted before the
 cookie is even read: `/api/health`, because an uptime monitor must get an answer
-whether signed in or not, and `/monitoring`, because Sentry's browser tunnel
+whether signed in or not; `/monitoring`, because Sentry's browser tunnel
 carries error reports from signed-out visitors too — and it cannot simply go in
 `PUBLIC_PATHS`, because that branch *redirects authenticated users to
-`/dashboard`*, which would break the tunnel for exactly the people using the app.
+`/dashboard`*, which would break the tunnel for exactly the people using the app;
+`/opengraph-image`, the landing page's share image, which social scrapers fetch
+signed out and which that same branch would turn into `/dashboard` for a signed-in
+fetch; and `/auth/signout-stale`, the Route Handler that clears a session which
+cannot reach a workspace (step 2). It must run with or without a cookie, and in
+`PUBLIC_PATHS` it would bounce the very cookie it exists to clear.
 
 The gate checks `request.cookies.has(SESSION_COOKIE)` and nothing else. It never
 opens the database and never verifies the token. A forged cookie gets past the
@@ -219,18 +224,31 @@ the matcher excluded image extensions but not `.js`, so `/theme-init.js` was
 auth-gated and answered `307 → /login`. A dark-mode visitor got a light landing
 page and a light login page, then a dark app after signing in.
 
-**2 — The layout's authoritative check.**
-`src/app/(app)/layout.tsx` calls `getCurrentUser()` and redirects to `/login` if
-it returns null. Its comment says exactly this: *"Authoritative check — the proxy
-only tests cookie presence."* Because this layout wraps every authenticated
-route, no page under `(app)` can render without a validated session.
+**2 — Every page's own check.**
+The `(app)` layout is not the gate. Under Next 16 partial rendering a layout does
+not re-run on client navigation and does not stop a page from rendering, so
+`src/app/(app)/layout.tsx` calls `requireWorkspacePage()` only to draw the header,
+and its comment says so. Every page under `(app)` calls `requireWorkspacePage()`
+(`src/lib/workspace-context.ts`) itself, and `src/server/queries/pages.test.ts`
+fails if one does not. It resolves the session with `getCurrentUser()` through
+`getWorkspaceContext()`, then the user's membership:
+
+- no valid session (a stale or forged cookie): a redirect to `/auth/signout-stale`,
+  which deletes the cookie and its Session row, if any, and redirects to `/login`.
+  Going straight to `/login` would loop, because the proxy sends a cookie-holder
+  from `/login` back to `/dashboard`;
+- a session with no membership: in multi mode the same redirect; in single mode the
+  user is joined to the one workspace as `MEMBER`;
+- otherwise the workspace context: the user, `workspaceId`, role, plan and the
+  scoped `db`, the only database handle a page gets.
 
 **3 — Page render.**
-Pages are async Server Components that query Prisma directly. `src/app/(app)/dashboard/page.tsx`
-issues five queries inside one `Promise.all` and computes pipeline value, weighted
-forecast, win rate, a six-month revenue series and the activity feed in the same
-function that renders them. There is no client-side data fetching anywhere in the
-authenticated app.
+Pages are async Server Components that read through a loader in `src/server/queries/`,
+never the database client directly. `src/app/(app)/dashboard/page.tsx` calls
+`loadDashboard(ctx)`, which issues five queries through `ctx.db` inside one
+`Promise.all`, and computes pipeline value, weighted forecast, win rate, a six-month
+revenue series and the activity feed in the same function that renders them. There
+is no client-side data fetching anywhere in the authenticated app.
 
 Because `getCurrentUser()` reads `cookies()`, every page under `(app)` is
 dynamically rendered per request. `getCurrentUser` is wrapped in React's `cache()`,
@@ -372,7 +390,8 @@ with the user included, then:
    payload.
 
 `requireUser()` is `getCurrentUser()` plus `throw new Error("UNAUTHORIZED")`.
-`requireWorkspace()` (`src/lib/workspace-context.ts`) builds on it: it resolves the
+`requireWorkspace()` (`src/lib/workspace-context.ts`) builds on `getCurrentUser()`
+through `getWorkspaceContext()`, not on `requireUser()`: it resolves the
 user's membership into a context — the user, `workspaceId`, role, plan and the
 scoped `db` — and throws the same `UNAUTHORIZED`. `requireWorkspacePage()` is the
 page variant: with no valid context it redirects through `/auth/signout-stale`
@@ -700,9 +719,9 @@ already broke production once, and neither script is covered by CI.
 
 ## 9. The AI layer
 
-`src/lib/ai/` is five files — the provider chain, the prompt builder (`fence()` and
+`src/lib/ai/` is seven files — the provider chain, the prompt builder (`fence()` and
 `recordBlock()`), the heuristics, the import-free lead-score rules the seed also uses,
-and the panel label — and about 500 lines.
+the panel label, the draft-shape check and the usage ledger — and about 780 lines.
 The server actions that use it are in `src/server/actions/ai.ts`.
 
 ### Provider abstraction — `src/lib/ai/provider.ts`
@@ -835,11 +854,12 @@ Three pure functions, no I/O, unit-tested, deterministic:
 open pipeline, engagement recency, churn), `heuristicEmailDraft`, and
 `heuristicSummary`.
 
-They run in three situations: no API key configured, every provider failed,
-or — for scoring and drafting — the model's reply failed validation. Each
-action reports which one as `degraded` (`not_configured`, `rate_limited`,
-`error` or `malformed`) on its result and in its audit entry, so the panel
-label and the audit trail can tell absence from degradation.
+They run in four situations: no API key configured, every provider failed,
+the deployment's daily AI ceiling was reached (the usage ledger, below), or — for
+scoring and drafting — the model's reply failed validation. Each action reports
+which one as `degraded` (`not_configured`, `rate_limited`, `error`, `malformed`
+or `capacity`) on its result and in its audit entry, so the panel label and the
+audit trail can tell absence from degradation.
 `scoreContact` asks for JSON natively through `generateJson` — Gemini with
 `responseMimeType: "application/json"` and `responseJsonSchema`, Groq with
 `response_format: { type: "json_object" }` (JSON mode; the schema is enforced on
@@ -888,6 +908,37 @@ A rejected fetch reaches Sentry. A `429` from every provider does not: it is
 reported to the caller as `rate_limited`, shown in the panel and recorded in the
 audit entry as `degraded`, which is where a quiet quota exhaustion is noticed.
 
+### The usage ledger — `src/lib/ai/usage.ts`
+
+Every metered AI action (score, summary, draft) goes through `meteredCall` in
+`src/server/actions/ai.ts`, which keeps one `AiUsage` row per action through the
+scoped client, in the order spec §7 sets:
+
+1. **The monthly allowance, multi mode only.** The workspace's charged rows this
+   UTC month are counted against its plan (`src/lib/plans.ts`: 30 on FREE, 600 on
+   PAID). At the limit a `denied` row is written, no provider is called, and the
+   action returns a plain message. Single mode (self-host, the demo) has no
+   allowance.
+2. **The daily ceiling, any mode, when `AI_DAILY_CEILING` is set.** Charged rows
+   since 00:00 UTC across every workspace (`aiCallsToday`). At the ceiling a
+   `capacity` row is written, no provider is called, and the action answers with
+   its heuristic, labelled "daily AI capacity reached". A value that is not a
+   whole number fails closed, as 0.
+3. **A `pending` row before the call**, so concurrent requests count it; the
+   overshoot is bounded by the calls in flight.
+4. **After the call, `settleAiCall`** records `answered`, `rejected` or
+   `fallback`, the provider and the tokens. A chain failure carries `usage` (the
+   tokens of every attempt) and `billed` (whether any attempt got a billed reply:
+   a 2xx, or Groq's 400 `json_validate_failed`): a billed failure settles
+   `rejected`, an unbilled one `fallback`.
+
+`pending`, `answered` and `rejected` are charged; `fallback`, `capacity` and
+`denied` are not, so a workspace never pays for an outage, and a row left
+`pending` by a killed function stays charged, which fails closed. Both limits are
+counted in the database, so unlike the rate limiter below they hold across
+instances and deploys. They are the quota controls; a provider-side spend cap on
+each key is the last line behind them.
+
 ### Rate limiting — `src/lib/rate-limit.ts`
 
 A fixed-window counter in a module-level `Map`. `rateLimit(key, {limit, windowMs})`
@@ -911,8 +962,9 @@ Current buckets:
 | `ai:{userId}` | 30 | 1 hour | `server/actions/ai.ts` |
 | `search:{userId}` | 120 | 1 min | `server/actions/search.ts` — the highest-frequency action in the app (one call per settled keystroke); validation runs first so a rejected query costs nothing |
 
-The AI bucket exists to protect the free-tier quota, and it is the one that is
-weakest in production — see §16.
+The AI bucket is burst protection only: 30 calls per user per hour, in memory and
+per instance. The quota controls are the usage ledger's allowance and ceiling
+above, which the database counts across instances — see §16.
 
 ### File context — `src/lib/file-context.ts`
 
@@ -1036,17 +1088,19 @@ differently on purpose. `auditTx(tx, entry)` writes inside the mutation's
 transaction and a failure **propagates**, rolling the change back: the Settings
 page presents the log as the record of what happened, so a committed change with
 no entry would make it lie. `audit(db, entry)` is for entries with no
-transaction to join (the creates, AI usage): it is best-effort and **never
-throws**, because the action it records has already committed. Platform events
+transaction to join (the creates, `updateContact`, `updateCompany`, `toggleTask`
+and AI usage): it is best-effort and **never throws**, because the action it
+records has already committed. Platform events
 (`auth.*`) go through `auditPlatform` (`src/lib/auth/platform-audit.ts`), which
 writes with no workspace through `systemDb` under the same best-effort rule.
 
 A swallowed failure is reported to Sentry (tag `subsystem: audit`) as well as the
 console, since `onRequestError` never sees a swallowed error. Two things worth
 being clear about. First, a best-effort entry can still be missing if the write
-fails, so absence of an entry proves nothing for the creates, AI usage or
-sign-ins; the transactional ones (every delete, the deal update and move) carry no
-such gap. Second, the log is a product feature for workspace admins, not
+fails, so absence of an entry proves nothing for the creates, the contact and
+company updates, the task toggle, AI usage or sign-ins; the transactional ones
+(every delete, the deal update and move) carry no such gap. Second, the log is a
+product feature for workspace admins, not
 observability: it says what a user did, and the platform's `auth.*` events never
 reach a workspace's Settings page. `IMPROVEMENT-PLAN.md` §3.6 records the history.
 
@@ -1361,16 +1415,20 @@ as a session-management solution.
 the proxy, validate next to the data. (c) No proxy; redirect from each layout.
 
 **Decision.** (b). `proxy.ts` calls `request.cookies.has(SESSION_COOKIE)` and
-nothing else. `src/app/(app)/layout.tsx` calls `requireWorkspacePage()`
-(which wraps `getCurrentUser()`) and every Server Action calls `requireWorkspace()`
-(or `requireUser()`, for the two that never touch the database).
+nothing else. Every page under `(app)` calls `requireWorkspacePage()` itself (which
+resolves `getCurrentUser()` through `getWorkspaceContext()`); the layout calls it too,
+for the header, but under Next 16 partial rendering it is not a gate. Every Server
+Action calls `requireWorkspace()` (or `requireUser()`, for the two that never touch
+the database).
 
 **Consequences.** The gate is fast and stateless, and it is honest about being
 cosmetic: a forged cookie gets a redirect *toward* the app and then fails at the
-layout. The security property lives next to the data, where it belongs — an
+page's `requireWorkspacePage()`, which sends it through `/auth/signout-stale` to
+`/login`. The security property lives next to the data, where it belongs — an
 attacker who reaches an action directly still hits `requireWorkspace()`. The cost is
 that the rule is expressed twice: a new authenticated route must be covered by
-the matcher *and* live under `(app)`. Two real bugs came from the matcher
+the matcher *and* call `requireWorkspacePage()` itself (`pages.test.ts` checks every
+page under `(app)`). Two real bugs came from the matcher
 (`theme-init.js`, and `/monitoring` needing its own exemption), which is the
 characteristic failure mode of path-pattern security.
 
@@ -1684,7 +1742,8 @@ conflict.
 the caller's transaction client; every delete and the deal update and move write
 their entry inside the transaction that makes the change, so a deal cannot
 commit as WON with nothing in the log. Entries that have no transaction to join
-(`audit(db, entry)` for the creates and AI usage, `auditPlatform` for sign-ins)
+(`audit(db, entry)` for the creates, `updateContact`, `updateCompany`,
+`toggleTask` and AI usage, `auditPlatform` for sign-ins)
 remain best-effort, but a failed write is now
 `Sentry.captureException`'d rather than dropped into `console.error`, so absence
 of an entry is at least visible somewhere.
@@ -1710,14 +1769,18 @@ script is exercised end-to-end by CI.
 
 **The rate limiter is per-instance and in-memory.** `src/lib/rate-limit.ts` keeps
 buckets in a module-level `Map`, so on Vercel every lambda instance has its own
-and every deploy resets them all. It is not a real limit on serverless. The AI
-bucket is the one that matters: 30 per user per hour, multiplied by however many
-instances are warm, multiplied by open registration at 5 accounts per IP per 15
-minutes each with a fresh 30 calls. *Acceptable because* free-tier traffic is one
-warm instance and nobody is attacking a portfolio demo. *The real backstop* is a
-provider-side spend cap on the API key itself, which the in-memory limiter's
-failure mode cannot cross — and which is free to set. A durable limiter (Upstash
-has a free tier) is the other half.
+and every deploy resets them all. It is not a real limit on serverless. For AI
+spend that no longer matters: the `ai:{userId}` bucket is burst protection only
+(30 per user per hour, multiplied by however many instances are warm, and by open
+registration at 5 accounts per IP per 15 minutes, each with a fresh 30). The quota
+is held by the `AiUsage` ledger (§9): the monthly allowance per workspace in multi
+mode, and `AI_DAILY_CEILING` across the deployment in any mode, both counted in the
+database. Unset, the ceiling is no limit, so the demo sets its own (spec §7), or the
+shared Groq quota has no deployment-wide cap. A provider-side spend cap on each key
+is the last line behind both. For the login and register buckets the per-instance
+limit still matters: *acceptable because* free-tier traffic is one warm instance and
+nobody is attacking a portfolio demo. A durable limiter (Upstash has a free tier) is
+the other half.
 
 **Two prompt-size amplifiers.** `loadContactContext` loads *every* deal on a
 contact with no `take`, so a contact with a thousand deals ships a very large
