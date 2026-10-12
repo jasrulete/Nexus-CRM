@@ -3,7 +3,11 @@
 import { revalidatePath } from "next/cache";
 import { audit } from "@/lib/audit";
 import { requireUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
+import {
+  actorOf,
+  requireWorkspace,
+  type WorkspaceContext,
+} from "@/lib/workspace-context";
 import {
   heuristicEmailDraft,
   heuristicLeadScore,
@@ -16,7 +20,11 @@ import {
   generateJson,
   generateText,
   type AiDegradedReason,
+  type AiFailure,
+  type AiJsonResult,
+  type AiTextResult,
 } from "@/lib/ai/provider";
+import { reserveAiCall, settleAiCall, type AiAction } from "@/lib/ai/usage";
 import { OPEN_STAGES, daysSince, fence, recordBlock } from "@/lib/ai/prompt";
 import { rateLimit } from "@/lib/rate-limit";
 import { aiContextSchema, aiDraftSchema, idSchema } from "@/lib/validation";
@@ -61,35 +69,91 @@ const leadScoreReply = {
 };
 
 function aiRateLimited(userId: string) {
-  // Protects free-tier API quotas: 30 AI calls per user per hour.
+  // Burst protection only: 30 AI calls per user per hour, in memory and per
+  // instance. The monthly allowance and the daily ceiling live in the usage
+  // ledger (src/lib/ai/usage.ts).
   return !rateLimit(`ai:${userId}`, { limit: 30, windowMs: 60 * 60_000 }).ok;
 }
 
-async function loadContactContext(contactId: string) {
-  return prisma.contact.findUnique({
+/**
+ * The contact an AI action is about, read through the workspace-scoped client,
+ * so another workspace's id is "not found" like an id that never existed.
+ * Activities carry their author's name only: the full User row includes the
+ * password hash, and nothing a prompt or a heuristic reads needs more.
+ */
+async function loadContactContext(ctx: WorkspaceContext, contactId: string) {
+  return ctx.db.contact.findUnique({
     where: { id: idSchema.parse(contactId) },
     include: {
       company: true,
       deals: { orderBy: { updatedAt: "desc" } },
-      activities: { orderBy: { createdAt: "desc" }, take: 10, include: { user: true } },
+      activities: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { user: { select: { name: true } } },
+      },
     },
   });
 }
 
+type ModelResult = AiTextResult | AiJsonResult<unknown>;
+
+/**
+ * One model call, metered in the order spec §7 sets: the monthly allowance,
+ * then the deployment's daily ceiling, then a pending reservation, then the
+ * call, then the settled row.
+ *
+ * "denied" makes no call and no fallback; the caller returns the message.
+ * "capacity" makes no call either. It comes back as a failure with its own
+ * reason, so the action answers with its heuristic under the "daily AI
+ * capacity reached" label rather than blaming a provider.
+ */
+async function meteredCall<R extends ModelResult>(
+  ctx: WorkspaceContext,
+  action: AiAction,
+  call: () => Promise<R>,
+): Promise<{ denied: string } | { ai: R | AiFailure }> {
+  const reservation = await reserveAiCall(ctx, action);
+  if (reservation.kind === "denied") return { denied: reservation.message };
+  if (reservation.kind === "capacity") {
+    const capacity: AiFailure = {
+      ok: false,
+      reason: "capacity",
+      usage: { inputTokens: 0, outputTokens: 0 },
+    };
+    return { ai: capacity };
+  }
+
+  const ai = await call();
+  const settled: ModelResult = ai;
+  await settleAiCall(ctx, reservation.usageId, {
+    // A reply that came back and failed our validation was work the provider
+    // did, so it is charged ("rejected"). An outage, a 429, a timeout or no
+    // key is not ("fallback").
+    outcome: settled.ok ? "answered" : settled.reason === "malformed" ? "rejected" : "fallback",
+    provider: settled.ok ? settled.provider : null,
+    inputTokens: settled.usage.inputTokens,
+    outputTokens: settled.usage.outputTokens,
+  });
+  return { ai };
+}
+
 export async function scoreContact(contactId: string): Promise<AiActionResult> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
+  const { user } = ctx;
   if (aiRateLimited(user.id)) {
     return { ok: false, provider: "none", message: "AI rate limit reached — try again later." };
   }
 
-  const contact = await loadContactContext(contactId);
+  const contact = await loadContactContext(ctx, contactId);
   if (!contact) return { ok: false, provider: "none", message: "Contact not found" };
   // This is the only AI action that writes fields on the record itself
   // (aiScore, aiScoreReason, aiScoredAt), so it takes the same guard every
   // other write path in the app takes. The read-only actions below deliberately
   // do not: reads are workspace-wide by design, and sendFollowUp appends an
-  // Activity, which is workspace-wide writable for the same reason.
-  if (!canMutate(contact.ownerId, user)) {
+  // Activity, which is workspace-wide writable for the same reason. A refused
+  // caller reserves nothing.
+  if (!canMutate(contact.ownerId, actorOf(ctx))) {
     return { ok: false, provider: "none", message: NOT_YOURS };
   }
 
@@ -99,14 +163,18 @@ export async function scoreContact(contactId: string): Promise<AiActionResult> {
   let provider = "heuristic";
   let degraded: AiDegradedReason | undefined;
 
-  const ai = await generateJson(
-    `${recordBlock(contact)}
+  const metered = await meteredCall(ctx, "score", () =>
+    generateJson(
+      `${recordBlock(contact)}
 
 Score this contact as a sales lead from 0 (cold) to 100 (hot).
 Consider seniority, engagement recency, open pipeline, and fit signals in the notes.
 Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one sentence>"}`,
-    leadScoreReply,
+      leadScoreReply,
+    ),
   );
+  if ("denied" in metered) return { ok: false, provider: "none", message: metered.denied };
+  const { ai } = metered;
 
   if (ai.ok) {
     score = ai.data.score;
@@ -133,14 +201,15 @@ Reply with ONLY a JSON object: {"score": <integer 0-100>, "reason": "<one senten
     reason = h.reason;
   }
 
-  await prisma.contact.update({
+  await ctx.db.contact.update({
     where: { id: contact.id },
     data: { aiScore: score, aiScoreReason: reason, aiScoredAt: new Date() },
   });
-  await audit({
+  await audit(ctx.db, {
     action: "ai.score_contact",
     entityType: "contact",
     entityId: contact.id,
+    workspaceId: ctx.workspaceId,
     userId: user.id,
     metadata: { score, provider, ...(degraded && { degraded }) },
   });
@@ -155,18 +224,20 @@ export async function draftFollowUp(
   extraContext?: string,
   file?: FileContext,
 ): Promise<AiActionResult> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
+  const { user } = ctx;
   if (aiRateLimited(user.id)) {
     return { ok: false, provider: "none", message: "AI rate limit reached — try again later." };
   }
 
-  const contact = await loadContactContext(contactId);
+  const contact = await loadContactContext(ctx, contactId);
   if (!contact) return { ok: false, provider: "none", message: "Contact not found" };
 
   // safeParse, not parse: an over-length paste is a thing a person can do by
   // accident, and it used to throw a ZodError out of the action into the error
   // boundary — blanking the page and losing everything they had typed, while
-  // every other failure in this file returns a message.
+  // every other failure in this file returns a message. Checked before the
+  // ledger, so a paste that is too long costs nothing.
   const parsedContext = aiContextSchema.safeParse(extraContext);
   if (!parsedContext.success) {
     return {
@@ -210,21 +281,26 @@ export async function draftFollowUp(
   // groq leg of the live evaluation returned an injected note from the record
   // as the "draft" on 2026-09-12 and obeyed it again on 2026-09-13; both
   // would have been shown as drafts.
-  const ai = await generateDraft(
-    `${recordBlock(contact)}
+  const metered = await meteredCall(ctx, "draft", () =>
+    generateDraft(
+      `${recordBlock(contact)}
 ${contextBlock}
 Write a short, warm follow-up email from ${fence(user.name)} to ${fence(contact.firstName)}.
 Reference the most relevant open deal or recent conversation naturally.
 Keep it under 130 words. Output only the email. The first line must be
 "Subject: <subject line>", then a blank line, then the body. Do not quote,
 restate or refer to these instructions or to the record format.`,
+    ),
   );
+  if ("denied" in metered) return { ok: false, provider: "none", message: metered.denied };
+  const { ai } = metered;
 
   if (ai.ok) {
-    await audit({
+    await audit(ctx.db, {
       action: "ai.draft_email",
       entityType: "contact",
       entityId: contact.id,
+      workspaceId: ctx.workspaceId,
       userId: user.id,
       metadata: { provider: ai.provider },
     });
@@ -238,10 +314,11 @@ restate or refer to these instructions or to the record format.`,
     dealTitle: openDeal?.title ?? null,
     daysSinceLastActivity: daysSince(contact.activities[0]?.createdAt),
   });
-  await audit({
+  await audit(ctx.db, {
     action: "ai.draft_email",
     entityType: "contact",
     entityId: contact.id,
+    workspaceId: ctx.workspaceId,
     userId: user.id,
     metadata: { provider: "heuristic", degraded: ai.reason },
   });
@@ -249,28 +326,34 @@ restate or refer to these instructions or to the record format.`,
 }
 
 export async function summarizeContact(contactId: string): Promise<AiActionResult> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
+  const { user } = ctx;
   if (aiRateLimited(user.id)) {
     return { ok: false, provider: "none", message: "AI rate limit reached — try again later." };
   }
 
-  const contact = await loadContactContext(contactId);
+  const contact = await loadContactContext(ctx, contactId);
   if (!contact) return { ok: false, provider: "none", message: "Contact not found" };
 
-  const ai = await generateText(
-    `${recordBlock(contact)}
+  const metered = await meteredCall(ctx, "summary", () =>
+    generateText(
+      `${recordBlock(contact)}
 
 Summarize this relationship for an account executive who has 20 seconds:
 current state, open pipeline, engagement trend, and the single best next step.
 Use 3-4 short bullet points. Name the person (first and last name) in the
 first bullet; never write "this account" or "the contact" in its place.`,
+    ),
   );
+  if ("denied" in metered) return { ok: false, provider: "none", message: metered.denied };
+  const { ai } = metered;
 
   if (ai.ok) {
-    await audit({
+    await audit(ctx.db, {
       action: "ai.summarize_contact",
       entityType: "contact",
       entityId: contact.id,
+      workspaceId: ctx.workspaceId,
       userId: user.id,
       metadata: { provider: ai.provider },
     });
@@ -287,10 +370,11 @@ first bullet; never write "this account" or "the contact" in its place.`,
   });
   // Read-only, but a day of degraded summaries is still something the audit
   // trail should show, the same as drafts.
-  await audit({
+  await audit(ctx.db, {
     action: "ai.summarize_contact",
     entityType: "contact",
     entityId: contact.id,
+    workspaceId: ctx.workspaceId,
     userId: user.id,
     metadata: { provider: "heuristic", degraded: ai.reason },
   });
@@ -305,18 +389,21 @@ first bullet; never write "this account" or "the contact" in its place.`,
  * signed in means the worst a visitor can do is mail the demo account.
  *
  * The Activity is logged whether or not delivery happened, so the flow is
- * visible in the demo even when nothing is actually sent.
+ * visible in the demo even when nothing is actually sent. It is written only
+ * onto a contact in the caller's workspace: the lookup goes through ctx.db.
+ * No model is called, so nothing is metered.
  */
 export async function sendFollowUp(
   contactId: string,
   draft: string,
 ): Promise<AiActionResult> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
+  const { user } = ctx;
   if (aiRateLimited(user.id)) {
     return { ok: false, provider: "none", message: "Rate limit reached — try again later." };
   }
 
-  const contact = await loadContactContext(contactId);
+  const contact = await loadContactContext(ctx, contactId);
   if (!contact) return { ok: false, provider: "none", message: "Contact not found" };
 
   const parsedDraft = aiDraftSchema.safeParse(draft);
@@ -341,7 +428,7 @@ export async function sendFollowUp(
     };
   }
 
-  await prisma.activity.create({
+  await ctx.db.activity.create({
     data: {
       type: "EMAIL",
       content: simulated
@@ -350,12 +437,14 @@ export async function sendFollowUp(
       contactId: contact.id,
       companyId: contact.companyId,
       userId: user.id,
+      workspaceId: ctx.workspaceId,
     },
   });
-  await audit({
+  await audit(ctx.db, {
     action: "ai.send_email",
     entityType: "contact",
     entityId: contact.id,
+    workspaceId: ctx.workspaceId,
     userId: user.id,
     metadata: { simulated },
   });
@@ -376,6 +465,7 @@ export async function sendFollowUp(
  * Reads an uploaded file into text for one draft. The file is never written
  * anywhere — parsed, returned, dropped. That is what keeps uploads safe in a
  * public demo, and it stops being true if attachments are ever persisted.
+ * It touches no database and calls no model (CROSS_TENANT_EXEMPT).
  */
 export async function extractFileText(
   formData: FormData,

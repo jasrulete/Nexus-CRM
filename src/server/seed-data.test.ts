@@ -11,13 +11,28 @@ import { seedDemoData } from "../../prisma/seed-data";
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), { digest: `NEXT_REDIRECT;${url}` });
+  },
+}));
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
   requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 // No provider: scoreContact takes the same rule-based path the seed must match.
@@ -42,6 +57,22 @@ beforeEach(async () => {
   await seedDemoData(prisma, currentUser.id);
 });
 
+/**
+ * scoreContact reads through the workspace-scoped client, and until Task 17
+ * seedDemoData doesn't stamp workspaceId, so the seeded rows are moved into
+ * the test user's workspace first. Once the seed stamps them itself, every
+ * updateMany here matches nothing.
+ */
+async function adoptSeededRows(workspaceId: string) {
+  const where = { workspaceId: null };
+  const data = { workspaceId };
+  await prisma.company.updateMany({ where, data });
+  await prisma.contact.updateMany({ where, data });
+  await prisma.deal.updateMany({ where, data });
+  await prisma.activity.updateMany({ where, data });
+  await prisma.task.updateMany({ where, data });
+}
+
 describe("seeded lead scores", () => {
   it("scores most contacts with the rule-based scorer and leaves a few for the demo", async () => {
     const contacts = await prisma.contact.findMany();
@@ -64,6 +95,7 @@ describe("seeded lead scores", () => {
   });
 
   it("seeds exactly the score scoreContact would compute for the same record", async () => {
+    await adoptSeededRows(currentUser.workspaceId);
     const maya = await prisma.contact.findFirstOrThrow({
       where: { email: "maya.okafor@northwind.io" },
     });

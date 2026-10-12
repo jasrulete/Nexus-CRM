@@ -29,13 +29,28 @@ import { classify, echoesPreamble, isUnreachable, signalFailure, type EvalResult
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), { digest: `NEXT_REDIRECT;${url}` });
+  },
+}));
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
   requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 // The real provider chain runs. These wrappers only record what it was asked,
@@ -166,9 +181,18 @@ async function seed(fixture: Fixture, index: number): Promise<string> {
   // dozen fixtures times three actions would trip a single user's budget.
   const user = await makeUser(prisma, { email: `eval-${index}-${fixture.key}@example.com`, name: "Eval Runner" });
   currentUser = user;
+  // Every row goes into the user's workspace: the actions read through the
+  // workspace-scoped client, and a row without one is invisible to them.
+  const workspaceId = user.workspaceId;
   const company = fixture.company
     ? await prisma.company.create({
-        data: { name: fixture.company.name, industry: fixture.company.industry, size: fixture.company.size, ownerId: user.id },
+        data: {
+          name: fixture.company.name,
+          industry: fixture.company.industry,
+          size: fixture.company.size,
+          ownerId: user.id,
+          workspaceId,
+        },
       })
     : null;
   const contact = await prisma.contact.create({
@@ -183,6 +207,7 @@ async function seed(fixture: Fixture, index: number): Promise<string> {
       notes: fixture.notes ?? null,
       companyId: company?.id ?? null,
       ownerId: user.id,
+      workspaceId,
     },
   });
   for (const [position, deal] of fixture.deals.entries()) {
@@ -198,6 +223,7 @@ async function seed(fixture: Fixture, index: number): Promise<string> {
         contactId: contact.id,
         companyId: company?.id ?? null,
         ownerId: user.id,
+        workspaceId,
       },
     });
   }
@@ -210,6 +236,7 @@ async function seed(fixture: Fixture, index: number): Promise<string> {
         contactId: contact.id,
         companyId: company?.id ?? null,
         userId: user.id,
+        workspaceId,
       },
     });
   }

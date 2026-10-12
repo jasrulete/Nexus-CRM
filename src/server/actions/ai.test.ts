@@ -3,29 +3,47 @@
  * now 0% covered.
  *
  * Only three things are faked: the model provider (so no test calls a paid API
- * or depends on a daily quota), the mail provider, and the four boundaries the
- * harness already stubs. The rate limiter, zod validation, the demo guard,
- * heuristics, file parsing and the audit log all run for real, because those are
- * the parts worth protecting.
+ * or depends on a daily quota), the mail provider, and the boundaries the
+ * harness stubs (the session lookup, next/cache, next/navigation). The workspace
+ * context, the scoped client, the usage ledger, the rate limiter, zod
+ * validation, the demo guard, heuristics, file parsing and the audit log all
+ * run for real, because those are the parts worth protecting.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTestDatabase,
   makeUser,
+  makeWorkspace,
   truncateAll,
   type TestUser,
 } from "@/test/action-harness";
 import { isEmailShaped } from "@/lib/ai/draft-shape";
+import { providerLabel } from "@/lib/ai/label";
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), { digest: `NEXT_REDIRECT;${url}` });
+  },
+}));
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
   requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 // The model. Tests drive its answers directly; nothing here reaches a network.
@@ -34,6 +52,8 @@ const model = vi.hoisted(() => ({
   // Why the model gave no reply: what the provider layer reports when every
   // configured provider failed, or when none is configured at all.
   failure: "not_configured" as "not_configured" | "rate_limited" | "error" | "malformed",
+  // What the chain reports it spent; the usage ledger stores it.
+  usage: { inputTokens: 0, outputTokens: 0 },
   prompts: [] as string[],
   jsonRequests: [] as { schema: { safeParse: (v: unknown) => { success: boolean } }; jsonSchema: Record<string, unknown> }[],
 }));
@@ -45,16 +65,18 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     aiProviderName: () => (model.reply ? model.reply.provider.split("/")[0] : null),
     generateText: async (prompt: string) => {
       model.prompts.push(prompt);
-      return model.reply ? { ok: true, ...model.reply } : { ok: false, reason: model.failure };
+      return model.reply
+        ? { ok: true, ...model.reply, usage: model.usage }
+        : { ok: false, reason: model.failure, usage: model.usage };
     },
     // A draft reply is judged by the product's own shape rule, imported rather
     // than copied, so this double cannot drift from what the chain accepts.
     generateDraft: async (prompt: string) => {
       model.prompts.push(prompt);
-      if (!model.reply) return { ok: false, reason: model.failure };
+      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage };
       return shape.isEmailShaped(model.reply.text)
-        ? { ok: true, ...model.reply }
-        : { ok: false, reason: "malformed" };
+        ? { ok: true, ...model.reply, usage: model.usage }
+        : { ok: false, reason: "malformed", usage: model.usage };
     },
     // Only the transport is faked: the reply text goes through the same
     // whole-reply parse and schema the real provider applies, so a test can
@@ -62,17 +84,17 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } }; jsonSchema: Record<string, unknown> }) => {
       model.prompts.push(prompt);
       model.jsonRequests.push(request);
-      if (!model.reply) return { ok: false, reason: model.failure };
+      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage };
       let parsed: unknown;
       try {
         parsed = JSON.parse(model.reply.text);
       } catch {
-        return { ok: false, reason: "malformed" };
+        return { ok: false, reason: "malformed", usage: model.usage };
       }
       const checked = request.schema.safeParse(parsed);
       return checked.success
-        ? { ok: true, data: checked.data, provider: model.reply.provider }
-        : { ok: false, reason: "malformed" };
+        ? { ok: true, data: checked.data, provider: model.reply.provider, usage: model.usage }
+        : { ok: false, reason: "malformed", usage: model.usage };
     },
   };
 });
@@ -103,6 +125,9 @@ const {
   extractFileText,
   currentAiProvider,
 } = await import("./ai");
+const { twoWorkspaces, snapshotWorkspace, registerCrossTenantCase } = await import(
+  "@/test/cross-tenant"
+);
 
 let owner: TestUser;
 let contactId: string;
@@ -116,6 +141,9 @@ afterAll(async () => {
 
 let userSeq = 0;
 beforeEach(async () => {
+  // Single mode and no ceiling unless a test says otherwise, whatever the shell has.
+  vi.stubEnv("WORKSPACE_MODE", "single");
+  vi.stubEnv("AI_DAILY_CEILING", "");
   await truncateAll(prisma);
   // A distinct user per test: the rate limiter keys on user id and holds its
   // buckets in module state, so a shared id would leak budget between tests.
@@ -126,7 +154,12 @@ beforeEach(async () => {
   currentUser = owner;
 
   const company = await prisma.company.create({
-    data: { name: "Northwind", industry: "Data & BI", ownerId: owner.id },
+    data: {
+      name: "Northwind",
+      industry: "Data & BI",
+      ownerId: owner.id,
+      workspaceId: owner.workspaceId,
+    },
   });
   const contact = await prisma.contact.create({
     data: {
@@ -138,6 +171,7 @@ beforeEach(async () => {
       notes: "Budget approved.",
       companyId: company.id,
       ownerId: owner.id,
+      workspaceId: owner.workspaceId,
     },
   });
   contactId = contact.id;
@@ -150,11 +184,13 @@ beforeEach(async () => {
       position: 0,
       contactId: contact.id,
       ownerId: owner.id,
+      workspaceId: owner.workspaceId,
     },
   });
 
   model.reply = null;
   model.failure = "not_configured";
+  model.usage = { inputTokens: 0, outputTokens: 0 };
   model.prompts = [];
   model.jsonRequests = [];
   mail.configured = false;
@@ -164,6 +200,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.DEMO_MODE;
+  vi.unstubAllEnvs();
 });
 
 // ---------------------------------------------------------------- scoring
@@ -830,6 +867,7 @@ describe("money in the AI layer", () => {
         position: 0,
         contactId,
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
   }
@@ -866,6 +904,7 @@ describe("money in the AI layer", () => {
         position: 0,
         contactId,
         ownerId: owner.id,
+        workspaceId: owner.workspaceId,
       },
     });
     model.reply = null; // heuristic path
@@ -898,5 +937,249 @@ describe("money in the AI layer", () => {
     // number that was in no currency at all.
     expect(result.text).toContain("$120,534");
     expect(result.text).not.toContain("$110,000");
+  });
+});
+
+// ---------------------------------------------------------------- metering
+
+const CHARGED = ["pending", "answered", "rejected"];
+const DENIED_MESSAGE =
+  "This workspace has used its 30 AI actions for this month. They reset on the 1st (UTC), or upgrade for more.";
+
+function chargedRows(workspaceId: string) {
+  return prisma.aiUsage.count({ where: { workspaceId, outcome: { in: CHARGED } } });
+}
+
+async function preload(workspaceId: string, n: number, outcome = "answered") {
+  await prisma.aiUsage.createMany({
+    data: Array.from({ length: n }, () => ({ workspaceId, action: "summary", outcome })),
+  });
+}
+
+describe("the usage ledger", () => {
+  it("settles an answered call with the provider and the tokens it used", async () => {
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+    model.usage = { inputTokens: 321, outputTokens: 54 };
+
+    await summarizeContact(contactId);
+
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({
+      workspaceId: owner.workspaceId,
+      userId: owner.id,
+      action: "summary",
+      outcome: "answered",
+      provider: "gemini/test",
+      inputTokens: 321,
+      outputTokens: 54,
+    });
+  });
+
+  it("meters each action under its own name", async () => {
+    model.reply = { text: '{"score": 70, "reason": "fit"}', provider: "gemini/test" };
+    await scoreContact(contactId);
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+    await summarizeContact(contactId);
+    model.reply = { text: "Subject: Hi\n\nBody.", provider: "gemini/test" };
+    await draftFollowUp(contactId);
+
+    const rows = await prisma.aiUsage.findMany();
+    expect(rows.map((r) => r.action).sort()).toEqual(["draft", "score", "summary"]);
+    expect(rows.every((r) => r.outcome === "answered")).toBe(true);
+  });
+
+  it("records a reply that failed validation as rejected, with what it cost", async () => {
+    model.reply = { text: "Not an email at all.", provider: "groq/test" };
+    model.usage = { inputTokens: 400, outputTokens: 90 };
+
+    const result = await draftFollowUp(contactId);
+
+    expect(result).toMatchObject({ provider: "heuristic", degraded: "malformed" });
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({
+      action: "draft",
+      outcome: "rejected",
+      provider: null,
+      inputTokens: 400,
+      outputTokens: 90,
+    });
+  });
+
+  it("records a call with no key configured as an uncharged fallback", async () => {
+    await summarizeContact(contactId);
+
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({ outcome: "fallback", provider: null });
+    expect(await chargedRows(owner.workspaceId)).toBe(0);
+  });
+
+  it("does not meter sending a draft or reading a file", async () => {
+    await sendFollowUp(contactId, "Subject: x\n\ny");
+    await extractFileText(new FormData());
+
+    expect(await prisma.aiUsage.count()).toBe(0);
+  });
+
+  it("writes no usage row for a contact that is not there, or not the caller's to score", async () => {
+    await summarizeContact("ckcontactthatisgone00000");
+    currentUser = await makeUser(prisma, { email: "stranger-meter@example.com", name: "Stan" });
+    await scoreContact(contactId);
+
+    expect(await prisma.aiUsage.count()).toBe(0);
+  });
+
+  it("denies past the monthly allowance without calling the model or touching the record", async () => {
+    vi.stubEnv("WORKSPACE_MODE", "multi");
+    await preload(owner.workspaceId, 30);
+    model.reply = { text: '{"score": 99, "reason": "x"}', provider: "gemini/test" };
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toEqual({ ok: false, provider: "none", message: DENIED_MESSAGE });
+    expect(model.prompts).toHaveLength(0);
+    const after = await prisma.contact.findUniqueOrThrow({ where: { id: contactId } });
+    expect(after.aiScore).toBeNull();
+    expect(await prisma.aiUsage.count({ where: { outcome: "denied", action: "score" } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { action: "ai.score_contact" } })).toBe(0);
+  });
+});
+
+// Review Focus 4. AI actions fired in parallel at allowance - 1, or during a
+// provider outage: the overshoot is at most the number in flight, an outage
+// never uses up the workspace's allowance, and the daily ceiling reads as
+// "daily AI capacity reached", never as the provider rate-limiting us.
+describe("Review Focus 4: the allowance under load, outages and the daily ceiling", () => {
+  beforeEach(() => {
+    vi.stubEnv("WORKSPACE_MODE", "multi");
+  });
+
+  it("overshoots the allowance by at most the calls in flight when they race at allowance - 1", async () => {
+    const LIMIT = 30;
+    const IN_FLIGHT = 5;
+    await preload(owner.workspaceId, LIMIT - 1);
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+
+    const results = await Promise.all(
+      Array.from({ length: IN_FLIGHT }, () => summarizeContact(contactId)),
+    );
+
+    const answered = results.filter((r) => r.ok && r.provider === "gemini/test").length;
+    const denied = results.filter((r) => !r.ok).length;
+    expect(answered).toBeGreaterThanOrEqual(1);
+    expect(answered + denied).toBe(IN_FLIGHT);
+    const total = await chargedRows(owner.workspaceId);
+    expect(total).toBe(LIMIT - 1 + answered);
+    expect(total - LIMIT).toBeLessThanOrEqual(IN_FLIGHT - 1);
+    expect(await prisma.aiUsage.count({ where: { outcome: "pending" } })).toBe(0);
+
+    // Once they have landed, the next one is refused.
+    const next = await summarizeContact(contactId);
+    expect(next).toEqual({ ok: false, provider: "none", message: DENIED_MESSAGE });
+  });
+
+  // A timeout reaches the action as "error": the chain maps a rejected fetch
+  // (TimeoutError included) to it, as provider.test.ts pins.
+  it.each(["rate_limited", "error"] as const)(
+    "never spends the allowance on a provider outage (%s)",
+    async (failure) => {
+      await preload(owner.workspaceId, 29);
+      model.reply = null;
+      model.failure = failure;
+
+      for (let i = 0; i < 3; i++) {
+        expect(await summarizeContact(contactId)).toMatchObject({
+          ok: true,
+          provider: "heuristic",
+          degraded: failure,
+        });
+      }
+      expect(await chargedRows(owner.workspaceId)).toBe(29);
+      expect(
+        await prisma.aiUsage.count({ where: { workspaceId: owner.workspaceId, outcome: "fallback" } }),
+      ).toBe(3);
+
+      // The outage over, the workspace still has its last action.
+      model.reply = { text: "Some summary.", provider: "gemini/test" };
+      expect(await summarizeContact(contactId)).toMatchObject({ ok: true, provider: "gemini/test" });
+      expect(await summarizeContact(contactId)).toEqual({
+        ok: false,
+        provider: "none",
+        message: DENIED_MESSAGE,
+      });
+    },
+  );
+
+  it("labels the daily ceiling as capacity, not as a provider rate limit", async () => {
+    // The ceiling is deployment-wide: another workspace's calls fill it.
+    const other = await makeWorkspace(prisma, {
+      id: "ws_ceiling_other",
+      slug: "ceiling-other",
+      name: "Ceiling other",
+    });
+    await preload(other.id, 2);
+    vi.stubEnv("AI_DAILY_CEILING", "2");
+    model.reply = { text: "Some summary.", provider: "gemini/test" };
+
+    const result = await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "capacity" });
+    expect(providerLabel(result)).toBe("rule-based fallback (daily AI capacity reached)");
+    expect(providerLabel(result)).not.toMatch(/rate-limited/);
+    expect(model.prompts).toHaveLength(0);
+    expect(
+      await prisma.aiUsage.count({ where: { workspaceId: owner.workspaceId, outcome: "capacity" } }),
+    ).toBe(1);
+    expect(await chargedRows(owner.workspaceId)).toBe(0);
+    const entry = await prisma.auditLog.findFirstOrThrow({ where: { action: "ai.summarize_contact" } });
+    expect(entry.metadata).toContain("capacity");
+  });
+
+  it("scores and drafts with the heuristic under the capacity reason too", async () => {
+    const other = await makeWorkspace(prisma, {
+      id: "ws_ceiling_other",
+      slug: "ceiling-other",
+      name: "Ceiling other",
+    });
+    await preload(other.id, 1);
+    vi.stubEnv("AI_DAILY_CEILING", "1");
+    model.reply = { text: '{"score": 99, "reason": "x"}', provider: "gemini/test" };
+
+    expect(await scoreContact(contactId)).toMatchObject({ ok: true, provider: "heuristic", degraded: "capacity" });
+    expect(await draftFollowUp(contactId)).toMatchObject({ ok: true, provider: "heuristic", degraded: "capacity" });
+    expect(model.prompts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------- cross-tenant
+
+// One plain string literal per key: Task 19 reads these statically, so a key
+// built in a loop or a template would not count.
+registerCrossTenantCase("src/server/actions/ai.ts#scoreContact");
+registerCrossTenantCase("src/server/actions/ai.ts#draftFollowUp");
+registerCrossTenantCase("src/server/actions/ai.ts#summarizeContact");
+registerCrossTenantCase("src/server/actions/ai.ts#sendFollowUp");
+
+const AI_ACTIONS = ["scoreContact", "draftFollowUp", "summarizeContact", "sendFollowUp"] as const;
+
+describe("another workspace's contact", () => {
+  it.each(AI_ACTIONS)("%s treats it as not found and changes nothing", async (name) => {
+    await truncateAll(prisma);
+    const { a, b } = await twoWorkspaces(prisma);
+    currentUser = a.owner;
+    mail.configured = true;
+    model.reply = { text: '{"score": 99, "reason": "mine now"}', provider: "gemini/test" };
+    const before = await snapshotWorkspace(prisma, b.workspaceId);
+
+    const calls = {
+      scoreContact: () => scoreContact(b.contactId),
+      draftFollowUp: () => draftFollowUp(b.contactId, "context"),
+      summarizeContact: () => summarizeContact(b.contactId),
+      sendFollowUp: () => sendFollowUp(b.contactId, "Subject: Hi\n\nBody."),
+    };
+    const result = await calls[name]();
+
+    expect(result).toMatchObject({ ok: false, message: "Contact not found" });
+    // B's record never reached the model, the mailer or the ledger.
+    expect(model.prompts).toHaveLength(0);
+    expect(mail.sent).toHaveLength(0);
+    expect(await prisma.aiUsage.count()).toBe(0);
+    expect(await snapshotWorkspace(prisma, b.workspaceId)).toBe(before);
   });
 });
