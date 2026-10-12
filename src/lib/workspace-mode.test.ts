@@ -66,6 +66,19 @@ describe("assertBootConfig", () => {
     );
   });
 
+  // The same piped-value hazard as WORKSPACE_MODE: read raw, "true\r\n" would
+  // look off and let a multi deployment boot with the demo lock's flag set.
+  it.each(["true\r\n", " true "])("reads DEMO_MODE %j as on", (value) => {
+    expect(() => assertBootConfig({ WORKSPACE_MODE: "multi", DEMO_MODE: value })).toThrow(
+      "WORKSPACE_MODE=multi cannot run with DEMO_MODE=true",
+    );
+    expect(assertBootConfig({ WORKSPACE_MODE: "single", DEMO_MODE: value })).toBe("single");
+  });
+
+  it.each(["TRUE", "1", " \r\n"])("still reads DEMO_MODE %j as off after trimming", (value) => {
+    expect(assertBootConfig({ WORKSPACE_MODE: "multi", DEMO_MODE: value })).toBe("multi");
+  });
+
   it("reads the trimmed value, so a piped newline neither fails boot nor hides multi", () => {
     expect(assertBootConfig({ WORKSPACE_MODE: "single\r\n", NODE_ENV: "production" })).toBe("single");
     expect(() => assertBootConfig({ WORKSPACE_MODE: " multi ", DEMO_MODE: "true" })).toThrow(

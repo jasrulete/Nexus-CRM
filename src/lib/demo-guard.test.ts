@@ -45,6 +45,21 @@ describe("demo guard", () => {
 
     expect(isLockedDemoAccount(demo)).toBe(false);
   });
+
+  // A value piped from PowerShell or the Vercel CLI can carry a trailing CR or
+  // newline. Read raw it would count as off and silently unlock the demo.
+  it.each(["true\r\n", " true "])("reads %j as on, so the demo account stays locked", (value) => {
+    process.env.DEMO_MODE = value;
+
+    expect(isLockedDemoAccount(demo)).toBe(true);
+    expect(() => assertNotLockedDemoAccount(demo)).toThrow(/DEMO_READONLY/);
+  });
+
+  it.each(["TRUE", "true1", " \r\n"])("still reads %j as off after trimming", (value) => {
+    process.env.DEMO_MODE = value;
+
+    expect(isLockedDemoAccount(demo)).toBe(false);
+  });
 });
 
 describe("isSharedDemoInstance", () => {
@@ -66,5 +81,11 @@ describe("isSharedDemoInstance", () => {
     process.env.DEMO_MODE = "1";
 
     expect(isSharedDemoInstance()).toBe(false);
+  });
+
+  it.each(["true\r\n", " true "])("reads %j as on, like its sibling", (value) => {
+    process.env.DEMO_MODE = value;
+
+    expect(isSharedDemoInstance()).toBe(true);
   });
 });

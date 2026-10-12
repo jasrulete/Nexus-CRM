@@ -8,8 +8,12 @@
  * Workspace.isDemo is the reset's permission bit and nothing else, and nothing
  * in this file writes it. The seed sets it only with SEED_DEMO_WORKSPACE=true,
  * and scripts/mark-demo-workspace.ts sets it once, by hand, on the existing
- * demo database. So a self-hosted install — or a secret that points this
- * workflow at the wrong database — can never be wiped by it.
+ * demo database. Seeding a self-hosted install does not mark it, so the reset
+ * refuses such a database, and any other unmarked one a mis-set secret points
+ * this workflow at. What keeps a real install from being marked is outside this
+ * file: mark-demo-workspace.ts's guard relies on the demo account not being
+ * seeded on real installs, and on the script being run only against the demo
+ * database. A self-host seeded with the demo data has the shape it accepts.
  */
 import type { PrismaClient } from "../generated/prisma/client";
 import { ensureDemoUser, seedDemoData } from "../../prisma/seed-data";

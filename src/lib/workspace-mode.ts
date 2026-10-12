@@ -34,6 +34,15 @@ export function workspaceMode(env: Env = process.env): WorkspaceMode {
 }
 
 /**
+ * Whether DEMO_MODE is on. Trimmed like WORKSPACE_MODE: a piped `true\r\n`
+ * would otherwise read as off and silently unlock the demo account. The only
+ * accepted value is still exactly `true`.
+ */
+export function demoModeOn(env: Env = process.env): boolean {
+  return env.DEMO_MODE?.trim() === "true";
+}
+
+/**
  * The mode, plus the combinations that must never boot. Called first thing in
  * instrumentation's `register()`.
  */
@@ -41,7 +50,7 @@ export function assertBootConfig(env: Env = process.env): WorkspaceMode {
   const mode = workspaceMode(env);
   // DEMO_MODE turns on the shared-sandbox behaviour (the locked demo account,
   // the delete guard). A paid cloud deployment must never run it.
-  if (mode === "multi" && env.DEMO_MODE === "true") {
+  if (mode === "multi" && demoModeOn(env)) {
     throw new Error("WORKSPACE_MODE=multi cannot run with DEMO_MODE=true");
   }
   return mode;
