@@ -134,10 +134,20 @@ Written 2026-10-12, before any step was run.
   npm run lint
   npm run test:coverage
   npm run eval
-  if (Test-Path .next) { [System.IO.Directory]::Delete((Join-Path $PWD ".next"), $true) }
-  npm run build
-  $env:DATABASE_URL = "file:./e2e-multi.db"; npx prisma migrate deploy; $env:DATABASE_URL = $null
-  $env:CI = "1"; $env:WORKSPACE_MODE = "single"; npx playwright test; $env:CI = $null; $env:WORKSPACE_MODE = $null
+  if (Test-Path .next) {
+    # A build leaves NTFS junctions in .next\node_modules, and a recursive delete throws on them.
+    # Delete each link itself first (non-recursively: that removes the link, never its target in
+    # node_modules), then the rest of .next.
+    Get-ChildItem .next -Recurse -Directory -Force -Attributes ReparsePoint | ForEach-Object { [System.IO.Directory]::Delete($_.FullName, $false) }
+    [System.IO.Directory]::Delete((Join-Path $PWD ".next"), $true)
+  }
+  if (-not (Test-Path .next)) {
+    npm run build
+    $env:DATABASE_URL = "file:./e2e-multi.db"; npx prisma migrate deploy; $env:DATABASE_URL = $null
+    $env:CI = "1"; $env:WORKSPACE_MODE = "single"; npx playwright test; $env:CI = $null; $env:WORKSPACE_MODE = $null
+  } else {
+    "STOP: .next was not removed, so there is no fresh build. The build, the migration and the e2e did not run."
+  }
   ```
 - Tools are signed in: `turso auth whoami`, `gh auth status`, `npx vercel whoami`.
 - **The Docker image has not been built or booted.** Docker Desktop's daemon was down when the Dockerfile
@@ -439,18 +449,29 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
 
-Only if it merged:
+Only if it merged. The `gh api` reads run as `jasrulete` too, so this block switches before them and back
+after them:
 
 ```powershell
-git fetch origin
-$sha = git rev-parse origin/main
-$dep = gh api "repos/jasrulete/Nexus-CRM/deployments?sha=$sha&environment=Production" --jq '.[0].id'
-gh api "repos/jasrulete/Nexus-CRM/deployments/$dep/statuses" --jq '.[0] | {state, environment_url}'
+gh auth switch --user jasrulete 2>&1 | Out-Null
+if ((gh api user --jq .login) -eq 'jasrulete') {
+  git fetch origin
+  $sha = git rev-parse origin/main
+  $dep = gh api "repos/jasrulete/Nexus-CRM/deployments?sha=$sha&environment=Production" --jq '.[0].id'
+  if ($dep -and $dep -ne 'null') {
+    gh api "repos/jasrulete/Nexus-CRM/deployments/$dep/statuses" --jq '.[0] | {state, environment_url}'
+  } else {
+    "No Production deployment for $sha yet."
+  }
+} else {
+  "STOP: gh is not signed in as jasrulete. Nothing was read."
+}
+gh auth switch --user <work-account> 2>&1 | Out-Null
 ```
 
-If `$dep` prints empty, Vercel has not created the deployment yet: wait a minute and run the `$dep` line
-again. Repeat the last command until `state` is `success`. `failure` or `error` means the new deployment did
-not build; the old build keeps serving (`npx vercel inspect <environment_url> --logs` shows why), so stop.
+If it prints `No Production deployment … yet.`, Vercel has not created the deployment yet: wait a minute and
+run the block again. Repeat the block until `state` is `success`. `failure` or `error` means the new
+deployment did not build; the old build keeps serving (`npx vercel inspect <environment_url> --logs` shows why), so stop.
 That reassurance holds **only for a build that fails**. A deployment that builds and then refuses to boot at
 runtime (for example for want of `WORKSPACE_MODE`) is promoted like any other and is the one serving: if the
 site errors, go straight to "Rolling back, after step 7" and promote the previous deployment first. Then
@@ -582,26 +603,38 @@ and it stops there, before it reaches the row counts. Instead, confirm the copy 
 both files itself, so it also works in a new session:
 
 ```powershell
+$a = $null; $b = $null; $restored = $null
 $backup = (Get-ChildItem backups -Filter 'turso-backup-pre-m1-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
 $restored = (Get-ChildItem backups -Filter 'turso-backup-restored-check-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
 "backup:   $backup"
 "restored: $restored"
-$a = Get-Content $backup -Raw | ConvertFrom-Json
-$b = Get-Content $restored -Raw | ConvertFrom-Json
-$tables = $b.data.PSObject.Properties.Name
-$m1Rows = @($b.data._turso_migrations.rows | Where-Object { $_.name -eq '20261011180555_workspaces_expand' })
-if (($tables -contains 'Workspace') -or ($tables -contains 'Membership') -or ($tables -contains 'AiUsage') -or ($m1Rows.Count -gt 0)) {
+if ($backup) { $a = Get-Content $backup -Raw | ConvertFrom-Json }
+if ($restored) { $b = Get-Content $restored -Raw | ConvertFrom-Json }
+$tables = @()
+$m1Rows = @()
+if ($b) {
+  $tables = @($b.data.PSObject.Properties.Name)
+  $m1Rows = @($b.data._turso_migrations.rows | Where-Object { $_.name -eq '20261011180555_workspaces_expand' })
+}
+if (-not $a) {
+  "STOP: the step 2 backup file is missing or unreadable."
+} elseif (-not $b -or -not ($tables -contains '_turso_migrations') -or -not ($tables -contains 'Company')) {
+  "STOP: the restored-check file is missing or unreadable."
+} elseif (($tables -contains 'Workspace') -or ($tables -contains 'Membership') -or ($tables -contains 'AiUsage') -or ($m1Rows.Count -gt 0)) {
   "STOP: the restored copy already has M1 (its tables or its ledger row). It is not from before the push."
 } else {
   "pre-M1: no Workspace, Membership or AiUsage table, and no M1 row in _turso_migrations."
-}
-foreach ($t in 'Company', 'Contact', 'Deal', 'Activity', 'Task') {
-  "{0,-9} step 2: {1,5}   restored: {2,5}" -f $t, $a.data.$t.rows.Count, $b.data.$t.rows.Count
+  "restored copy read at (UTC): $($b.takenAt)"
+  foreach ($t in 'Company', 'Contact', 'Deal', 'Activity', 'Task') {
+    "{0,-9} step 2: {1,5}   restored: {2,5}" -f $t, $a.data.$t.rows.Count, $b.data.$t.rows.Count
+  }
 }
 ```
 
 Success: the `pre-M1:` line, then two columns that are equal, or differ only by what visitors wrote between
-step 2 and the restore point. A `STOP:` line, or anything else: stop and tell the owner.
+step 2 and the restore point. The `pre-M1:` line is printed only when the restored file was read and holds
+the ledger table, `Company`, and no `Workspace` table, so a missing or unreadable file can never read as
+success. A `STOP:` line, or anything else: stop and tell the owner.
 
 Part 2 points production at the restored copy (its own GO).
 
@@ -618,10 +651,59 @@ production domain to new deployments on its own, so run `npx vercel inspect nexu
 again: it must name the redeployment. If it names an older one, promote the redeployment explicitly
 (dashboard → Deployments → the redeployment → ⋯ → Promote to Production) and inspect again.
 
-Then confirm production reads the restored database: run `turso db inspect nexus-crm-restored` (read
-`turso db inspect --help` first; the Turso dashboard's usage view for the database shows the same), sign in
-with **Try the demo** and open a few pages, and run it again. Its rows-read count must have grown. If it
-has not, production still reads the old database: stop and tell the owner, and do not destroy anything.
+Then confirm production reads the restored database, by counting the restored copy's `Session` rows around
+a sign-in. A sign-in inserts a `Session` row into whichever database production reads, and nothing else
+writes to the restored copy, so its count grows only if production reads it. Each count is a read-only dump
+through `scripts/backup-turso.ts` (the script used above), with a `nexus-crm-restored` token that is never
+printed, behind an `Assert-Target` gate on the restored database's host like step 3's rehearsal. In order:
+
+1. Count before: run the block below as written (`restored-session-before`).
+2. Sign in on production: https://nexus-crm-jer2x.vercel.app/login → **Try the demo**.
+3. Count after: run the same block with `$label` changed to `restored-session-after`.
+4. Compare, with the second block.
+
+```powershell
+$label = 'restored-session-before'   # the second run: 'restored-session-after'
+$restoredUrl = (turso db show nexus-crm-restored --url)
+$env:TURSO_DATABASE_URL = $null; $env:TURSO_AUTH_TOKEN = $null
+if ($restoredUrl) {
+  $env:TURSO_DATABASE_URL = $restoredUrl
+  $env:TURSO_AUTH_TOKEN = (turso db tokens create nexus-crm-restored)
+}
+if (Assert-Target -Expect 'nexus-crm-restored-*' -NeedToken) {
+  npx tsx scripts/backup-turso.ts $label --url $restoredUrl
+}
+$env:TURSO_DATABASE_URL = $null; $env:TURSO_AUTH_TOKEN = $null
+```
+
+If `Assert-Target` prints `STOP:` (a Turso command failed, or the host is not the restored database's),
+nothing ran: stop and tell the owner. The comparison only reads the two files the dumps wrote, and requires
+the Session count to have grown by at least 1:
+
+```powershell
+$beforeFile = (Get-ChildItem backups -Filter 'turso-backup-restored-session-before-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+$afterFile = (Get-ChildItem backups -Filter 'turso-backup-restored-session-after-*.json' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName
+$before = $null; $after = $null
+if ($beforeFile) {
+  $j = Get-Content $beforeFile -Raw | ConvertFrom-Json
+  if ($j.data.PSObject.Properties.Name -contains 'Session') { $before = @($j.data.Session.rows).Count }
+}
+if ($afterFile) {
+  $j = Get-Content $afterFile -Raw | ConvertFrom-Json
+  if ($j.data.PSObject.Properties.Name -contains 'Session') { $after = @($j.data.Session.rows).Count }
+}
+if (($null -eq $before) -or ($null -eq $after) -or ((Get-Item $afterFile).LastWriteTime -le (Get-Item $beforeFile).LastWriteTime)) {
+  "STOP: the before and after Session counts are not both readable, or the after dump is not newer than the before dump."
+} elseif ($after -ge $before + 1) {
+  "OK: Session rows $before -> $after. Production reads the restored database."
+} else {
+  "STOP: Session rows $before -> $after. Production is not reading the restored database."
+}
+```
+
+Success: the `OK:` line. Anything else, above all the `STOP: Session rows … Production is not reading the
+restored database.` line, means production still reads the old database: stop and tell the owner, and do
+not destroy anything.
 
 Update the GitHub Actions secrets of the same names too, before step 9 re-enables the nightly, and `.env`
 for the local scripts. The restored database is a pre-M1 copy, so step 3 and step 4 are repeated against
