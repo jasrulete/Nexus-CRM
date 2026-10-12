@@ -30,6 +30,18 @@ const aiEnv: Record<string, string> = process.env.E2E_LIVE_AI
   ? {}
   : { GEMINI_API_KEY: "", GROQ_API_KEY: "" };
 
+// Both servers run on a local SQLite file, never the remote database. .env
+// holds the production Turso credentials and the database adapter already
+// ignores them unless ALLOW_REMOTE_DB=true, so this is a second lock: it
+// blanks them (and the opt-in) for both servers, whatever the developer's
+// shell or .env says. start-standalone.mjs and Next both load .env, and
+// neither overwrites a variable that is already set, even to "".
+const localDbEnv: Record<string, string> = {
+  ALLOW_REMOTE_DB: "",
+  TURSO_DATABASE_URL: "",
+  TURSO_AUTH_TOKEN: "",
+};
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: false, // the suite shares one seeded SQLite database
@@ -73,7 +85,7 @@ export default defineConfig({
       url: process.env.CI ? `${baseURL}/api/health` : baseURL,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,
-      env: aiEnv,
+      env: { ...aiEnv, ...localDbEnv },
     },
     ...(runMulti
       ? [
@@ -84,6 +96,7 @@ export default defineConfig({
             timeout: 180_000,
             env: {
               ...aiEnv,
+              ...localDbEnv,
               PORT: new URL(multiBaseURL).port,
               WORKSPACE_MODE: "multi",
               // Empty rather than absent: start-standalone.mjs loads .env, and
