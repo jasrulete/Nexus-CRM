@@ -72,8 +72,9 @@ jobs:
         run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
 
       # Runs the same suite, and fails if coverage drops below the floor in
-      # vitest.config.ts — so deleting a test file, or adding a module with
-      # none, is caught here rather than noticed months later.
+      # vitest.config.ts, a few points under today's figure: a sizeable module
+      # with no tests, or a deleted test file that was its only cover, is
+      # caught here rather than noticed months later. A smaller loss is not.
       - name: Unit tests with coverage
         run: npm run test:coverage
 

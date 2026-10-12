@@ -22,7 +22,9 @@ const securityFeatures = [
   "Sessions stored server-side as SHA-256 hashes in httpOnly, SameSite cookies",
   "Every mutation validated with zod and authorized on the server",
   "Login, AI and search actions rate-limited",
-  "Full audit trail of logins, changes and AI usage",
+  // Sign-ins are platform events with no workspace, so they never appear in
+  // the audit card below (spec §5.6).
+  "Audit trail of this workspace's changes and AI usage",
 ];
 
 export default async function SettingsPage() {

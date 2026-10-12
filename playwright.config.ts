@@ -10,8 +10,11 @@ const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 // directory, and the single-mode server already holds it. So it runs in CI,
 // which builds first, and locally only when asked:
 //   npm run build
-//   $env:DATABASE_URL = "file:./e2e-multi.db"; npx prisma migrate deploy
+//   $env:DATABASE_URL = "file:./e2e-multi.db"; npx prisma migrate deploy; $env:DATABASE_URL = $null
 //   $env:E2E_MULTI = "1"; npm run test:e2e
+// Clear DATABASE_URL after the migrate, as CI scopes it to that one command:
+// the single-mode server inherits the shell's environment, and pointed at
+// e2e-multi.db its boot check refuses that database's many workspaces.
 // One build serves both servers: WORKSPACE_MODE is read at runtime, never inlined.
 const multiBaseURL = process.env.E2E_MULTI_BASE_URL ?? "http://localhost:3100";
 const runMulti = !!process.env.CI || process.env.E2E_MULTI === "1";
