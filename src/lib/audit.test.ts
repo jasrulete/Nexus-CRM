@@ -12,7 +12,6 @@ vi.mock("@/lib/db", async () => {
   const { scopeToWorkspace } = await import("@/lib/tenancy");
   return {
     systemDb: prisma,
-    prisma,
     scopeToWorkspace,
     forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
   };
@@ -133,23 +132,5 @@ describe("auditTx(tx, entry)", () => {
     await expect(auditTx(scopeToWorkspace(prisma, "ws_a"), { ...entry(), workspaceId: "ws_b" })).rejects.toThrow(
       TenancyViolation,
     );
-  });
-});
-
-// Removed in Task 19, with the overload, once no action uses it.
-describe("the deprecated audit(entry, tx?) form", () => {
-  it("still writes, with no workspace", async () => {
-    await audit({ action: "contact.update", entityType: "contact", entityId: "c1", userId });
-
-    expect(await prisma.auditLog.findFirst()).toMatchObject({ action: "contact.update", workspaceId: null });
-  });
-
-  it("still writes through a transaction client it is given", async () => {
-    const tx = { auditLog: { create: vi.fn(async () => undefined) } };
-
-    await audit({ action: "contact.update", entityType: "contact", entityId: "c1" }, tx);
-
-    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
-    expect(await prisma.auditLog.count()).toBe(0);
   });
 });

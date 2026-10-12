@@ -25,9 +25,6 @@ export function forWorkspace(workspaceId: string): ScopedDb {
   return scopeToWorkspace(systemDb, workspaceId);
 }
 
-/** @deprecated Removed in Task 19. Use forWorkspace / systemDb. */
-export const prisma: PrismaClient = systemDb;
-
 /**
  * The boot-time half of single mode's guard (spec §6), run by
  * instrumentation's register(). It lives here so the boot path reaches the

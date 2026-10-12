@@ -29,7 +29,6 @@ vi.mock("@/lib/db", async () => {
   }) as unknown as typeof prisma;
   return {
     systemDb: prisma,
-    prisma,
     scopeToWorkspace,
     forWorkspace: (ws: string) => scopeToWorkspace(recorded, ws),
   };

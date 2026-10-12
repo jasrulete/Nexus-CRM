@@ -59,7 +59,6 @@ vi.mock("@/lib/db", async () => {
   });
   return {
     systemDb,
-    prisma: systemDb,
     scopeToWorkspace,
     forWorkspace: (ws: string) => scopeToWorkspace(libsql, ws),
   };

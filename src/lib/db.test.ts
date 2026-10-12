@@ -3,12 +3,13 @@
  * model is refused inside the extension, before the client connects.
  */
 import { describe, expect, it } from "vitest";
-import { forWorkspace, prisma, scopeToWorkspace, systemDb } from "./db";
+import { forWorkspace, scopeToWorkspace } from "./db";
 import { TenancyViolation, scopeToWorkspace as scopeFromTenancy } from "./tenancy";
 
 describe("db exports", () => {
-  it("keeps the deprecated prisma alias on systemDb until Task 19", () => {
-    expect(prisma).toBe(systemDb);
+  it("no longer exports the deprecated prisma alias", async () => {
+    const mod = await import("./db");
+    expect("prisma" in mod).toBe(false);
   });
 
   it("re-exports scopeToWorkspace from tenancy.ts", () => {

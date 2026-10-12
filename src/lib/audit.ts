@@ -1,6 +1,5 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { prisma } from "@/lib/db";
 
 /**
  * Anything that can write a workspace audit row: a scoped client
@@ -66,35 +65,6 @@ export async function auditTx(tx: AuditWriter, entry: WorkspaceAuditEntry): Prom
   await tx.auditLog.create({ data: row(entry) });
 }
 
-// ---- Transitional: the pre-workspace call form, removed in Task 19. ----
-
-/** @deprecated The pre-workspace entry shape. Removed in Task 19. */
-export type AuditEntry = {
-  action: string;
-  entityType: string;
-  entityId: string;
-  userId?: string | null;
-  metadata?: Record<string, unknown>;
-};
-
-type LegacyAuditWriter = {
-  auditLog: {
-    create(args: {
-      data: {
-        action: string;
-        entityType: string;
-        entityId: string;
-        userId: string | null;
-        metadata: string | null;
-      };
-    }): Promise<unknown>;
-  };
-};
-
-function isWriter(value: unknown): value is AuditWriter {
-  return typeof value === "object" && value !== null && "auditLog" in value;
-}
-
 /**
  * Appends a workspace entry after the fact, best-effort: it never throws,
  * because the action it records has already committed and breaking it now
@@ -106,42 +76,9 @@ function isWriter(value: unknown): value is AuditWriter {
  * every entry lands in the caller's workspace. Platform events (`auth.*`) go
  * through `auditPlatform` instead.
  */
-export async function audit(db: AuditWriter, entry: WorkspaceAuditEntry): Promise<void>;
-/**
- * @deprecated The pre-workspace form: writes with no workspace. Kept only so
- * the server actions compile until Tasks 11–16 move them to `audit(db, entry)`
- * and `auditTx(tx, entry)`. Removed in Task 19.
- */
-export async function audit(entry: AuditEntry, tx?: LegacyAuditWriter): Promise<void>;
-export async function audit(
-  first: AuditWriter | AuditEntry,
-  second?: WorkspaceAuditEntry | LegacyAuditWriter,
-): Promise<void> {
-  if (isWriter(first)) {
-    const entry = second as WorkspaceAuditEntry;
-    try {
-      await first.auditLog.create({ data: row(entry) });
-    } catch (err) {
-      report(err, entry);
-    }
-    return;
-  }
-
-  const entry = first;
-  const data = {
-    action: entry.action,
-    entityType: entry.entityType,
-    entityId: entry.entityId,
-    userId: entry.userId ?? null,
-    metadata: entry.metadata ? JSON.stringify(entry.metadata) : null,
-  };
-  const tx = second as LegacyAuditWriter | undefined;
-  if (tx) {
-    await tx.auditLog.create({ data });
-    return;
-  }
+export async function audit(db: AuditWriter, entry: WorkspaceAuditEntry): Promise<void> {
   try {
-    await prisma.auditLog.create({ data });
+    await db.auditLog.create({ data: row(entry) });
   } catch (err) {
     report(err, entry);
   }

@@ -20,7 +20,6 @@ vi.mock("@/lib/db", async () => {
   const { scopeToWorkspace } = await import("@/lib/tenancy");
   return {
     systemDb: prisma,
-    prisma,
     scopeToWorkspace,
     forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
   };
