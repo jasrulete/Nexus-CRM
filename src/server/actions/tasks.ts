@@ -2,13 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { audit } from "@/lib/audit";
-import { requireUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
+import { audit, auditTx } from "@/lib/audit";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate } from "@/lib/authz";
 import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { fieldErrors, idSchema, taskSchema } from "@/lib/validation";
+import { actorOf, requireWorkspace } from "@/lib/workspace-context";
 
 function revalidateFor(task: { contactId: string | null; dealId: string | null }) {
   if (task.contactId) revalidatePath(`/contacts/${task.contactId}`);
@@ -23,7 +22,7 @@ export async function createTask(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
   const parsed = taskSchema.safeParse({
     title: formData.get("title"),
     dueDate: formData.get("dueDate"),
@@ -34,26 +33,28 @@ export async function createTask(
 
   const { dueDate, contactId, dealId, ...data } = parsed.data;
 
-  // Same guard as createActivity: an id from a stale form must not reach
-  // Prisma as a dangling foreign key.
-  const missing = await findMissingRelation(prisma, { contactId, dealId });
+  // Same guard as createActivity: an id from a stale form, or from another
+  // workspace, must not reach the create as a link.
+  const missing = await findMissingRelation(ctx.db, { contactId, dealId });
   if (missing) return { message: missingRelationMessage(missing) };
 
-  const task = await prisma.task.create({
+  const task = await ctx.db.task.create({
     data: {
       ...data,
       dueDate: dueDate ? new Date(dueDate) : null,
       contactId: contactId || null,
       dealId: dealId || null,
-      assigneeId: user.id,
+      assigneeId: ctx.user.id,
+      workspaceId: ctx.workspaceId,
     },
   });
 
-  await audit({
+  await audit(ctx.db, {
     action: "task.create",
     entityType: "task",
     entityId: task.id,
-    userId: user.id,
+    workspaceId: ctx.workspaceId,
+    userId: ctx.user.id,
     metadata: { title: task.title },
   });
   revalidateFor(task);
@@ -61,49 +62,48 @@ export async function createTask(
 }
 
 export async function toggleTask(taskId: string): Promise<void> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
   const id = idSchema.parse(taskId);
 
-  const task = await prisma.task.findUnique({ where: { id } });
+  const task = await ctx.db.task.findUnique({ where: { id } });
   if (!task) return;
-  if (!canMutate(task.assigneeId, user)) {
+  if (!canMutate(task.assigneeId, actorOf(ctx))) {
     throw new Error("FORBIDDEN: only the assignee or an admin can update");
   }
 
-  await prisma.task.update({ where: { id }, data: { done: !task.done } });
-  await audit({
+  await ctx.db.task.update({ where: { id }, data: { done: !task.done } });
+  await audit(ctx.db, {
     action: task.done ? "task.reopen" : "task.complete",
     entityType: "task",
     entityId: id,
-    userId: user.id,
+    workspaceId: ctx.workspaceId,
+    userId: ctx.user.id,
   });
   revalidateFor(task);
 }
 
 export async function deleteTask(taskId: string): Promise<void> {
-  const user = await requireUser();
-  assertNotLockedDemoAccount(user);
+  const ctx = await requireWorkspace();
+  assertNotLockedDemoAccount(ctx.user);
   const id = idSchema.parse(taskId);
 
-  const task = await prisma.task.findUnique({ where: { id } });
+  const task = await ctx.db.task.findUnique({ where: { id } });
   if (!task) return;
-  if (!canMutate(task.assigneeId, user)) {
+  if (!canMutate(task.assigneeId, actorOf(ctx))) {
     throw new Error("FORBIDDEN: only the assignee or an admin can delete");
   }
 
   // A delete and its record commit together: afterwards the entry is the only
   // evidence the row existed at all.
-  await prisma.$transaction(async (tx) => {
+  await ctx.db.$transaction(async (tx) => {
     await tx.task.delete({ where: { id } });
-    await audit(
-      {
-        action: "task.delete",
-        entityType: "task",
-        entityId: id,
-        userId: user.id,
-      },
-      tx,
-    );
+    await auditTx(tx, {
+      action: "task.delete",
+      entityType: "task",
+      entityId: id,
+      workspaceId: ctx.workspaceId,
+      userId: ctx.user.id,
+    });
   });
   revalidateFor(task);
 }

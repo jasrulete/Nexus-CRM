@@ -2,19 +2,18 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { audit } from "@/lib/audit";
-import { requireUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
+import { audit, auditTx } from "@/lib/audit";
 import { assertNotLockedDemoAccount } from "@/lib/demo-guard";
 import { canMutate } from "@/lib/authz";
 import { findMissingRelation, missingRelationMessage } from "@/lib/relations";
 import { activitySchema, fieldErrors, idSchema } from "@/lib/validation";
+import { actorOf, requireWorkspace } from "@/lib/workspace-context";
 
 export async function createActivity(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
   const parsed = activitySchema.safeParse({
     type: formData.get("type"),
     content: formData.get("content"),
@@ -29,27 +28,30 @@ export async function createActivity(
     return { message: "Activity must be attached to a record" };
   }
 
-  // Without this a stale tab whose contact was just deleted throws Prisma
-  // P2003 out of the create, and the user gets the error boundary instead
-  // of a message — losing what they typed.
-  const missing = await findMissingRelation(prisma, { contactId, dealId, companyId });
+  // Without this, a stale tab whose contact was just deleted throws Prisma P2003
+  // out of the create, and the user gets the error boundary instead of a
+  // message, losing what they typed. Through the scoped client, another
+  // workspace's id gets the same "no longer exists" (spec §5.4).
+  const missing = await findMissingRelation(ctx.db, { contactId, dealId, companyId });
   if (missing) return { message: missingRelationMessage(missing) };
 
-  const activity = await prisma.activity.create({
+  const activity = await ctx.db.activity.create({
     data: {
       ...data,
       contactId: contactId || null,
       dealId: dealId || null,
       companyId: companyId || null,
-      userId: user.id,
+      userId: ctx.user.id,
+      workspaceId: ctx.workspaceId,
     },
   });
 
-  await audit({
+  await audit(ctx.db, {
     action: "activity.create",
     entityType: "activity",
     entityId: activity.id,
-    userId: user.id,
+    workspaceId: ctx.workspaceId,
+    userId: ctx.user.id,
     metadata: { type: data.type },
   });
 
@@ -62,29 +64,27 @@ export async function createActivity(
 }
 
 export async function deleteActivity(activityId: string): Promise<void> {
-  const user = await requireUser();
-  assertNotLockedDemoAccount(user);
+  const ctx = await requireWorkspace();
+  assertNotLockedDemoAccount(ctx.user);
   const id = idSchema.parse(activityId);
 
-  const activity = await prisma.activity.findUnique({ where: { id } });
+  const activity = await ctx.db.activity.findUnique({ where: { id } });
   if (!activity) return;
-  if (!canMutate(activity.userId, user)) {
+  if (!canMutate(activity.userId, actorOf(ctx))) {
     throw new Error("FORBIDDEN: only the author or an admin can delete");
   }
 
   // A delete and its record commit together: afterwards the entry is the only
   // evidence the row existed at all.
-  await prisma.$transaction(async (tx) => {
+  await ctx.db.$transaction(async (tx) => {
     await tx.activity.delete({ where: { id } });
-    await audit(
-      {
-        action: "activity.delete",
-        entityType: "activity",
-        entityId: id,
-        userId: user.id,
-      },
-      tx,
-    );
+    await auditTx(tx, {
+      action: "activity.delete",
+      entityType: "activity",
+      entityId: id,
+      workspaceId: ctx.workspaceId,
+      userId: ctx.user.id,
+    });
   });
 
   if (activity.contactId) revalidatePath(`/contacts/${activity.contactId}`);
