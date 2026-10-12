@@ -54,6 +54,13 @@ const model = vi.hoisted(() => ({
   failure: "not_configured" as "not_configured" | "rate_limited" | "error" | "malformed",
   // What the chain reports it spent; the usage ledger stores it.
   usage: { inputTokens: 0, outputTokens: 0 },
+  // Whether that failure was billed: the chain's `billed`, true when any
+  // attempt got a 2xx answer. A reply the double itself rejects is always
+  // billed; the flag only governs the no-reply failures above.
+  billed: false,
+  // True hands the call to the real provider chain, with fetch scripted by the
+  // test, so a row-level test can exercise provider.ts and the ledger together.
+  real: false,
   prompts: [] as string[],
   jsonRequests: [] as { schema: { safeParse: (v: unknown) => { success: boolean } }; jsonSchema: Record<string, unknown> }[],
 }));
@@ -65,18 +72,20 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     aiProviderName: () => (model.reply ? model.reply.provider.split("/")[0] : null),
     generateText: async (prompt: string) => {
       model.prompts.push(prompt);
+      if (model.real) return actual.generateText(prompt);
       return model.reply
         ? { ok: true, ...model.reply, usage: model.usage }
-        : { ok: false, reason: model.failure, usage: model.usage };
+        : { ok: false, reason: model.failure, usage: model.usage, billed: model.billed };
     },
     // A draft reply is judged by the product's own shape rule, imported rather
     // than copied, so this double cannot drift from what the chain accepts.
     generateDraft: async (prompt: string) => {
       model.prompts.push(prompt);
-      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage };
+      if (model.real) return actual.generateDraft(prompt);
+      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage, billed: model.billed };
       return shape.isEmailShaped(model.reply.text)
         ? { ok: true, ...model.reply, usage: model.usage }
-        : { ok: false, reason: "malformed", usage: model.usage };
+        : { ok: false, reason: "malformed", usage: model.usage, billed: true };
     },
     // Only the transport is faked: the reply text goes through the same
     // whole-reply parse and schema the real provider applies, so a test can
@@ -84,17 +93,20 @@ vi.mock("@/lib/ai/provider", async (importOriginal) => {
     generateJson: async (prompt: string, request: { schema: { safeParse: (v: unknown) => { success: boolean; data?: unknown } }; jsonSchema: Record<string, unknown> }) => {
       model.prompts.push(prompt);
       model.jsonRequests.push(request);
-      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage };
+      if (model.real) {
+        return actual.generateJson(prompt, request as Parameters<typeof actual.generateJson>[1]);
+      }
+      if (!model.reply) return { ok: false, reason: model.failure, usage: model.usage, billed: model.billed };
       let parsed: unknown;
       try {
         parsed = JSON.parse(model.reply.text);
       } catch {
-        return { ok: false, reason: "malformed", usage: model.usage };
+        return { ok: false, reason: "malformed", usage: model.usage, billed: true };
       }
       const checked = request.schema.safeParse(parsed);
       return checked.success
         ? { ok: true, data: checked.data, provider: model.reply.provider, usage: model.usage }
-        : { ok: false, reason: "malformed", usage: model.usage };
+        : { ok: false, reason: "malformed", usage: model.usage, billed: true };
     },
   };
 });
@@ -191,6 +203,8 @@ beforeEach(async () => {
   model.reply = null;
   model.failure = "not_configured";
   model.usage = { inputTokens: 0, outputTokens: 0 };
+  model.billed = false;
+  model.real = false;
   model.prompts = [];
   model.jsonRequests = [];
   mail.configured = false;
@@ -1010,6 +1024,51 @@ describe("the usage ledger", () => {
     expect(await chargedRows(owner.workspaceId)).toBe(0);
   });
 
+  // Spec §7.1 and §7.4. The chain's reason ranks "error" above "malformed", so
+  // the outcome can't be read off it: what decides "rejected" (charged) against
+  // "fallback" (free) is whether any attempt got a 2xx answer, the chain's
+  // `billed`. Two ways to a billed reply whose reason says "error":
+  //   (a) a 200 that failed validation, then the next provider failed;
+  //   (b) the only provider answered 200 with empty content (Groq's reasoning
+  //       used up max_tokens).
+  it.each([
+    ["a 200 that failed validation, then an outage", "score", { inputTokens: 500, outputTokens: 40 }],
+    ["a 200 with empty content", "summary", { inputTokens: 900, outputTokens: 1024 }],
+  ] as const)("settles %s as rejected, though the chain's reason is error", async (_label, action, usage) => {
+    model.reply = null;
+    model.failure = "error";
+    model.billed = true;
+    model.usage = usage;
+
+    const result = action === "score" ? await scoreContact(contactId) : await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({
+      action,
+      outcome: "rejected",
+      provider: null,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+    });
+    expect(await chargedRows(owner.workspaceId)).toBe(1);
+  });
+
+  it("settles a chain that got no 2xx answer as an uncharged fallback", async () => {
+    model.reply = null;
+    model.failure = "error";
+    model.billed = false;
+
+    await summarizeContact(contactId);
+
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({
+      outcome: "fallback",
+      provider: null,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(await chargedRows(owner.workspaceId)).toBe(0);
+  });
+
   it("does not meter sending a draft or reading a file", async () => {
     await sendFollowUp(contactId, "Subject: x\n\ny");
     await extractFileText(new FormData());
@@ -1038,6 +1097,103 @@ describe("the usage ledger", () => {
     expect(after.aiScore).toBeNull();
     expect(await prisma.aiUsage.count({ where: { outcome: "denied", action: "score" } })).toBe(1);
     expect(await prisma.auditLog.count({ where: { action: "ai.score_contact" } })).toBe(0);
+  });
+});
+
+// The same two billed-reply cases against the real provider chain, with only
+// fetch scripted, so `billed` is produced by provider.ts and read by the ledger
+// rather than handed over by the double. The keys are placeholders: nothing
+// leaves the process.
+describe("the usage ledger against the real provider chain", () => {
+  const GEMINI_HOST = "generativelanguage.googleapis.com";
+  const ok = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  type Answer = () => Response | Promise<Response>;
+  function scriptFetch(handlers: { gemini: Answer; groq: Answer }) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return new URL(url).hostname === GEMINI_HOST ? handlers.gemini() : handlers.groq();
+    });
+  }
+
+  beforeEach(() => {
+    model.real = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "placeholder-gemini-key");
+    vi.stubEnv("GROQ_API_KEY", "placeholder-groq-key");
+    vi.stubEnv("AI_MODEL", "");
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // (a), through to the monthly allowance: the rejected reply is charged, so it
+  // is the 30th action and the next caller is refused.
+  it("charges a 200 that failed validation followed by an outage, against the allowance", async () => {
+    vi.stubEnv("WORKSPACE_MODE", "multi");
+    await preload(owner.workspaceId, 29);
+    scriptFetch({
+      gemini: () =>
+        ok({
+          candidates: [{ content: { parts: [{ text: "Sure! I would rate this contact highly." }] } }],
+          usageMetadata: { promptTokenCount: 500, candidatesTokenCount: 40 },
+        }),
+      groq: () => new Response("boom", { status: 500 }),
+    });
+
+    const result = await scoreContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    // The 29 preloaded rows are all "summary", so the only score row is this call's.
+    expect(await prisma.aiUsage.findFirstOrThrow({ where: { action: "score" } })).toMatchObject({
+      outcome: "rejected",
+      provider: null,
+      inputTokens: 500,
+      outputTokens: 40,
+    });
+    expect(await chargedRows(owner.workspaceId)).toBe(30);
+    expect(await summarizeContact(contactId)).toEqual({
+      ok: false,
+      provider: "none",
+      message: DENIED_MESSAGE,
+    });
+  });
+
+  it("charges an empty 200 from the only configured provider", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    scriptFetch({
+      gemini: () => ok({}),
+      groq: () =>
+        ok({
+          choices: [{ message: { content: "" } }],
+          usage: { prompt_tokens: 900, completion_tokens: 1024 },
+        }),
+    });
+
+    const result = await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({
+      action: "summary",
+      outcome: "rejected",
+      provider: null,
+      inputTokens: 900,
+      outputTokens: 1024,
+    });
+    expect(await chargedRows(owner.workspaceId)).toBe(1);
+  });
+
+  it("does not charge a chain where no attempt got a 2xx answer", async () => {
+    scriptFetch({
+      gemini: () => new Response("busy", { status: 503 }),
+      groq: () => Promise.reject(new TypeError("fetch failed")),
+    });
+
+    const result = await summarizeContact(contactId);
+
+    expect(result).toMatchObject({ ok: true, provider: "heuristic", degraded: "error" });
+    expect(await prisma.aiUsage.findFirstOrThrow()).toMatchObject({ outcome: "fallback", provider: null });
+    expect(await chargedRows(owner.workspaceId)).toBe(0);
   });
 });
 

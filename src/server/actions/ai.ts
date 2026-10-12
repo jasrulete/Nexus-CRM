@@ -120,6 +120,7 @@ async function meteredCall<R extends ModelResult>(
       ok: false,
       reason: "capacity",
       usage: { inputTokens: 0, outputTokens: 0 },
+      billed: false,
     };
     return { ai: capacity };
   }
@@ -127,10 +128,13 @@ async function meteredCall<R extends ModelResult>(
   const ai = await call();
   const settled: ModelResult = ai;
   await settleAiCall(ctx, reservation.usageId, {
-    // A reply that came back and failed our validation was work the provider
-    // did, so it is charged ("rejected"). An outage, a 429, a timeout or no
-    // key is not ("fallback").
-    outcome: settled.ok ? "answered" : settled.reason === "malformed" ? "rejected" : "fallback",
+    // What decides charged ("rejected") against free ("fallback") is whether
+    // any attempt got a 2xx answer (`billed`), not the chain's reason. That
+    // reason ranks "error" above "malformed", so a 200 that failed validation
+    // or came back empty, followed by an outage, reads "error" though the
+    // provider billed it. A chain with no 2xx at all (429s, error statuses,
+    // timeouts, network failures, no key) is free.
+    outcome: settled.ok ? "answered" : settled.billed ? "rejected" : "fallback",
     provider: settled.ok ? settled.provider : null,
     inputTokens: settled.usage.inputTokens,
     outputTokens: settled.usage.outputTokens,

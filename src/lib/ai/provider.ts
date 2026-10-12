@@ -27,7 +27,23 @@ export type AiFailureReason =
   | "capacity";
 /** Tokens billed for one action, over every provider attempt it made. */
 export type AiUsageTokens = { inputTokens: number; outputTokens: number };
-export type AiFailure = { ok: false; reason: AiFailureReason; usage: AiUsageTokens };
+/**
+ * `billed` is true when any attempt in the chain got a 2xx answer from a
+ * provider, whatever the body held: unparseable, failing validation, or empty.
+ * The provider did the work, and the usage ledger charges for it (spec §7.1,
+ * §7.4). It is false when every attempt was a non-2xx status, a timeout or a
+ * network error, or when no key was set. The one non-2xx that counts is
+ * Groq's 400 json_validate_failed (see Attempt). `reason` can't say this: it ranks
+ * "error" above "malformed", so a billed reply followed by an outage reads as
+ * "error". It comes from the HTTP status, not from `usage`, because a 2xx can
+ * arrive without usage metadata.
+ */
+export type AiFailure = {
+  ok: false;
+  reason: AiFailureReason;
+  usage: AiUsageTokens;
+  billed: boolean;
+};
 /**
  * Why an action fell back to its heuristic. The chain never reports
  * "capacity". The usage ledger does, when the deployment's daily AI ceiling
@@ -58,8 +74,13 @@ type AttemptOutcome =
   | { kind: "rate_limited" }
   | { kind: "error" }
   | { kind: "malformed" };
-/** What one call returned, and what it cost. Zero tokens unless it got a 200. */
-type Attempt = AttemptOutcome & { usage: AiUsageTokens };
+/**
+ * What one call returned, and what it cost. Zero tokens unless it got a 200.
+ * `billed` is true for any 2xx, and also for Groq's 400 json_validate_failed:
+ * there the model ran and produced something that wasn't JSON, which is a
+ * reply that was not usable rather than an outage.
+ */
+type Attempt = AttemptOutcome & { usage: AiUsageTokens; billed: boolean };
 type FailureKind = Exclude<AttemptOutcome, { kind: "ok" }>["kind"];
 
 type JsonMode = { jsonSchema: Record<string, unknown> };
@@ -155,8 +176,9 @@ async function runChain<T>(
   // Every attempt's tokens are added up, including a 200 reply that `accept`
   // rejects: the provider billed it, and it counts against the same quota.
   const usage: AiUsageTokens = { inputTokens: 0, outputTokens: 0 };
+  let billed = false;
   const chain = configuredProviders();
-  if (chain.length === 0) return { ok: false, reason: "not_configured", usage };
+  if (chain.length === 0) return { ok: false, reason: "not_configured", usage, billed };
 
   const failures: FailureKind[] = [];
   for (const [index, provider] of chain.entries()) {
@@ -168,6 +190,7 @@ async function runChain<T>(
       );
       usage.inputTokens += attempt.usage.inputTokens;
       usage.outputTokens += attempt.usage.outputTokens;
+      billed = billed || attempt.billed;
       if (attempt.kind !== "ok") {
         failures.push(attempt.kind);
         continue;
@@ -192,9 +215,11 @@ async function runChain<T>(
   // reset, which is the wrong advice when a provider is actually down. An
   // error anywhere is an error. What is left is a chain where every provider
   // was reachable and at least one answered unusably.
-  if (failures.every((kind) => kind === "rate_limited")) return { ok: false, reason: "rate_limited", usage };
-  if (failures.includes("error")) return { ok: false, reason: "error", usage };
-  return { ok: false, reason: "malformed", usage };
+  if (failures.every((kind) => kind === "rate_limited")) {
+    return { ok: false, reason: "rate_limited", usage, billed };
+  }
+  if (failures.includes("error")) return { ok: false, reason: "error", usage, billed };
+  return { ok: false, reason: "malformed", usage, billed };
 }
 
 function noTokens(): AiUsageTokens {
@@ -254,7 +279,7 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
   );
   if (!res.ok) {
     console.error("gemini error", res.status, await res.text().catch(() => ""));
-    return { ...classify(res.status), usage: noTokens() };
+    return { ...classify(res.status), usage: noTokens(), billed: false };
   }
   const body = (await res.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -278,9 +303,9 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
     .trim();
   if (!text) {
     console.error("gemini returned no text");
-    return { kind: "error", usage };
+    return { kind: "error", usage, billed: true };
   }
-  return { kind: "ok", text, provider: `gemini/${model}`, usage };
+  return { kind: "ok", text, provider: `gemini/${model}`, usage, billed: true };
 }
 
 async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
@@ -326,11 +351,12 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
     console.error("groq error", res.status, detail);
     // In JSON mode Groq does not hand back invalid JSON as a 200: a model that
     // fails to produce an object is a 400 json_validate_failed. That is a reply
-    // that was not usable, not a provider outage.
+    // that was not usable, not a provider outage. The model ran, so it is
+    // billed, though a 400 carries no token counts.
     if (res.status === 400 && json && isJsonValidationFailure(detail)) {
-      return { kind: "malformed", usage: noTokens() };
+      return { kind: "malformed", usage: noTokens(), billed: true };
     }
-    return { ...classify(res.status), usage: noTokens() };
+    return { ...classify(res.status), usage: noTokens(), billed: false };
   }
   const body = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
@@ -344,7 +370,7 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
   const text = body.choices?.[0]?.message?.content?.trim();
   if (!text) {
     console.error("groq returned no text");
-    return { kind: "error", usage };
+    return { kind: "error", usage, billed: true };
   }
-  return { kind: "ok", text, provider: `groq/${model}`, usage };
+  return { kind: "ok", text, provider: `groq/${model}`, usage, billed: true };
 }
