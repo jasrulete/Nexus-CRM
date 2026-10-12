@@ -1,5 +1,15 @@
 /**
- * Rebuilds the demo workspace: deletes every CRM row, then re-seeds.
+ * Rebuilds the demo workspace: refuses unless this database is the demo, then
+ * deletes the demo workspace's CRM rows and re-seeds them.
+ *
+ * The work lives in src/lib/demo-reset.ts as two units, tested there:
+ *   assertResettable    exactly one Workspace, and it is marked isDemo — or it
+ *                       throws RESET_REFUSED and this script exits non-zero
+ *                       having written nothing;
+ *   resetDemoWorkspace  prunes the audit log, deletes that workspace's CRM rows
+ *                       (and any an older build left with no workspace),
+ *                       re-upserts the demo account's ADMIN membership and
+ *                       reseeds. It never writes isDemo.
  *
  * User accounts are deliberately untouched. Production holds real logins
  * alongside the demo account, and a nightly job must not delete them.
@@ -10,9 +20,9 @@
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createDbAdapter } from "../src/lib/db-adapter";
-import { auditPruneWhere, resolveResetTarget } from "../src/lib/reset-guard";
-import { DEMO_EMAIL } from "../src/lib/demo-guard";
-import { ensureDemoUser, seedDemoData } from "../prisma/seed-data";
+import { assertResettable, resetDemoWorkspace } from "../src/lib/demo-reset";
+import { resolveResetTarget } from "../src/lib/reset-guard";
+import { assertScriptMode } from "../src/lib/workspace-maintenance";
 
 // "local" here means createDbAdapter() will ignore Turso, because both read the
 // same ALLOW_REMOTE_DB flag — the target reported below is the one actually used.
@@ -39,38 +49,22 @@ function describe(c: Awaited<ReturnType<typeof counts>>) {
 }
 
 async function main() {
+  assertScriptMode("demo:reset");
   console.log(`Resetting the ${target} demo workspace.`);
+
+  // Before any write: a database that is not the demo is refused untouched.
+  const { workspaceId } = await assertResettable(prisma);
+  console.log(`  workspace: ${workspaceId}`);
   console.log(`  before: ${describe(await counts())}`);
 
-  // AuditLog is pruned, not emptied — see auditPruneWhere. It holds no
-  // foreign key into the CRM tables (entityId is a plain string), so it is
-  // not part of the ordering below and a real account's security trail has
-  // no reason to die with the demo data.
-  const demoUser = await prisma.user.findUnique({
-    where: { email: DEMO_EMAIL },
-    select: { id: true },
-  });
-  await prisma.auditLog.deleteMany({
-    where: auditPruneWhere({ demoUserId: demoUser?.id ?? null, now: new Date() }),
-  });
-
-  // Ordered so foreign keys are satisfied without relying on cascade
-  // behaviour. User, Session and the migration ledger are never touched.
-  await prisma.activity.deleteMany();
-  await prisma.task.deleteMany();
-  await prisma.deal.deleteMany();
-  await prisma.contact.deleteMany();
-  await prisma.company.deleteMany();
-
-  const demo = await ensureDemoUser(prisma);
-  await seedDemoData(prisma, demo.id);
+  await resetDemoWorkspace(prisma, workspaceId);
 
   const after = await counts();
   console.log(`  after:  ${describe(after)}`);
 
   if (after.users === 0) {
-    // Should be impossible — ensureDemoUser runs above — but a reset that
-    // silently emptied the user table would lock everyone out.
+    // Should be impossible — resetDemoWorkspace re-creates the demo account —
+    // but a reset that silently emptied the user table would lock everyone out.
     throw new Error("Reset left no user accounts; refusing to report success.");
   }
   console.log("Demo workspace reset.");
