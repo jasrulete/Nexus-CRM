@@ -8,16 +8,44 @@ import { createTestDatabase, makeUser, truncateAll, type TestUser } from "@/test
 
 const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({ prisma }));
+/**
+ * Which of the four searched models the action's scoped client queried. The
+ * guard test reads it to prove a rejected query never reached the database. A
+ * spy on the base client cannot prove that: the scoped client's queries never
+ * call the base client's model methods.
+ */
+const searchedModels: string[] = [];
+const SEARCHED = new Set(["Contact", "Company", "Deal", "Activity"]);
+
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  const recorded = prisma.$extends({
+    query: {
+      $allOperations({ model, operation, args, query }) {
+        if (model && SEARCHED.has(model)) searchedModels.push(`${model}.${operation}`);
+        return query(args);
+      },
+    },
+  }) as unknown as typeof prisma;
+  return {
+    systemDb: prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(recorded, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
+vi.mock("next/navigation", () => ({
+  redirect: (url: string) => {
+    throw Object.assign(new Error(`NEXT_REDIRECT:${url}`), { digest: `NEXT_REDIRECT;${url}` });
+  },
+}));
 
 let currentUser: TestUser | null;
 vi.mock("@/lib/auth/session", () => ({
-  requireUser: async () => {
-    if (!currentUser) throw new Error("UNAUTHORIZED");
-    return currentUser;
-  },
   getCurrentUser: async () => currentUser,
+  requireUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 const { searchRecords } = await import("./search");
@@ -45,7 +73,7 @@ beforeEach(async () => {
       domain: "northwind.io",
       industry: "Data & BI",
       notes: "Security questionnaire outstanding.",
-      ownerId: owner.id,
+      ownerId: owner.id, workspaceId: owner.workspaceId,
     },
   });
   const maya = await prisma.contact.create({
@@ -57,7 +85,7 @@ beforeEach(async () => {
       status: "QUALIFIED",
       notes: "Budget approved for Q3.",
       companyId: northwind.id,
-      ownerId: owner.id,
+      ownerId: owner.id, workspaceId: owner.workspaceId,
     },
   });
   const james = await prisma.contact.create({
@@ -67,7 +95,7 @@ beforeEach(async () => {
       email: "j.whitfield@northwind.io",
       status: "LEAD",
       companyId: northwind.id,
-      ownerId: owner.id,
+      ownerId: owner.id, workspaceId: owner.workspaceId,
     },
   });
   const deal = await prisma.deal.create({
@@ -81,14 +109,14 @@ beforeEach(async () => {
       position: 0,
       contactId: maya.id,
       companyId: northwind.id,
-      ownerId: owner.id,
+      ownerId: owner.id, workspaceId: owner.workspaceId,
     },
   });
   await prisma.activity.createMany({
     data: [
-      { type: "NOTE", content: "Procurement window opens next quarter.", contactId: maya.id, userId: owner.id },
-      { type: "EMAIL", content: "Sent the SSO addendum.", contactId: maya.id, dealId: deal.id, userId: owner.id },
-      { type: "NOTE", content: "Security questionnaire returned.", companyId: northwind.id, userId: owner.id },
+      { type: "NOTE", content: "Procurement window opens next quarter.", contactId: maya.id, userId: owner.id, workspaceId: owner.workspaceId },
+      { type: "EMAIL", content: "Sent the SSO addendum.", contactId: maya.id, dealId: deal.id, userId: owner.id, workspaceId: owner.workspaceId },
+      { type: "NOTE", content: "Security questionnaire returned.", companyId: northwind.id, userId: owner.id, workspaceId: owner.workspaceId },
     ],
   });
   ids = { maya: maya.id, james: james.id, northwind: northwind.id, deal: deal.id };
@@ -191,7 +219,7 @@ describe("shape and order", () => {
   it("caps each type at five and reports it exactly", async () => {
     for (let i = 0; i < 6; i++) {
       await prisma.contact.create({
-        data: { firstName: "Cap", lastName: `Tester ${i}`, status: "LEAD", ownerId: owner.id },
+        data: { firstName: "Cap", lastName: `Tester ${i}`, status: "LEAD", ownerId: owner.id, workspaceId: owner.workspaceId },
       });
     }
     const six = await hits("Cap Tester");
@@ -217,11 +245,20 @@ describe("shape and order", () => {
 
 describe("guards", () => {
   it("refuses a query under 2 or over 100 characters without touching the database", async () => {
-    const spy = vi.spyOn(prisma.contact, "findMany");
+    searchedModels.length = 0;
     expect(await searchRecords(" a ")).toMatchObject({ ok: false, message: expect.stringMatching(/at least 2/) });
     expect(await searchRecords("x".repeat(101))).toMatchObject({ ok: false });
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+    expect(searchedModels).toEqual([]);
+
+    // The recorder does see a query that passes validation, so the empty list
+    // above is evidence rather than a recorder that never fires.
+    await searchRecords("okafor");
+    expect([...searchedModels].sort()).toEqual([
+      "Activity.findMany",
+      "Company.findMany",
+      "Contact.findMany",
+      "Deal.findMany",
+    ]);
   });
 
   it("rate-limits a runaway caller per user and not their neighbour", async () => {

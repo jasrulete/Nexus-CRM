@@ -8,11 +8,11 @@ import {
   Trophy,
   UserPlus,
 } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
 import { OPEN_STAGES, STAGE_LABELS, weightedValue } from "@/lib/constants";
 import { lastSixMonths, monthKey } from "@/lib/months";
 import { formatCurrency } from "@/lib/utils";
+import { requireWorkspacePage } from "@/lib/workspace-context";
+import { loadDashboard } from "@/server/queries/dashboard";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatCard } from "@/components/stat-card";
@@ -33,38 +33,14 @@ function timeWindows() {
 }
 
 export default async function DashboardPage() {
-  const user = (await getCurrentUser())!;
+  const ctx = await requireWorkspacePage();
+  const { user } = ctx;
   const { monthStarts, thirtyDaysAgo } = timeWindows();
 
-  const [openDeals, closedDeals, newContacts, tasks, activities] =
-    await Promise.all([
-      prisma.deal.findMany({
-        where: { stage: { in: [...OPEN_STAGES] } },
-        select: { stage: true, baseValue: true },
-      }),
-      prisma.deal.findMany({
-        where: { stage: { in: ["WON", "LOST"] } },
-        select: { stage: true, baseValue: true, closedAt: true },
-      }),
-      prisma.contact.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.task.findMany({
-        where: { assigneeId: user.id, done: false },
-        orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-        take: 7,
-        include: {
-          contact: { select: { id: true, firstName: true, lastName: true } },
-        },
-      }),
-      prisma.activity.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 8,
-        include: {
-          user: { select: { name: true } },
-          contact: { select: { id: true, firstName: true, lastName: true } },
-          deal: { select: { id: true, title: true } },
-        },
-      }),
-    ]);
+  const { openDeals, closedDeals, newContacts, tasks, activities } = await loadDashboard(
+    ctx,
+    { newContactsSince: thirtyDaysAgo },
+  );
 
   // baseValue, never value: every deal is already converted to the workspace
   // currency, so these are the only numbers that may be added together.

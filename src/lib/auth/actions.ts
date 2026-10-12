@@ -1,12 +1,17 @@
 "use server";
 
+import { randomBytes } from "crypto";
+import * as Sentry from "@sentry/nextjs";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { audit } from "@/lib/audit";
-import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
+import { systemDb } from "@/lib/db";
 import { peekLimit, rateLimit, sweepExpiredBuckets } from "@/lib/rate-limit";
 import { fieldErrors, loginSchema, registerSchema } from "@/lib/validation";
+import { ensureMember, ensureSingleWorkspace, memberCount } from "@/lib/workspace-bootstrap";
+import { workspaceMode } from "@/lib/workspace-mode";
 import { hashPassword, verifyPassword } from "./password";
+import { auditPlatform } from "./platform-audit";
 import { createSession, destroySession, getCurrentUser } from "./session";
 
 export type AuthFormState = {
@@ -38,6 +43,51 @@ async function clientIp() {
   return h.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
 }
 
+const EMAIL_TAKEN = "This email is already registered";
+const SIGNUP_FAILED = "Sign-up could not complete. Please try again.";
+
+type NewAccount = { name: string; email: string; passwordHash: string };
+
+/**
+ * Single mode: join the one workspace. The first member becomes OWNER and
+ * everyone after is MEMBER. The count runs inside the transaction, so two
+ * first sign-ups racing cannot both see an empty workspace.
+ *
+ * The user is created first, so a refusal from the workspace checks (more than
+ * one workspace, a PAID one, or a lone one single mode did not create) rolls
+ * the whole sign-up back.
+ */
+async function joinSingleWorkspace(tx: Prisma.TransactionClient, account: NewAccount): Promise<string> {
+  const user = await tx.user.create({ data: account, select: { id: true } });
+  const { id: workspaceId } = await ensureSingleWorkspace(tx);
+  const role = (await memberCount(tx, workspaceId)) === 0 ? "OWNER" : "MEMBER";
+  await ensureMember(tx, user.id, role);
+  return user.id;
+}
+
+/** Multi mode: a private workspace, owned by the new user. Never an existing one. */
+async function createOwnWorkspace(tx: Prisma.TransactionClient, account: NewAccount): Promise<string> {
+  const workspace = await tx.workspace.create({
+    data: { name: `${account.name}'s workspace`, slug: workspaceSlug(account.name) },
+    select: { id: true },
+  });
+  const user = await tx.user.create({ data: account, select: { id: true } });
+  await tx.membership.create({ data: { workspaceId: workspace.id, userId: user.id, role: "OWNER" } });
+  return user.id;
+}
+
+/** "Ada Lovelace" -> "ada-lovelace-3f9a1c2e". The suffix keeps two Adas apart. */
+function workspaceSlug(name: string): string {
+  const base = name
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/, "");
+  return `${base || "workspace"}-${randomBytes(4).toString("hex")}`;
+}
+
 export async function register(
   _prev: AuthFormState,
   formData: FormData,
@@ -58,29 +108,53 @@ export async function register(
 
   const { name, email, password } = parsed.data;
 
-  const existing = await prisma.user.findUnique({ where: { email } });
+  const existing = await systemDb.user.findUnique({ where: { email }, select: { id: true } });
   if (existing) {
-    return { errors: { email: "This email is already registered" } };
+    return { errors: { email: EMAIL_TAKEN } };
   }
 
-  const userCount = await prisma.user.count();
-  const user = await prisma.user.create({
-    data: {
-      name,
-      email,
-      passwordHash: await hashPassword(password),
-      // First account becomes the workspace admin.
-      role: userCount === 0 ? "ADMIN" : "MEMBER",
-    },
-  });
+  // Before the transaction: bcrypt is slow on purpose, and on the production
+  // driver an open transaction holds an adapter-wide lock (spec §5.2).
+  const account = { name, email, passwordHash: await hashPassword(password) };
+  const mode = workspaceMode();
 
-  await audit({
+  let userId: string;
+  try {
+    userId = await systemDb.$transaction((tx) =>
+      mode === "multi" ? createOwnWorkspace(tx, account) : joinSingleWorkspace(tx, account),
+    );
+  } catch (err) {
+    // Two sign-ups with one email can both pass the check above. The second
+    // transaction then fails on the unique email and rolls back whole. Hrana
+    // reports that as a generic P2039, so look again instead of reading the
+    // error code (spec §5.6). If the lookup fails too, fall through to the
+    // retry message: a retry's pre-check gives the right answer.
+    const taken = await systemDb.user
+      .findUnique({ where: { email }, select: { id: true } })
+      .catch(() => null);
+    if (taken) return { errors: { email: EMAIL_TAKEN } };
+    // A database that is not a valid single-mode one is an operator error.
+    // It fails loudly, the way boot does, instead of asking for a retry.
+    if (err instanceof Error && err.message.startsWith("SINGLE_MODE_VIOLATION")) throw err;
+    // Anything else is transient from the visitor's side: SQLITE_BUSY when two
+    // serverless instances write to Turso at once, or a dropped connection.
+    // The transaction rolled back, so nothing was written and a retry is safe.
+    Sentry.captureException(err, {
+      tags: { subsystem: "auth" },
+      extra: { action: "auth.register", mode },
+    });
+    console.error("sign-up transaction failed", err);
+    return { message: SIGNUP_FAILED };
+  }
+
+  // After commit, outside the transaction (spec §5.2).
+  await auditPlatform({
     action: "auth.register",
     entityType: "user",
-    entityId: user.id,
-    userId: user.id,
+    entityId: userId,
+    userId,
   });
-  await createSession(user.id);
+  await createSession(userId);
   redirect("/dashboard");
 }
 
@@ -134,13 +208,13 @@ export async function login(
     };
   }
 
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await systemDb.user.findUnique({ where: { email } });
   const valid = await verifyPassword(password, user?.passwordHash ?? DUMMY_HASH);
 
   if (!user || !valid) {
     rateLimit(pairKey, { limit: PAIR_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
     rateLimit(accountKey, { limit: ACCOUNT_FAILURE_LIMIT, windowMs: LOGIN_WINDOW_MS });
-    await audit({
+    await auditPlatform({
       action: "auth.login_failed",
       entityType: "user",
       entityId: email,
@@ -149,7 +223,7 @@ export async function login(
     return { message: "Invalid email or password" };
   }
 
-  await audit({
+  await auditPlatform({
     action: "auth.login",
     entityType: "user",
     entityId: user.id,
@@ -162,7 +236,7 @@ export async function login(
 export async function logout() {
   const user = await getCurrentUser();
   if (user) {
-    await audit({
+    await auditPlatform({
       action: "auth.logout",
       entityType: "user",
       entityId: user.id,

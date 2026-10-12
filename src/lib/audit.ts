@@ -1,13 +1,13 @@
 import "server-only";
 import * as Sentry from "@sentry/nextjs";
-import { prisma } from "@/lib/db";
 
 /**
- * Anything that can write an audit row — the Prisma client, or a transaction
- * client handed to a `$transaction` callback. Structural rather than imported,
- * so this file does not depend on Prisma's internal transaction types.
+ * Anything that can write a workspace audit row: a scoped client
+ * (`ctx.db`), or the `tx` handed to its `$transaction` callback. Structural
+ * rather than imported, so this file does not depend on Prisma's internal
+ * transaction types.
  */
-type AuditWriter = {
+export type AuditWriter = {
   auditLog: {
     create(args: {
       data: {
@@ -16,61 +16,70 @@ type AuditWriter = {
         entityId: string;
         userId: string | null;
         metadata: string | null;
+        workspaceId: string;
       };
     }): Promise<unknown>;
   };
 };
 
-export type AuditEntry = {
+export type WorkspaceAuditEntry = {
   action: string;
   entityType: string;
   entityId: string;
+  workspaceId: string;
   userId?: string | null;
   metadata?: Record<string, unknown>;
 };
 
-function write(client: AuditWriter, entry: AuditEntry) {
-  return client.auditLog.create({
-    data: {
-      action: entry.action,
-      entityType: entry.entityType,
-      entityId: entry.entityId,
-      userId: entry.userId ?? null,
-      metadata: entry.metadata ? JSON.stringify(entry.metadata) : null,
-    },
+function row(entry: WorkspaceAuditEntry) {
+  return {
+    action: entry.action,
+    entityType: entry.entityType,
+    entityId: entry.entityId,
+    userId: entry.userId ?? null,
+    metadata: entry.metadata ? JSON.stringify(entry.metadata) : null,
+    workspaceId: entry.workspaceId,
+  };
+}
+
+function report(err: unknown, entry: { action: string; entityType: string }) {
+  Sentry.captureException(err, {
+    tags: { subsystem: "audit" },
+    extra: { action: entry.action, entityType: entry.entityType },
   });
+  console.error("audit log write failed", err);
 }
 
 /**
- * Append an entry to the audit log.
+ * Writes the entry inside the caller's transaction, and a failure propagates —
+ * rolling the mutation back with it. That is the right trade for a state
+ * change: the Settings page presents this log as the record of what happened,
+ * so a committed change with no entry makes the log lie. Better to fail the
+ * save and let the user retry.
  *
- * Two modes, chosen by whether the caller passes its transaction client.
- *
- * **With a transaction client** the entry is written inside the caller's
- * transaction, and a failure propagates — rolling the mutation back with it.
- * That is the right trade for a state change: the Settings page presents this
- * log as the record of what happened, so a committed change with no entry makes
- * the log lie. Better to fail the save and let the user retry.
- *
- * **Without one** it stays best-effort and never throws, because the action it
- * records has already committed and breaking it after the fact helps nobody.
- * That path now reports to Sentry as well as the console: it previously
- * swallowed failures into `console.error`, which `onRequestError` never sees, so
- * a gap in the log was invisible — and absence of an entry proved nothing.
+ * Pass the callback's `tx`, never the outer client (spec §5.2): on the
+ * production driver a query outside the open transaction waits for it until
+ * the transaction times out.
  */
-export async function audit(entry: AuditEntry, tx?: AuditWriter) {
-  if (tx) {
-    await write(tx, entry);
-    return;
-  }
+export async function auditTx(tx: AuditWriter, entry: WorkspaceAuditEntry): Promise<void> {
+  await tx.auditLog.create({ data: row(entry) });
+}
 
+/**
+ * Appends a workspace entry after the fact, best-effort: it never throws,
+ * because the action it records has already committed and breaking it now
+ * helps nobody. A failure goes to Sentry as well as the console, since
+ * `onRequestError` never sees a swallowed error and a gap in the log would
+ * otherwise be invisible.
+ *
+ * `db` is required (the scoped client): there is no module-level fallback, so
+ * every entry lands in the caller's workspace. Platform events (`auth.*`) go
+ * through `auditPlatform` instead.
+ */
+export async function audit(db: AuditWriter, entry: WorkspaceAuditEntry): Promise<void> {
   try {
-    await write(prisma, entry);
+    await db.auditLog.create({ data: row(entry) });
   } catch (err) {
-    Sentry.captureException(err, {
-      tags: { subsystem: "audit" },
-      extra: { action: entry.action, entityType: entry.entityType },
-    });
-    console.error("audit log write failed", err);
+    report(err, entry);
   }
 }

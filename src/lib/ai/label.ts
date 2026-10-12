@@ -11,6 +11,8 @@ const DEGRADED_LABELS: Record<AiDegradedReason, string> = {
   rate_limited: "rule-based fallback (AI provider rate-limited)",
   error: "rule-based fallback (AI provider error)",
   malformed: "rule-based fallback (AI reply was not usable)",
+  // The deployment's own daily ceiling (spec §7), not the provider's quota.
+  capacity: "rule-based fallback (daily AI capacity reached)",
 };
 
 export function providerLabel(result: { provider: string; degraded?: AiDegradedReason }): string {

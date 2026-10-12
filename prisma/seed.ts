@@ -4,11 +4,19 @@
  *
  * The dataset itself lives in seed-data.ts so the nightly reset can rebuild it
  * without recreating accounts. See scripts/reset-demo.ts.
+ *
+ * Single-workspace installs only: it refuses to run when WORKSPACE_MODE=multi,
+ * because a cloud database must never receive the published demo login. The
+ * seeded workspace is marked as the demo — the nightly reset's permission bit —
+ * only when SEED_DEMO_WORKSPACE=true. Docker's SEED_DEMO_DATA boot and CI never
+ * set it, so a self-hoster's workspace can never become resettable by being
+ * seeded (scripts/mark-demo-workspace.ts can still mark one; see its header).
  */
 import "dotenv/config";
 import { PrismaClient } from "../src/generated/prisma/client";
 import { createDbAdapter } from "../src/lib/db-adapter";
-import { ensureDemoUser, seedDemoData } from "./seed-data";
+import { assertScriptMode } from "../src/lib/workspace-maintenance";
+import { seedInstall } from "./seed-data";
 
 // createDbAdapter() prefers TURSO_DATABASE_URL, and .env is loaded above — so
 // a plain `npm run db:seed` on a dev machine would write demo data (including a
@@ -28,19 +36,23 @@ if (process.env.SEED_REMOTE === "true") {
 const prisma = new PrismaClient({ adapter: createDbAdapter() });
 
 async function main() {
-  const existing = await prisma.user.findUnique({
-    where: { email: "demo@nexuscrm.dev" },
+  assertScriptMode("db:seed");
+
+  const result = await seedInstall(prisma, {
+    markDemo: process.env.SEED_DEMO_WORKSPACE === "true",
   });
-  if (existing) {
+  if (result.skipped) {
     console.log("Seed data already present — skipping. (Delete dev.db to reseed.)");
     return;
   }
 
-  const demo = await ensureDemoUser(prisma);
-  const counts = await seedDemoData(prisma, demo.id);
-
   console.log("Seeded demo workspace:");
-  console.log(`  ${counts.companies} companies, ${counts.contacts} contacts, ${counts.deals} deals`);
+  console.log(
+    `  ${result.counts.companies} companies, ${result.counts.contacts} contacts, ${result.counts.deals} deals`,
+  );
+  if (result.markedDemo) {
+    console.log("  Marked as the demo workspace (SEED_DEMO_WORKSPACE=true): the nightly reset may rebuild it.");
+  }
   console.log("  Login: demo@nexuscrm.dev / demo-password-123");
 }
 

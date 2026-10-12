@@ -21,8 +21,16 @@ describe("providerLabel", () => {
     ["rate_limited", "rule-based fallback (AI provider rate-limited)"],
     ["error", "rule-based fallback (AI provider error)"],
     ["malformed", "rule-based fallback (AI reply was not usable)"],
+    ["capacity", "rule-based fallback (daily AI capacity reached)"],
   ] as const)("names the failure for %s", (degraded, label) => {
     expect(providerLabel({ provider: "heuristic", degraded })).toBe(label);
+  });
+
+  // The daily ceiling is this deployment's own limit (spec §7). A label that
+  // said "rate-limited" would send someone to the provider's console to look
+  // for a quota that is not the provider's.
+  it("does not blame the provider when the daily AI ceiling was reached", () => {
+    expect(providerLabel({ provider: "heuristic", degraded: "capacity" })).not.toMatch(/provider/i);
   });
 
   it("still labels a heuristic result that carries no reason", () => {

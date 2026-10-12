@@ -6,7 +6,7 @@ services:
     environment:
       # Seeds the demo workspace (demo@nexuscrm.dev / demo-password-123) on
       # first boot. Remove for an empty CRM — the first registered account
-      # becomes the workspace admin.
+      # becomes the workspace owner.
       SEED_DEMO_DATA: "true"
       # Optional free AI provider — set ONE (see .env.example). Without a key,
       # AI features run in the clearly-labeled rule-based mode.

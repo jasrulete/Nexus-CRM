@@ -20,6 +20,11 @@ jobs:
       # Dummy SQLite path — no page queries the DB at build time, but the
       # Prisma config and driver adapter expect a URL to be present.
       DATABASE_URL: "file:./ci.db"
+      # Required at runtime in production (spec §6): the standalone server the
+      # e2e suite starts runs with NODE_ENV=production. Read at runtime, never
+      # inlined, so one build serves both e2e servers; the multi-mode server
+      # overrides it in playwright.config.ts.
+      WORKSPACE_MODE: "single"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -56,9 +61,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The committed migrations must build exactly prisma/schema.prisma. M1
+      # carries hand-appended data statements, and a hand edit that also changed
+      # the schema would otherwise ship unnoticed: the Turso and Docker runners
+      # and the test harness all trust the SQL files, never the schema. Replays
+      # prisma/migrations into a throwaway SQLite shadow and diffs it against
+      # the schema; exit code 2 means drift. (Prisma 7 removed
+      # --shadow-database-url and --to-url; SQLite needs no shadow URL.)
+      - name: Migration drift check
+        run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema prisma/schema.prisma --exit-code
+
       # Runs the same suite, and fails if coverage drops below the floor in
-      # vitest.config.ts — so deleting a test file, or adding a module with
-      # none, is caught here rather than noticed months later.
+      # vitest.config.ts, a few points under today's figure: a sizeable module
+      # with no tests, or a deleted test file that was its only cover, is
+      # caught here rather than noticed months later. A smaller loss is not.
       - name: Unit tests with coverage
         run: npm run test:coverage
 
@@ -78,11 +94,14 @@ jobs:
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 
-      # e2e signs in as the seeded demo user, so CI needs a real database.
-      - name: Prepare e2e database
+      # e2e signs in as the seeded demo user, so CI needs a real database. The
+      # multi-mode project gets its own, migrated and deliberately not seeded:
+      # every sign-up there must start in an empty workspace of its own.
+      - name: Prepare e2e databases
         run: |
           npx prisma migrate deploy
           npm run db:seed
+          DATABASE_URL="file:./e2e-multi.db" npx prisma migrate deploy
 
       - name: End-to-end tests
         run: npm run test:e2e

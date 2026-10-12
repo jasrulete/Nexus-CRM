@@ -1,6 +1,12 @@
 // Prisma schema for Nexus CRM
 // SQLite does not support enums — enum-like fields are strings validated
 // with zod at the application boundary (see src/lib/validation.ts).
+//
+// Multi-tenancy (docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md):
+// every tenant row carries workspaceId. Until M2 (phase B) it is a plain,
+// optional, indexed scalar on the CRM tables and AuditLog, with no @relation:
+// a relation would make Prisma rebuild those tables, and M1 must stay
+// ADD COLUMN + CREATE INDEX only.
 
 generator client {
   provider = "prisma-client"
@@ -16,7 +22,10 @@ model User {
   email        String    @unique
   name         String
   passwordHash String
-  role         String    @default("MEMBER") // ADMIN | MEMBER
+  // DEPRECATED (spec §2, §4): Membership.role is authoritative. From the
+  // phase-A deploy on, no code reads or writes this column. It is kept because
+  // dropping it is cosmetic and would mean rebuilding User.
+  role         String    @default("MEMBER") // legacy: ADMIN | MEMBER
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -27,6 +36,7 @@ model User {
   activities Activity[]
   tasks      Task[]
   auditLogs  AuditLog[]
+  membership Membership?
 }
 
 model Session {
@@ -41,8 +51,55 @@ model Session {
   @@index([userId])
 }
 
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  isDemo    Boolean  @default(false) // the demo reset's permission bit ONLY; the app never branches on it (spec §8)
+  plan      String   @default("FREE") // FREE | PAID; only spec 3's billing webhook writes PAID
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  aiUsages    AiUsage[]
+}
+
+model Membership {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // Restrict: a workspace that still has members cannot be deleted by accident.
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  userId      String    @unique // one workspace per person in v1; drop @unique to allow several
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        String // OWNER | ADMIN | MEMBER
+  createdAt   DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+}
+
+model AiUsage {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  userId       String?
+  action       String // score | summary | draft
+  outcome      String // pending | answered | rejected | fallback | capacity | denied
+  provider     String? // the provider that answered, else null
+  inputTokens  Int?
+  outputTokens Int?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([workspaceId, createdAt])
+  @@index([createdAt]) // the deployment-wide daily ceiling (spec §7)
+}
+
 model Company {
   id        String   @id @default(cuid())
+  // Tenant key. A plain indexed scalar with no @relation until M2 (spec §4):
+  // a relation here would make Prisma rebuild the table in M1.
+  workspaceId String?
   name      String
   domain    String?
   industry  String?
@@ -59,10 +116,13 @@ model Company {
   activities Activity[]
 
   @@index([ownerId])
+  @@index([workspaceId, updatedAt])
 }
 
 model Contact {
   id        String  @id @default(cuid())
+  // Tenant key; plain scalar until M2 (see Company).
+  workspaceId String?
   firstName String
   lastName  String
   email     String?
@@ -90,11 +150,15 @@ model Contact {
 
   @@index([ownerId])
   @@index([companyId])
-  @@index([status])
+  @@index([workspaceId, updatedAt])
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt])
 }
 
 model Deal {
   id       String @id @default(cuid())
+  // Tenant key; plain scalar until M2 (see Company).
+  workspaceId String?
   title    String
   // The amount as the user entered it, in `currency`, in whole units.
   value    Int    @default(0)
@@ -123,13 +187,17 @@ model Deal {
   tasks      Task[]
 
   @@index([ownerId])
-  @@index([stage])
   @@index([contactId])
   @@index([companyId])
+  // Kanban columns are read and resequenced within (workspaceId, stage).
+  @@index([workspaceId, stage, position])
+  @@index([workspaceId, updatedAt])
 }
 
 model Activity {
   id      String @id @default(cuid())
+  // Tenant key; plain scalar until M2 (see Company).
+  workspaceId String?
   type    String // NOTE | CALL | EMAIL | MEETING
   content String
 
@@ -146,10 +214,13 @@ model Activity {
   @@index([contactId])
   @@index([dealId])
   @@index([companyId])
+  @@index([workspaceId, createdAt])
 }
 
 model Task {
   id      String    @id @default(cuid())
+  // Tenant key; plain scalar until M2 (see Company).
+  workspaceId String?
   title   String
   done    Boolean   @default(false)
   dueDate DateTime?
@@ -165,10 +236,14 @@ model Task {
   @@index([assigneeId, done])
   @@index([contactId])
   @@index([dealId])
+  @@index([workspaceId, assigneeId, done])
 }
 
 model AuditLog {
   id         String   @id @default(cuid())
+  // Null for platform events (auth.*), which are never shown to a workspace
+  // (spec §5.6). Plain scalar until M2 adds the relation.
+  workspaceId String?
   action     String // e.g. contact.create, deal.stage_change, auth.login
   entityType String
   entityId   String
@@ -179,4 +254,5 @@ model AuditLog {
 
   @@index([entityType, entityId])
   @@index([createdAt])
+  @@index([workspaceId, createdAt])
 }

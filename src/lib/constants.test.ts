@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { STAGE_PROBABILITY, weightedValue } from "./constants";
+import { STAGE_PROBABILITY, USER_ROLES, weightedValue } from "./constants";
 
 describe("weightedValue", () => {
   it("weights each deal by its stage", () => {
@@ -42,5 +42,11 @@ describe("weightedValue", () => {
       STAGE_PROBABILITY.NEGOTIATION,
     );
     expect(STAGE_PROBABILITY.NEGOTIATION).toBeLessThan(STAGE_PROBABILITY.WON);
+  });
+});
+
+describe("USER_ROLES", () => {
+  it("lists the three membership roles", () => {
+    expect(USER_ROLES).toEqual(["OWNER", "ADMIN", "MEMBER"]);
   });
 });

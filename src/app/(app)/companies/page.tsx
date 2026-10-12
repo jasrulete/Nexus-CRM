@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Building2, Plus, Search } from "lucide-react";
-import { prisma } from "@/lib/db";
-import { COMPANY_SIZES, OPEN_STAGES } from "@/lib/constants";
+import { COMPANY_SIZES } from "@/lib/constants";
 import { formatCurrency, timeAgo } from "@/lib/utils";
+import { requireWorkspacePage } from "@/lib/workspace-context";
+import { loadCompaniesPage } from "@/server/queries/companies";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -15,13 +16,12 @@ import { CompanyFormDialog } from "@/components/company-form-dialog";
 
 export const metadata: Metadata = { title: "Companies" };
 
-const PAGE_SIZE = 100;
-
 export default async function CompaniesPage({
   searchParams,
 }: {
   searchParams: Promise<{ q?: string; size?: string }>;
 }) {
+  const ctx = await requireWorkspacePage();
   const { q, size } = await searchParams;
   const query = q?.trim() || undefined;
   const sizeFilter = COMPANY_SIZES.includes(
@@ -30,36 +30,10 @@ export default async function CompaniesPage({
     ? size
     : undefined;
 
-  const where = {
-    ...(sizeFilter ? { size: sizeFilter } : {}),
-    ...(query
-      ? {
-          OR: [
-            { name: { contains: query } },
-            { domain: { contains: query } },
-            { industry: { contains: query } },
-          ],
-        }
-      : {}),
-  };
-
-  const [companies, total] = await Promise.all([
-    prisma.company.findMany({
-      where,
-      include: {
-        _count: { select: { contacts: true, deals: true } },
-        deals: {
-          where: { stage: { in: [...OPEN_STAGES] } },
-          select: { baseValue: true },
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-      take: PAGE_SIZE,
-    }),
-    // Counted, not inferred from the page slice: past the cap the subtitle
-    // used to state the cap itself as if it were the total.
-    prisma.company.count({ where }),
-  ]);
+  const { companies, total } = await loadCompaniesPage(ctx, {
+    query,
+    size: sizeFilter,
+  });
 
   return (
     <div className="mx-auto max-w-6xl">

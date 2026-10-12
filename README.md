@@ -47,7 +47,7 @@ five zero-dependency concept apps for offshore staffing / EOR operations.
 - bcrypt-hashed passwords, server-side sessions stored as SHA-256 hashes
 - httpOnly / SameSite cookies, login rate limiting, timing-safe login flow
 - zod validation + server-side authorization on every mutation
-- Role-based access (admin/member), full audit log, strict security headers
+- Workspace isolation, role-based access (owner/admin/member), full audit log, strict security headers
 
 ## Stack
 
@@ -69,8 +69,10 @@ npm run db:seed          # demo workspace + login
 npm run dev              # http://localhost:3000
 ```
 
-Sign in with the demo account above, or register — the **first account becomes
-the workspace admin**.
+Sign in with the demo account above, or register. After `db:seed`, the demo
+account is the workspace's admin and everyone who registers joins as a member.
+On an unseeded database (skip `db:seed`), the **first account to register
+becomes the workspace owner**.
 
 ### Enabling real AI (optional, still free)
 
@@ -97,7 +99,7 @@ label says that instead, so a quiet outage never reads like a fresh install.
 | `npm run db:seed` | Seed the demo workspace (idempotent) |
 | `npm run typecheck` | TypeScript check |
 | `npm test` | Unit tests (vitest) — scoring heuristics, validation, rate limiting |
-| `npm run test:e2e` | End-to-end tests (Playwright) — auth, CRM flows, health |
+| `npm run test:e2e` | End-to-end tests (Playwright) — auth, CRM flows, health, and workspace isolation in multi mode (that project runs in CI, or locally with `E2E_MULTI=1` after a build — see `playwright.config.ts`) |
 | `npm run eval` | AI evaluation harness — fixture contacts through the real actions with property assertions and three prompt-injection payloads; keyless by default, `EVAL_LIVE=1` for the real providers (live, an unreachable provider is retried once then skipped, so only the model misbehaving turns it red) |
 | `npm run lint` | ESLint |
 
@@ -105,6 +107,11 @@ label says that instead, so a quiet outage never reads like a fresh install.
 
 - **Server Actions everywhere** — no hand-rolled API routes; every mutation is
   validated with zod, authorized against the session, and audited.
+- **Workspaces** — every CRM row carries a `workspaceId`, and application code
+  only ever holds a client scoped to the signed-in user's workspace
+  (`src/lib/tenancy.ts`). It fails closed: raw SQL, account tables and unknown
+  operations through it throw. A test suite calls every server action and page
+  loader as one workspace with another's ids. See [Workspace modes](#workspace-modes).
 - **Auth is hand-built on purpose** (portfolio project): DB-backed sessions
   with hashed tokens and sliding expiry. The proxy (`src/proxy.ts`) does
   optimistic cookie checks; real validation happens next to the data.
@@ -116,6 +123,33 @@ label says that instead, so a quiet outage never reads like a fresh install.
   Turso (libSQL) in production via a driver-adapter switch in
   `src/lib/db-adapter.ts`. For heavy multi-instance use, also move the
   in-memory rate limiter to a durable store.
+
+## Workspace modes
+
+One codebase, two ways to run it, chosen by `WORKSPACE_MODE`:
+
+| Mode | Who runs it | What it does |
+|---|---|---|
+| `single` | Self-hosters and the public demo | One workspace. The first account to register becomes its **owner**; everyone who registers after joins it as a member. Plan limits are off — self-hosting is free and unlimited. |
+| `multi` | The hosted cloud plan | Every sign-up gets a private workspace on the free plan: 1 member, 200 contacts, 100 companies, 100 deals and 30 AI actions a month. No workspace can read or change another's data. |
+
+`WORKSPACE_MODE` is **required in production**: with `NODE_ENV=production` and no
+value the app refuses to boot, so a deployment that lost the variable can never
+silently change mode. Development defaults to `single`. The Docker image sets
+`single` for you; on Vercel or any other host, set it yourself.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `WORKSPACE_MODE` | `single` in development; **required** in production | `single` or `multi`, as above. `multi` refuses to boot with `DEMO_MODE=true` |
+| `AI_DAILY_CEILING` | unset (no ceiling) | Deployment-wide cap on AI actions per UTC day, across all workspaces. At the cap, AI features answer in rule-based mode, labelled "daily AI capacity reached". A value that is not a whole number fails closed as 0, so every AI action takes that capacity fallback |
+| `SEED_DEMO_WORKSPACE` | unset | `true` marks the seeded workspace as the demo, the only thing that lets the nightly reset rebuild it. For the public demo's database only — never set it on a real install |
+
+The seed and reset scripts (`db:seed`, `db:add-member`, `demo:reset`) refuse to
+run in `multi` mode.
+
+**AI keys on the hosted cloud:** set `GROQ_API_KEY` only. Gemini's free-tier
+terms forbid sending personal information, and every cloud workspace holds real
+contacts. The demo keeps both keys, because its data is invented.
 
 ## 🐳 Self-host with Docker
 
@@ -134,7 +168,13 @@ account above.
   and restarts; `docker compose down -v` deletes it.
 - **Seeding** is controlled by `SEED_DEMO_DATA: "true"` in
   `docker-compose.yml`. Remove that line to start with an empty CRM — the
-  first account you register becomes the workspace admin.
+  first account you register becomes the workspace owner. The seed is not
+  atomic: if the first boot is killed partway through it, the next boot sees the
+  demo account and skips, which leaves a partial demo — start again from an empty
+  volume (`docker compose down -v`).
+- **Workspace mode**: the image sets `WORKSPACE_MODE=single` — one workspace
+  that everyone who registers joins. Leave it as it is; `multi` is for the
+  hosted cloud.
 - **Env vars**: add `GEMINI_API_KEY` or `GROQ_API_KEY` under `environment:`
   for live AI (optional — see `.env.example`). Your local `.env` is never
   copied into the image.
@@ -156,8 +196,10 @@ Vercel's serverless filesystem can't host the SQLite file, so production uses
    Re-run `db:push:turso` after every new migration — it applies only what the
    remote database is missing.
 3. In Vercel → Project → Settings → Environment Variables, add the same two
-   variables **scoped to Production** (plus `GEMINI_API_KEY` or `GROQ_API_KEY`
-   if you want live AI, and `DEMO_MODE=true` if the deployment is a public demo).
+   variables **scoped to Production**, plus `WORKSPACE_MODE=single` (required:
+   the app refuses to boot in production without it), `GEMINI_API_KEY` or
+   `GROQ_API_KEY` if you want live AI, and `DEMO_MODE=true` if the deployment is
+   a public demo.
 4. Push to GitHub — Vercel builds and deploys. The `postinstall` script runs
    `prisma generate`, and the app picks Turso automatically in Production.
 

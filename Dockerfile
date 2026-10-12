@@ -14,8 +14,14 @@ RUN npm ci
 # ---------- builder: generate the Prisma client and compile the app ----------
 FROM node:22-alpine AS builder
 WORKDIR /app
+# `next build` runs with NODE_ENV=production and may load instrumentation,
+# whose boot check refuses an unset WORKSPACE_MODE there. Set here so the
+# build can never fail on it. The value is read at runtime and never inlined,
+# so it does not leak into the image: the runner's own ENV below is the one
+# the server boots with.
 ENV NEXT_TELEMETRY_DISABLED=1 \
-    DATABASE_URL="file:./dev.db"
+    DATABASE_URL="file:./dev.db" \
+    WORKSPACE_MODE=single
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # Bundle the demo seed (seed.cjs) so the slim runtime image can run it
@@ -33,11 +39,16 @@ RUN npx prisma generate \
 # ---------- runner: minimal standalone server ----------
 FROM node:22-alpine AS runner
 WORKDIR /app
+# WORKSPACE_MODE is required at runtime under NODE_ENV=production (spec §6). A
+# self-hosted image is one workspace that everyone who registers joins, so it
+# is baked here: the server boots, and the bundled seed runs, with no extra
+# configuration.
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
     PORT=3000 \
-    DATABASE_URL="file:/data/nexus.db"
+    DATABASE_URL="file:/data/nexus.db" \
+    WORKSPACE_MODE=single
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static

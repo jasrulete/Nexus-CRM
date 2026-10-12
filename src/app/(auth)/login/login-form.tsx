@@ -13,7 +13,7 @@ const initial: AuthFormState = {};
 const DEMO_EMAIL = "demo@nexuscrm.dev";
 const DEMO_PASSWORD = "demo-password-123";
 
-export function LoginForm() {
+export function LoginForm({ showDemo }: { showDemo: boolean }) {
   const [state, action, pending] = useActionState(login, initial);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -61,22 +61,24 @@ export function LoginForm() {
         {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
         Sign in
       </Button>
-      <div className="rounded-lg border border-edge-strong/70 bg-surface-2 px-3 py-3">
-        <p className="text-[13px] text-ink-faint">
-          Just exploring? Jump into a fully seeded demo workspace — contacts,
-          deals and a live pipeline included.
-        </p>
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={pending}
-          onClick={tryDemo}
-          className="mt-2.5 w-full"
-        >
-          <Sparkles className="h-4 w-4" />
-          Try the demo
-        </Button>
-      </div>
+      {showDemo ? (
+        <div className="rounded-lg border border-edge-strong/70 bg-surface-2 px-3 py-3">
+          <p className="text-[13px] text-ink-faint">
+            Just exploring? Jump into a fully seeded demo workspace — contacts,
+            deals and a live pipeline included.
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={pending}
+            onClick={tryDemo}
+            className="mt-2.5 w-full"
+          >
+            <Sparkles className="h-4 w-4" />
+            Try the demo
+          </Button>
+        </div>
+      ) : null}
     </form>
   );
 }

@@ -16,12 +16,13 @@ Companion documents: [`README.md`](../README.md) (how to run it),
 (what would need to change to sell it), [`IMPROVEMENT-PLAN.md`](../IMPROVEMENT-PLAN.md)
 (the audit backlog), [`docs/PRD.md`](PRD.md) and [`docs/USER-FLOWS.md`](USER-FLOWS.md).
 
-One framing fact that shapes almost every decision below: **Nexus CRM is single-tenant
-by design.** There is no `Workspace` model in [`prisma/schema.prisma`](../prisma/schema.prisma).
-Every row hangs off a `User` via `ownerId` (or `assigneeId` / `userId`), and everyone who
-signs in shares one workspace and can *read* everything in it. Ownership controls writes,
-not reads. That is a deliberate scope choice, not an oversight — see
-[SAAS-READINESS §5](../SAAS-READINESS.md).
+One framing fact that shapes almost every decision below: **everyone in a workspace reads
+everything in it; ownership controls writes, not reads.** Since 2026-10-11 the workspace is a
+real boundary: every CRM row carries a `workspaceId`, and application code only ever holds a
+client scoped to the signed-in user's workspace. How many workspaces exist depends on
+`WORKSPACE_MODE` — exactly one in `single` mode (self-hosting and the public demo, where every
+registrant joins the same workspace, as before), one per sign-up in `multi` mode (the hosted
+cloud). See [Workspaces and tenancy](#workspaces-and-tenancy) below.
 
 ---
 
@@ -140,27 +141,36 @@ hex colours. Its comment explains why: it *replaces* the root layout, so it cann
 **What it is.** A folder wrapped in parentheses groups routes without contributing a URL
 segment. `(app)/deals/page.tsx` serves `/deals`, not `/app/deals`.
 
-**Here.** The split is the authentication boundary made structural:
+**Here.** The split separates the signed-in app from the sign-in screens:
 
 - **`src/app/(app)/`** — dashboard, contacts, companies, deals, settings. Its layout,
-  [`src/app/(app)/layout.tsx`](../src/app/(app)/layout.tsx), does
-  `const user = await getCurrentUser(); if (!user) redirect("/login");` before rendering
-  anything, then draws the sidebar, theme toggle and user menu. Every authed page inherits
-  that check by *existing in this folder*.
+  [`src/app/(app)/layout.tsx`](../src/app/(app)/layout.tsx), calls
+  `requireWorkspacePage()` to draw the sidebar, theme toggle and user menu, but it is **not
+  the auth gate**: under Next 16 partial rendering a layout does not re-run on client
+  navigation and does not stop a page from rendering. So every page in this folder calls
+  `requireWorkspacePage()` ([`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts))
+  itself and reads only through its loader in `src/server/queries/`;
+  [`src/server/queries/pages.test.ts`](../src/server/queries/pages.test.ts) fails if a page
+  does not.
 - **`src/app/(auth)/`** — login and register. Its layout is the split-screen marketing
   panel with the brand lockup and three feature bullets. No session check, obviously.
 - **`src/app/page.tsx`** — the public marketing page, in neither group, so it gets only the
   root layout.
 
-**Why.** The groups let one auth check cover a whole section of the app without repeating
-it per page, and let the two sections have completely different chrome. Adding a new authed
-page means creating a folder — the gate comes free.
+**Why.** The groups let the two sections have completely different chrome. They do not make
+the auth check free: adding a new authed page means creating a folder *and* calling
+`requireWorkspacePage()` at the top of the page, which `pages.test.ts` checks. A session it
+cannot use (a stale cookie, or in multi mode a user with no membership) is sent to
+`/auth/signout-stale`, which clears the cookie and lands on `/login`.
 
 > **If asked: "isn't a layout check enough on its own?"**
-> No, and the code does not treat it as enough. A layout runs for page navigations; a
-> Server Action invoked directly does not go through it. That is why every action in
-> `src/server/actions/` independently calls `requireUser()`. The layout check is for the
-> *UI*; `requireUser()` is for the *data*.
+> No, and the code does not rely on one. Under Next 16 partial rendering a layout does not
+> re-run on client navigation and does not stop a page from rendering, so every page checks
+> for itself with `requireWorkspacePage()`. A Server Action invoked directly goes through
+> neither a layout nor a page. That is why every action in `src/server/actions/`
+> independently authenticates itself, with `requireWorkspace()` (or `requireUser()` for the
+> two that never touch the database). The page's check is for what it renders; the
+> action's own check is for what it changes.
 
 #### `proxy.ts` — and why this project has it instead of `middleware.ts`
 
@@ -181,28 +191,35 @@ and redirects on that basis. Signed-out visitors to a private path go to `/login
 visitors who have a cookie and land on `/`, `/login` or `/register` get bounced to
 `/dashboard`.
 
-Two paths are waived before the cookie check, each for a stated reason:
+Four paths are waived before the cookie check, each for a stated reason:
 
 - `/api/health` — *"The liveness probe must answer monitors whether signed in or not."*
 - `/monitoring` — the Sentry browser tunnel. It cannot go in `PUBLIC_PATHS` because that
   branch redirects *authenticated* users to `/dashboard`, and error reports must flow for
   signed-in visitors too.
+- `/opengraph-image` — the landing page's share image. Social scrapers are never signed in,
+  and in `PUBLIC_PATHS` a signed-in fetch would get `/dashboard`'s HTML instead of the PNG.
+- `/auth/signout-stale` — the Route Handler that deletes a session which cannot reach a
+  workspace, then redirects to `/login`. It must run with or without a cookie, and
+  `PUBLIC_PATHS` would bounce the very cookie it exists to clear to `/dashboard`.
 
 The matcher also explicitly exempts `theme-init.js`, with a comment recording the bug that
 caused it: redirecting the theme script to `/login` left signed-out visitors stuck in light
 mode.
 
 **Why optimistic only.** The file's own docblock: *"Real session validation happens
-server-side in layouts and actions (getCurrentUser), so a forged cookie never grants access
-to data."* The proxy runs on a hot path for every request; doing a database round trip there
-would tax every navigation, and the Next.js docs explicitly say Proxy *"is not intended for
-slow data fetching"* and should not be a full authorization solution.
+server-side in every page (requireWorkspacePage) and action (requireWorkspace), both through
+getCurrentUser, so a forged cookie never grants access to data."* The proxy runs on a hot
+path for every request; doing a database round trip there would tax every navigation, and
+the Next.js docs explicitly say Proxy *"is not intended for slow data fetching"* and should
+not be a full authorization solution.
 
 > **If asked: "so anyone can forge a cookie and get in?"**
 > They can get past the *redirect*. They cannot get data. `getCurrentUser()`
 > (`src/lib/auth/session.ts`) hashes the cookie value with SHA-256 and looks it up in the
-> `Session` table; a forged token finds no row, returns `null`, and the `(app)` layout
-> redirects to `/login`. The proxy is a UX optimisation, not a security control — and the
+> `Session` table; a forged token finds no row, returns `null`, and the page's
+> `requireWorkspacePage()` sends the browser through `/auth/signout-stale`, which clears the
+> cookie, to `/login`. The proxy is a UX optimisation, not a security control — and the
 > code says so in a comment, which is the part worth pointing at.
 
 #### Server Actions — and the fact that they are real public HTTP endpoints
@@ -232,14 +249,17 @@ does not have to use your UI. They can post to the action id directly, with what
 arguments they like, in any order, with no form, from anywhere. Which means:
 
 1. **Every action must authenticate itself.** All 22 actions under `src/server/actions/`
-   open with `await requireUser()` — even `currentAiProvider()`, which returns nothing more
-   than the string `"gemini"`. The three exceptions are the auth actions in
+   open by authenticating: 20 with `await requireWorkspace()`, which resolves the user's
+   workspace, role, plan and scoped `db` from their membership, and two —
+   `extractFileText` and `currentAiProvider()` — with `await requireUser()`, because they
+   never touch the database. Even `currentAiProvider()`, which returns nothing more than a
+   provider name, authenticates. The three exceptions are the auth actions in
    [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts), and they have to be:
    `login` and `register` are the unauthenticated entry points, and `logout` uses
    `getCurrentUser()` so it can audit who left without throwing when nobody is signed in.
 2. **Every action must authorize itself.** Being signed in is not permission to touch a
    specific row. Every update and delete does
-   `findUnique` → `canMutate(row.ownerId, user)` → refuse. See
+   `findUnique` → `canMutate(row.ownerId, actor)` → refuse. See
    [`src/lib/authz.ts`](../src/lib/authz.ts).
 3. **Every action must validate its arguments.** The `formData.get("value")` that arrives
    is `FormDataEntryValue | null`, not a number, no matter what the `<input type="number">`
@@ -258,10 +278,10 @@ the distinction deliberately. Compare the two refusals in
 
 ```ts
 // updateDeal — runs inside a useActionState form
-if (!canMutate(existing.ownerId, user)) return { message: NOT_YOURS };
+if (!canMutate(existing.ownerId, actor)) return { message: NOT_YOURS };
 
 // deleteDeal — called from a confirm dialog
-if (!canMutate(deal.ownerId, user)) {
+if (!canMutate(deal.ownerId, actor)) {
   throw new Error("FORBIDDEN: only the owner or an admin can delete");
 }
 ```
@@ -274,7 +294,7 @@ matching on `"FORBIDDEN"` to show *"Only the owner or an admin can delete this."
 
 > **If asked: "what stops someone calling a Server Action directly?"**
 > Nothing, and nothing should — it is an endpoint. What stops them *doing damage* is that
-> the endpoint authenticates (`requireUser`), authorizes (`canMutate`) and validates (zod)
+> the endpoint authenticates (`requireWorkspace`), authorizes (`canMutate`) and validates (zod)
 > without any help from the client. Next.js also blocks cross-origin invocation via an
 > `Origin`/`Host` check (see CSRF below), and the action ids are unguessable per build —
 > but neither of those is the control I would rely on, and neither replaces the three
@@ -365,7 +385,8 @@ re-renders the page with the new score and the `<ScorePill>` updates from props.
 of truth instead of two.
 
 **A caveat to be honest about.** Every page in `(app)` is dynamically rendered, because the
-layout calls `getCurrentUser()`, which reads `cookies()`. So there is no full-page static
+layout calls `requireWorkspacePage()`, which reaches `getCurrentUser()` only through
+`getWorkspaceContext()`, and that reads `cookies()`. So there is no full-page static
 cache to bust. What `revalidatePath` is mainly doing here is refreshing the current render
 after the action and clearing the client-side Router Cache, so navigating back to a
 previously-visited route re-fetches instead of replaying a stale RSC payload. The precise
@@ -386,8 +407,9 @@ query, not three.
 **What it is.** An ORM with a declarative schema file. You describe models; a code generator
 produces a fully-typed client; a migration tool turns schema changes into versioned SQL.
 
-**The schema.** [`prisma/schema.prisma`](../prisma/schema.prisma) defines eight models:
-`User`, `Session`, `Company`, `Contact`, `Deal`, `Activity`, `Task`, `AuditLog`. Its first
+**The schema.** [`prisma/schema.prisma`](../prisma/schema.prisma) defines eleven models:
+`User`, `Session`, `Workspace`, `Membership`, `Company`, `Contact`, `Deal`, `Activity`, `Task`,
+`AuditLog`, `AiUsage`. Its first
 comment records the constraint that shapes several later decisions:
 
 > *SQLite does not support enums — enum-like fields are strings validated with zod at the
@@ -407,8 +429,9 @@ is generated *into the source tree*, not into `node_modules/.prisma`. That is wh
 to `"postinstall": "prisma generate"` in [`package.json`](../package.json), so it runs after
 every `npm install` and on every Vercel build.
 
-**Migrations.** [`prisma/migrations/`](../prisma/migrations) holds two so far —
-`20260715164036_init` and `20260725150849_add_deal_task_fk_indexes` — plus
+**Migrations.** [`prisma/migrations/`](../prisma/migrations) holds four so far —
+`20260715164036_init`, `20260725150849_add_deal_task_fk_indexes`,
+`20260823151943_add_deal_base_value_and_fx_rate` and `20261011180555_workspaces_expand` — plus
 `migration_lock.toml` pinning `provider = "sqlite"`. `npm run db:migrate` (`prisma migrate
 dev`) is the authoring command; CI runs `npx prisma migrate deploy` to apply them. Neither
 of those reaches production, which is its own topic — see `_turso_migrations` and
@@ -473,12 +496,14 @@ missing positions — and reading outside it, as the code once did, was a lost u
 concurrent drags. `createDeal` reads the last position inside the transaction that inserts for
 the same reason; `deals-ordering.test.ts` proves both under concurrent writes.
 
-**The audit write joins the transaction.** `audit(entry, tx?)`
-([`src/lib/audit.ts`](../src/lib/audit.ts)) has two modes. Given the caller's transaction
-client it writes through it, so a mutation and its entry commit or roll back together — a
-change cannot exist without its record. Without one (logins, AI usage: there is no business
-transaction to join) it stays best-effort and never throws, but a failed write is reported to
-Sentry rather than swallowed.
+**The audit write joins the transaction.** [`src/lib/audit.ts`](../src/lib/audit.ts) has two
+writers for workspace entries. `auditTx(tx, entry)` writes through the caller's transaction
+client, so a mutation and its entry commit or roll back together — a change cannot exist
+without its record, and a failed write propagates. `audit(db, entry)`, where there is no
+business transaction to join (the creates, `updateContact`, `updateCompany`, `toggleTask`
+and AI usage), writes through the scoped client,
+stays best-effort and never throws, but a failed write is reported to Sentry rather than
+swallowed. Platform events (`auth.*`) go through `auditPlatform` instead, with no workspace.
 
 > **If asked: "why are some audit writes still outside a transaction?"**
 > Because a failed login must still be logged while the surrounding request is failing, and
@@ -539,7 +564,7 @@ permanently: SQLite is a file, Turso has a free tier.
 **The cost of that choice**, stated plainly: SQLite has one writer at a time, no `ENUM`, no
 native `JSON` column (hence `AuditLog.metadata` being a `String?` holding
 `JSON.stringify(...)` — see [`src/lib/audit.ts`](../src/lib/audit.ts)), and much weaker
-concurrency than Postgres. For a single-tenant portfolio CRM that is invisible. For a real
+concurrency than Postgres. For a portfolio or self-hosted single-workspace CRM that is invisible. For a real
 multi-user SaaS it would not be.
 
 > **If asked: "would you use SQLite in production?"**
@@ -741,7 +766,7 @@ wrote in this repo:
 
 1. **`SameSite=Lax`** — the browser will not attach `nexus_session` to a cross-site POST,
    and every Server Action is a POST. The forged request arrives unauthenticated and
-   `requireUser()` rejects it.
+   `requireWorkspace()` rejects it.
 2. **Next.js's own Server Action origin check** — the framework compares the `Origin`
    header against the `Host` header and refuses mismatches, so a cross-origin action
    invocation is rejected before your code runs.
@@ -860,12 +885,15 @@ target). For multi-instance production use, back this with Redis or a database."
 
 **What it is.** An append-only record of who did what to which record, when.
 
-**Here.** [`src/lib/audit.ts`](../src/lib/audit.ts) exposes one function, called from every
-mutating action:
+**Here.** [`src/lib/audit.ts`](../src/lib/audit.ts) exposes `audit(db, entry)` and
+`auditTx(tx, entry)`, called from every mutating action, and
+[`src/lib/auth/platform-audit.ts`](../src/lib/auth/platform-audit.ts) adds `auditPlatform`
+for the `auth.*` events:
 
 ```ts
-await audit({ action: "deal.stage_change", entityType: "deal", entityId: id,
-              userId: user.id, metadata: { from: existing.stage, to: data.stage } });
+await auditTx(tx, { action: "deal.stage_change", entityType: "deal", entityId: id,
+                    workspaceId: ctx.workspaceId, userId: ctx.user.id,
+                    metadata: { from: existing.stage, to: data.stage } });
 ```
 
 `action` is a dotted verb string — `auth.login`, `auth.login_failed`, `auth.register`,
@@ -879,9 +907,12 @@ await audit({ action: "deal.stage_change", entityType: "deal", entityId: id,
 `auth.login_failed` is written with **no** `userId` at all (there may be no such user) but
 with `entityId: email` and `metadata: { ip }`.
 
-Admins see the latest 25 entries on `/settings`
-([`src/app/(app)/settings/page.tsx`](../src/app/(app)/settings/page.tsx)); the query is
-gated on `isAdmin`.
+Workspace admins see the latest 25 entries of their own workspace on `/settings`
+(`loadSettings` in [`src/server/queries/settings.ts`](../src/server/queries/settings.ts), which
+[the page](../src/app/(app)/settings/page.tsx) calls); the query runs only for
+`isWorkspaceAdmin` and goes through the scoped client. The `auth.*` events are written by
+`auditPlatform` with no workspace, so they never appear there — which is how a failed
+sign-in's IP stays off every Settings page.
 
 **The retention story is worth telling**, because it is a good bug. The nightly demo reset
 used to call `auditLog.deleteMany()` with no filter — wiping *everyone's* trail, including
@@ -902,13 +933,15 @@ checking that *this* user is allowed to. Change the id in the URL, get someone e
 const id = idSchema.parse(dealId);                       // 1. shape only
 const deal = await prisma.deal.findUnique({ where: { id } });
 if (!deal) return;                                       // 2. exists?
-if (!canMutate(deal.ownerId, user)) { /* refuse */ }     // 3. allowed?
+if (!canMutate(deal.ownerId, actor)) { /* refuse */ }    // 3. allowed?
 ```
 
 Step 1 is *not* the defence and should not be described as one — `idSchema` is
 `z.string().min(1).max(64)`, which only bounds the shape. Step 3 is the defence.
 
-**Where the honest nuance sits.** This is a shared single-tenant workspace, so **reads are
+**Where the honest nuance sits.** Across workspaces an id is simply "not found": every
+query runs through the scoped client in [`src/lib/tenancy.ts`](../src/lib/tenancy.ts).
+Inside one workspace, **reads are
 workspace-wide by design**. A signed-in member can open any contact's detail page. That is
 not an IDOR bug; it is the product. What was a bug — and is fixed on this branch — is that
 *writes* were only guarded on delete paths. The e2e test in
@@ -919,13 +952,16 @@ owner check while their delete siblings did."*
 The other IDOR-flavoured fix on this branch is on `/settings`: the Team card selected
 `email` for every user with no admin condition, three lines above an audit query that *was*
 gated. Registration is open, so any throwaway account could read every address that had ever
-signed up. Now:
+signed up. Now, in `loadSettings` (`src/server/queries/settings.ts`):
 
 ```ts
-email: isAdmin || m.id === user.id ? m.email : null
+const showEmails = isAdmin && !isLockedDemoAccount(ctx.user);
+email: showEmails || m.user.id === ctx.user.id ? m.user.email : null
 ```
 
-Names and roles stay visible as team context; addresses are PII and do not.
+Names and roles stay visible as team context; addresses are PII and do not. The roster lists
+only the viewer's workspace, and the locked demo account — an `ADMIN` with a published
+password — sees no address but its own.
 
 ---
 
@@ -1290,7 +1326,7 @@ Elsewhere in the UI: `aria-label` on icon-only buttons (`"Delete task"`, `"Mark 
 
 **Here.**
 
-**Unit — vitest, 461 tests across 33 files.** Pure modules in `src/lib/`
+**Unit — vitest, 1189 tests across 67 files.** Pure modules in `src/lib/`
 (`ai/heuristics`, `ai/label`, `ai/prompt`, `ai/provider`, `authz`, `constants`, `db-adapter`, `demo-guard`, `email`,
 `file-context`, `rate-limit`, `reset-guard`, `sentry-options`, `utils`, `validation`, `money`,
 `fx`, `months`, `search`, `concurrency`, `migration-ledger`), the evaluation harness's own
@@ -1357,9 +1393,17 @@ the glob **and** installing a DOM environment (`jsdom` or `happy-dom`) **and** a
 dialogs' `useActionState` wrappers are the highest-logic client code in the app and are
 covered only end-to-end.
 
-**End-to-end — Playwright, 45 tests across 4 files.** `e2e/auth.spec.ts`,
-`e2e/crm.spec.ts`, `e2e/marketing.spec.ts`, and `e2e/accessibility.spec.ts` (axe scans of
+**End-to-end — Playwright, 48 tests across 5 files.** `e2e/auth.spec.ts`,
+`e2e/crm.spec.ts`, `e2e/marketing.spec.ts`, `e2e/multi-isolation.spec.ts`, and
+`e2e/accessibility.spec.ts` (axe scans of
 every page in both themes, an open dialog, the open search palette, and all six avatar tints).
+`multi-isolation.spec.ts` is the `multi` project: three tests on a second server in
+`WORKSPACE_MODE=multi` with its own database — two sign-ups that cannot read each other's
+workspace, and two stale-session cases (a page load and a submitted server action after the
+membership is gone), which must end signed out on `/login`, not looped. It runs in CI, and
+locally with `E2E_MULTI=1` after a build. Both servers blank `ALLOW_REMOTE_DB` and the Turso
+variables, and each sign-up browser context sends its own client IP, so a CI retry does not
+run into the sign-up limit (5 per 15 minutes per address).
 Two config choices are worth knowing:
 
 - **`fullyParallel: false, workers: 1`** — *"the suite shares one seeded SQLite database."*
@@ -1523,19 +1567,36 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | Term | Where | What it means |
 |---|---|---|
 | `getCurrentUser()` | [`src/lib/auth/session.ts`](../src/lib/auth/session.ts) | Reads the `nexus_session` cookie, SHA-256s it, looks up the `Session` row, checks expiry, attempts (ineffectively — see Sliding expiry) to extend the row if under 15 days remain, and returns the user **with `passwordHash` stripped**. Returns `null` when there is no valid session. Wrapped in React `cache()`, so calling it from a layout, a page and an action costs one query. |
-| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. The first line of every Server Action. Use it wherever a `null` user is a bug rather than a state to render. |
+| `requireUser()` | same file | `getCurrentUser()` or `throw new Error("UNAUTHORIZED")`. Used only by the two actions that never touch the database and are cross-tenant-exempt, `extractFileText` and `currentAiProvider`. Every other action opens with `requireWorkspace()` (see "Workspaces and tenancy"), which builds on `getCurrentUser()` through `getWorkspaceContext()`, not on this. |
 | `createSession(userId)` | same file | Generates 32 random bytes (base64url), stores `sha256(token)` plus a 255-char-truncated user agent, sets the cookie. |
 | `destroySession()` | same file | Deletes the session row by token hash and clears the cookie. `.catch(() => {})` on the delete so signing out never fails on an already-gone row. |
 | `SESSION_DAYS` / `RENEW_BELOW_DAYS` | same file | 30 and 15. Session lifetime, and the threshold below which a request extends the **database row**. Because the cookie is not re-issued, the renewal has no effect and the real lifetime is a fixed 30 days. |
 | `hashToken(token)` | same file (not exported) | `createHash("sha256").update(token).digest("hex")`. |
-| `canMutate(ownerId, user)` | [`src/lib/authz.ts`](../src/lib/authz.ts) | `ownerId === user.id \|\| user.role === "ADMIN"`. The single ownership predicate. Takes the owning id as an argument because the field differs by model — `ownerId` on Company/Contact/Deal, `assigneeId` on Task, `userId` on Activity. |
+| `canMutate(ownerId, actor)` | [`src/lib/authz.ts`](../src/lib/authz.ts) | `ownerId === actor.id \|\| isWorkspaceAdmin(actor.role)`, with the role read from the actor's membership. The single ownership predicate. Takes the owning id as an argument because the field differs by model — `ownerId` on Company/Contact/Deal, `assigneeId` on Task, `userId` on Activity. |
 | `NOT_YOURS` | same file | `"You can only edit records you own."` Phrased for a user reading a form, because that is where it is rendered. |
 | `DUMMY_HASH` | [`src/lib/auth/actions.ts`](../src/lib/auth/actions.ts) | A constant bcrypt hash compared against when the email does not exist, so login timing does not reveal which emails are registered. |
 | `clientIp()` | same file | Prefers `x-vercel-forwarded-for` / `x-real-ip` (platform-set, trustworthy); falls back to the first entry of the client-spoofable `x-forwarded-for`, then `"local"`. |
 | `IP_ATTEMPT_LIMIT` / `PAIR_FAILURE_LIMIT` / `ACCOUNT_FAILURE_LIMIT` | same file | 100 **attempts** per source (successes included, charged before the compare), then 10 and 20 **failed** logins per 15 minutes for the source-and-email pair and the account. The account one survives forwarded-for spoofing. |
 | `peekLimit` / `rateLimit` / `sweepExpiredBuckets` | [`src/lib/rate-limit.ts`](../src/lib/rate-limit.ts) | Read standing without consuming / increment and report / opportunistic map cleanup every 5 minutes. |
 | `recordBlock(contact)` | [`src/lib/ai/prompt.ts`](../src/lib/ai/prompt.ts) | Serialises a contact and its company, deals and last 10 activities into a `<record>…</record>` fenced block for the prompt. Each activity is truncated to 300 chars. |
-| `audit(entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends to `AuditLog`. `metadata` is `JSON.stringify`'d into a `String?` column. **Never throws** — a failed log must not break the action it records. Called after (and outside) the write it describes. |
+| `audit(db, entry)` | [`src/lib/audit.ts`](../src/lib/audit.ts) | Appends a workspace entry to `AuditLog` through the caller's scoped client (`ctx.db`), so it lands in the caller's workspace; `entry.workspaceId` is required. `metadata` is `JSON.stringify`'d into a `String?` column. **Best-effort and never throws** — the action it records has already committed, so a failed write is swallowed, but reported to Sentry (tag `subsystem: audit`) as well as the console. Used by the creates, `updateContact`, `updateCompany`, `toggleTask` and the AI actions' usage entries. |
+| `auditTx(tx, entry)` | same file | The same row written through the `tx` of the caller's `$transaction` callback (never the outer client). **A failure propagates** and rolls the mutation back, so a state change cannot commit without its record. Used by every delete, `updateDeal` and `moveDeal`. |
+
+### Workspaces and tenancy
+
+| Term | Where | What it means |
+|---|---|---|
+| **Workspace** | `Workspace` in [`prisma/schema.prisma`](../prisma/schema.prisma) | One tenant: a name, a unique slug, a `plan` and `isDemo`. Every CRM row belongs to exactly one through `workspaceId`. In `single` mode the database holds one, `DEFAULT_WORKSPACE_ID` = `"ws_default"` ("Default workspace", slug `default`); in `multi` mode, one per sign-up. |
+| **Membership** | `Membership`, same file | A user's place in a workspace, with the role that counts: `OWNER`, `ADMIN` or `MEMBER`. `userId` is unique — one workspace per person in this release. `User.role` is deprecated and unused. |
+| **Workspace modes** — `WORKSPACE_MODE` / `workspaceMode()` | [`src/lib/workspace-mode.ts`](../src/lib/workspace-mode.ts) | `single` (self-hosting, the public demo: one workspace everyone joins) or `multi` (the hosted cloud: a private workspace per sign-up). Required under `NODE_ENV=production`. The seed and reset scripts refuse `multi`. |
+| **Plans** — `PLAN_LIMITS` | [`src/lib/plans.ts`](../src/lib/plans.ts) | `FREE`: 1 member, 200 contacts, 100 companies, 100 deals, 30 AI actions a month. `PAID`: 10, 10,000, 5,000, 5,000, 600. Enforced only in `multi` mode; `Workspace.plan` changes only through spec 3's billing webhook. |
+| **`isDemo`** | `Workspace.isDemo` | The nightly reset's permission bit and nothing else: no app code reads it, the reset never writes it, the seed sets it only with `SEED_DEMO_WORKSPACE=true`, and `scripts/mark-demo-workspace.ts` sets it once on the demo database. The reset refuses any database whose only workspace lacks it. |
+| `AiUsage` | `AiUsage` model; [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | One row per metered AI action, reserved as `pending` before the provider call, then settled `answered` / `rejected` / `fallback`; `denied` (monthly allowance spent) and `capacity` (`AI_DAILY_CEILING` reached) rows record refusals. Only `pending`, `answered` and `rejected` are charged: a chain where any attempt got a billed reply from a provider (a 2xx, or Groq's 400 `json_validate_failed`) but no usable output (malformed or empty) settles `rejected`, because the provider did the work, while `fallback` means no attempt got a billed reply (a 429, an error status, a timeout, no key). |
+| `scopeToWorkspace(base, id)` / `forWorkspace(id)` | [`src/lib/tenancy.ts`](../src/lib/tenancy.ts), [`src/lib/db.ts`](../src/lib/db.ts) | The scoped client. Adds `workspaceId` to every tenant query, verifies it on creates, allows plain-column writes only, and throws on raw SQL, global models and unknown operations. The only database handle application code gets. |
+| `systemDb` | [`src/lib/db.ts`](../src/lib/db.ts) | The unscoped client. Importable only from an exact allowlist (the auth session and actions, `auditPlatform`, the workspace context and bootstrap, `system-queries.ts`, the health probe, and the `/auth/signout-stale` route), enforced by `src/lib/import-guard.test.ts`. |
+| `getWorkspaceContext()` / `requireWorkspace()` / `requireWorkspacePage()` | [`src/lib/workspace-context.ts`](../src/lib/workspace-context.ts) | Per request: the user, their workspace, role, plan and `db` (the scoped client). `requireWorkspace()` is the first line of 20 of the 22 Server Actions; `requireWorkspacePage()` opens every `(app)` page, the `(app)` layout and the deal page's `generateMetadata`. No valid context: actions throw `UNAUTHORIZED`; pages go through `/auth/signout-stale` (`STALE_SESSION_PATH`), which clears the session cookie and lands on `/login`. A direct `/login` redirect would loop, because the proxy sends any cookie-holder from `/login` back to `/dashboard`. A session with no membership joins the one workspace in `single` mode, and is signed out the same way in `multi` mode. |
+| `isWorkspaceAdmin(role)` | [`src/lib/authz.ts`](../src/lib/authz.ts) | `role` is `OWNER` or `ADMIN`. Every role check in the app goes through it or `canMutate`. |
+| `auditPlatform(entry)` | [`src/lib/auth/platform-audit.ts`](../src/lib/auth/platform-audit.ts) | Writes the `auth.*` events (sign-up, sign-in, failed sign-in, sign-out) with a null workspace, through `systemDb`, so no workspace ever sees them. Best-effort like `audit`: a failed write goes to Sentry. It throws a `TypeError` for any action that is not `auth.*`. Every other audit entry carries its workspace (`audit`, `auditTx`). |
 
 ### Forms and action results
 
@@ -1561,8 +1622,8 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `SYSTEM_PREAMBLE` | same file | The system instruction sent with every request, telling the model to treat `<record>` and `<user-context>` content strictly as data and to take instructions only from outside those tags. Exported for the evaluation harness's echo check. |
 | `generateJson(prompt, { schema, jsonSchema })` | same file | The entry point for a structured reply. Sends the JSON Schema to the vendor (Gemini `responseJsonSchema`, Groq JSON mode), parses the whole reply and validates it with the zod `schema`. Returns `{ ok: true, data, provider }` or `{ ok: false, reason }`, where an unusable reply is `malformed` and moves the chain to the next provider first. Replaced the regex `extractJson` scan. |
 | **heuristic fallback** | [`src/lib/ai/heuristics.ts`](../src/lib/ai/heuristics.ts) | `heuristicLeadScore`, `heuristicEmailDraft`, `heuristicSummary` — deterministic rule-based implementations of all three AI features. Their output is labelled "rule-based" in the UI so a demo never passes rules off as a model. |
-| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
-| `aiRateLimited(userId)` | same file | 30 AI calls per user per hour. Guards the free-tier quota. |
+| `AiActionResult` | [`src/server/actions/ai.ts`](../src/server/actions/ai.ts) | `{ ok, text?, score?, reason?, provider, degraded?, message? }` — what every AI action returns. `provider` is `"gemini/…"`, `"groq/…"`, `"heuristic"`, `"email"` or `"none"`; `degraded` is set with `"heuristic"` and says why the model was not used (`not_configured`, `rate_limited`, `error`, `malformed`, or `capacity`, which the usage ledger reports when `AI_DAILY_CEILING` is reached, with no provider called). The panel renders both through `providerLabel()` so the user always knows what produced the text. |
+| `aiRateLimited(userId)` | same file | 30 AI calls per user per hour, in memory and per instance: burst protection only. The quota controls are the `AiUsage` ledger's monthly allowance and `AI_DAILY_CEILING` ([`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts)). |
 | `splitDraft(draft)` | [`src/lib/email.ts`](../src/lib/email.ts) | Splits `"Subject: x\n\nbody"` — the shape `draftFollowUp` asks the model for — falling back to subject `"Following up"` if the pattern does not match. The model draft is shape-checked upstream by `generateDraft`, so the fallback now covers only the client-sent draft. |
 | `emailConfigured()` | same file | `Boolean(RESEND_API_KEY && EMAIL_FROM)`. When false, `sendFollowUp` takes the simulated path. |
 | **simulated send** | `sendFollowUp` in `src/server/actions/ai.ts` | When `isLockedDemoAccount(user)` or `!emailConfigured()`, no email goes out but the Activity is still written with a `[simulated send]` prefix — so the flow is visible in the demo. |
@@ -1592,7 +1653,9 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `resolveResetTarget(env)` | [`src/lib/reset-guard.ts`](../src/lib/reset-guard.ts) | Returns `"local"` unless `ALLOW_REMOTE_DB === "true"`, and **throws** if that flag is set but `TURSO_DATABASE_URL` is missing — opting in to a remote reset with nothing remote configured means intent and environment disagree, and failing beats quietly wiping the local database instead. |
 | `AUDIT_RETENTION_DAYS` | same file | 30. How long an audit entry the reset does not own survives. |
 | `auditPruneWhere({demoUserId, now, retentionDays})` | same file | Builds `{ OR: [{ createdAt: { lt: cutoff } }, { userId: demoUserId }] }`. Prunes rather than empties: demo-authored entries go (they describe records being deleted), everything else ages out, so the table stays bounded without destroying real accounts' security trail. |
-| `ensureDemoUser` / `seedDemoData` | [`prisma/seed-data.ts`](../prisma/seed-data.ts) | The dataset lives separately from `seed.ts` so the nightly reset can rebuild CRM rows without recreating accounts. |
+| `ensureDemoUser` / `seedDemoData` / `seedInstall` | [`prisma/seed-data.ts`](../prisma/seed-data.ts) | The dataset lives separately from `seed.ts` so the nightly reset can rebuild CRM rows without recreating accounts. `seedDemoData(prisma, ownerId, workspaceId)` stamps the workspace on every row it writes. `seedInstall` is what `db:seed` runs: one workspace, the demo account's `ADMIN` membership, `isDemo` only with `SEED_DEMO_WORKSPACE=true`. `ensureDemoUser` no longer writes `User.role`. |
+| `assertResettable(db)` / `resetDemoWorkspace(db, workspaceId)` | [`src/lib/demo-reset.ts`](../src/lib/demo-reset.ts) | The nightly reset's two units. The first throws `RESET_REFUSED` — so the job exits non-zero having written nothing — unless the database holds exactly one workspace and it is marked `isDemo`. The second prunes the audit log, deletes that workspace's CRM rows (and any an older build left with no workspace), re-pins the demo account's `ADMIN` membership and reseeds. Neither writes `isDemo`. |
+| `scripts/mark-demo-workspace.ts` / `scripts/backfill-workspace.ts` | `scripts/` | One-off and human-run, on the demo database during the phase-A rollout. The first sets `isDemo` on the only workspace if the demo account is its member. The second, idempotent, joins users without a membership as `MEMBER` and stamps the workspace on rows an older build wrote without one. Both refuse `WORKSPACE_MODE=multi`. |
 
 ### Formatting and UI helpers
 
@@ -1634,6 +1697,9 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 | `VERCEL_ENV` | `src/lib/db-adapter.ts`, `src/lib/sentry-options.ts` | `"production"`, `"preview"` or `"development"`. Also **not** sufficient alone, because `vercel env pull --environment=production` writes it into a local `.env`. Production requires `VERCEL` **and** `VERCEL_ENV === "production"`. |
 | `VERCEL_PROJECT_PRODUCTION_URL` | [`src/app/layout.tsx`](../src/app/layout.tsx) | Builds `metadataBase` for OpenGraph URLs; falls back to `http://localhost:3000`. |
 | `DEMO_MODE` | [`src/lib/demo-guard.ts`](../src/lib/demo-guard.ts) | `"true"` locks the demo account out of deleting. Set on Vercel Production **and Preview** — the guard is inert wherever it is unset. **Not documented in `.env.example`.** |
+| `WORKSPACE_MODE` | [`src/lib/workspace-mode.ts`](../src/lib/workspace-mode.ts) | `single` or `multi`. **Required when `NODE_ENV=production`** — unset there fails at boot, so a cloud deployment that lost it can never silently turn single. Unset in development means `single`. Read at runtime, never inlined. The Docker image bakes `single`; `multi` refuses to boot with `DEMO_MODE=true`. |
+| `AI_DAILY_CEILING` | [`src/lib/ai/usage.ts`](../src/lib/ai/usage.ts) | Optional deployment-wide cap on metered AI actions per UTC day, across all workspaces. At the cap an AI action answers in rule-based mode, labelled "daily AI capacity reached". Unset or blank means no ceiling; a value that is not a whole number fails closed as 0, so every AI action takes that capacity fallback. |
+| `SEED_DEMO_WORKSPACE` | [`prisma/seed.ts`](../prisma/seed.ts) | `"true"` marks the seeded workspace `isDemo`, the only thing that lets the nightly reset rebuild it. For the public demo's database only; Docker's `SEED_DEMO_DATA` path and CI never set it. |
 | `GEMINI_API_KEY` / `GROQ_API_KEY` | [`src/lib/ai/provider.ts`](../src/lib/ai/provider.ts) | Set one or both. Gemini is tried first; Groq takes over when Gemini fails (error status, rejected fetch, or an empty reply) — which, with Gemini's small daily quota, is the normal case. |
 | `AI_MODEL` | same | Overrides the default model of the **primary** provider only (defaults: `gemini-3.6-flash`, `openai/gpt-oss-120b`); a fallback always uses its own default, since a Gemini model name sent to Groq is a 404. The Gemini default is the current model by name: the `-latest` rolling alias returned 503 "high demand" for hours on 2026-09-06 while the named model answered, and when a named model retires Google's 404 names its successor. |
 | `RESEND_API_KEY` / `EMAIL_FROM` | [`src/lib/email.ts`](../src/lib/email.ts) | Both required for real delivery. Without them "Send to yourself" logs to the activity feed instead. |
@@ -1649,9 +1715,9 @@ A build-time subtlety visible in both workflows: `DATABASE_URL` is set to a dumm
 
 | Account | Credentials | Role | Notes |
 |---|---|---|---|
-| **Demo** | `demo@nexuscrm.dev` / `demo-password-123` | ADMIN | Created by `npm run db:seed`. Published in the README and wired to the "Try the demo" button on the sign-in page. Under `DEMO_MODE=true` it cannot delete records; its email always takes the simulated path. |
-| **Member** | `member@nexuscrm.dev` / `member-password-123` | MEMBER | Created by `npm run db:add-member` (idempotent upsert). Exists so a reviewer can see the reduced-permission view — refused edits, no audit log on `/settings`, other users' emails hidden. |
-| **First registered account** | whatever you register | ADMIN | `register()` does `userCount === 0 ? "ADMIN" : "MEMBER"`. Every subsequent registration is a MEMBER. |
+| **Demo** | `demo@nexuscrm.dev` / `demo-password-123` | ADMIN (membership) | Created by `npm run db:seed`, which gives it an `ADMIN` membership in the one workspace; the nightly reset re-pins it. Published in the README and wired to the "Try the demo" button on the sign-in page. Under `DEMO_MODE=true` it cannot delete records and sees no other member's email address; its email always takes the simulated path. |
+| **Member** | `member@nexuscrm.dev` / `member-password-123` | MEMBER (membership) | Created by `npm run db:add-member` (idempotent upsert of the account and its `MEMBER` membership). Exists so a reviewer can see the reduced-permission view — refused edits, no audit log on `/settings`, other users' emails hidden. |
+| **First registered account** | whatever you register | OWNER (membership) | In `single` mode `register()` makes the first member of the one workspace its `OWNER` and every later registrant a `MEMBER`. In `multi` mode every sign-up is the `OWNER` of its own new workspace. |
 
 The "Try the demo" button in [`login-form.tsx`](../src/app/(auth)/login/login-form.tsx) fills
 the real form and calls `form.requestSubmit()` — it goes through the normal `login` action,
@@ -1669,14 +1735,14 @@ Every script from [`package.json`](../package.json):
 | `start:standalone` | `node scripts/start-standalone.mjs` | Copies `.next/static` and `public/` into the standalone folder, absolutises a relative `DATABASE_URL`, then runs `.next/standalone/server.js` — the exact artifact the Docker image ships. | To reproduce production locally, and what CI uses for e2e. |
 | `lint` | `eslint` | Flat-config ESLint via `eslint.config.mjs` (extends `eslint-config-next`). | Before committing; CI step 2. |
 | `typecheck` | `tsc --noEmit` | Type check only, no output. | Before committing; CI step 3. |
-| `test` | `vitest run` | The 461 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
-| `test:e2e` | `playwright test` | The 45 browser tests. Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
+| `test` | `vitest run` | The 1189 unit tests, once, non-watch (`test:coverage` adds the coverage gate CI uses). | Before committing; CI step 4. |
+| `test:e2e` | `playwright test` | The 48 browser tests (45 in `chromium`, 3 in the `multi` project, which runs in CI or with `E2E_MULTI=1`). Locally reuses a running dev server; in CI starts the standalone one. | After UI or flow changes. Needs a seeded database. |
 | `eval` | `vitest run --config vitest.eval.config.ts` | The AI evaluation harness: 13 fixture contacts through the real actions, property assertions, three injection payloads. Keyless by default; `EVAL_LIVE=1` uses the real providers. | After any change to the AI layer or the prompt; CI step 5 (keys blank), `eval-live.yml` nightly. Live knobs: `EVAL_LIVE_ORDINARY`, `EVAL_LIVE_PACE_MS`, `EVAL_LIVE_RETRY_MS`, `EVAL_LIVE_RETRY_BUDGET`. |
 | `db:migrate` | `prisma migrate dev` | Diffs the schema, writes a new migration folder, applies it to `dev.db`, regenerates the client. | After editing `prisma/schema.prisma`. **Local authoring only** — it never touches production. |
-| `db:seed` | `tsx prisma/seed.ts` | Seeds the demo workspace. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`. | After a fresh `migrate dev`, or on a new clone. |
-| `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the MEMBER demo account. Touches nothing else. | Once, when you want the member view available. |
+| `db:seed` | `tsx prisma/seed.ts` | Seeds the demo data into the one workspace and gives the demo account an `ADMIN` membership. Idempotent: skips entirely if `demo@nexuscrm.dev` already exists. Targets **local** unless `SEED_REMOTE=true`; marks the workspace `isDemo` only with `SEED_DEMO_WORKSPACE=true`; refuses `WORKSPACE_MODE=multi`. | After a fresh `migrate dev`, or on a new clone. |
+| `db:add-member` | `tsx prisma/add-demo-member.ts` | Upserts the demo member account and its `MEMBER` membership. Touches nothing else; refuses `WORKSPACE_MODE=multi`. | Once, when you want the member view available. |
 | `db:push:turso` | `tsx scripts/db-push-turso.ts` | Applies pending migration SQL to Turso, tracked in `_turso_migrations`, baselining a pre-existing database. Reads credentials from `.env`. | **After every new migration**, before deploying. This is how schema changes reach production. |
-| `demo:reset` | `tsx scripts/reset-demo.ts` | Deletes all CRM rows (activities → tasks → deals → contacts → companies, in FK order), prunes the audit log per `auditPruneWhere`, re-seeds. **User accounts are never touched.** Local unless `ALLOW_REMOTE_DB=true`. | Locally to get a clean dataset; nightly in CI against production. |
+| `demo:reset` | `tsx scripts/reset-demo.ts` | Refuses — non-zero exit, nothing written — unless the database's only workspace is marked `isDemo`. Then deletes that workspace's CRM rows (activities → tasks → deals → contacts → companies, in FK order), prunes the audit log per `auditPruneWhere`, re-seeds. **User accounts are never touched.** Local unless `ALLOW_REMOTE_DB=true`; refuses `WORKSPACE_MODE=multi`. | Locally to get a clean dataset (mark the local workspace once first: `npx tsx scripts/mark-demo-workspace.ts`); nightly in CI against production. |
 | `capture:shots` | `tsx scripts/capture-marketing-shots.ts` | Drives Playwright against a running dev server to screenshot `/dashboard` and `/deals` in light and dark, writing to `public/marketing/`. Output is committed, so builds never depend on it. | Only when the UI changes enough that the landing page images are stale. |
 | `postinstall` | `prisma generate` | Regenerates the typed client into `src/generated/prisma`. | Automatic — on `npm install`, on `npm ci`, and on every Vercel build. |
 

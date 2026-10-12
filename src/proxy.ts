@@ -7,8 +7,9 @@ const PUBLIC_PATHS = new Set(["/", "/login", "/register"]);
 
 /**
  * Optimistic auth gate: checks only cookie *presence* for fast redirects.
- * Real session validation happens server-side in layouts and actions
- * (getCurrentUser), so a forged cookie never grants access to data.
+ * Real session validation happens server-side in every page
+ * (requireWorkspacePage) and action (requireWorkspace), both through
+ * getCurrentUser, so a forged cookie never grants access to data.
  */
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
@@ -27,6 +28,12 @@ export function proxy(request: NextRequest) {
   // as /monitoring — a signed-in fetch would get /dashboard's HTML instead of
   // the PNG. /icon.svg needs no entry: the matcher's .svg exclusion covers it.
   if (pathname === "/opengraph-image") return NextResponse.next();
+
+  // Clears a session that cannot reach a workspace (a stale cookie, or a
+  // multi-mode user with no membership) and redirects to /login. It must run
+  // with or without a cookie, so it cannot go in PUBLIC_PATHS either: that
+  // branch would bounce the very cookie it exists to clear to /dashboard.
+  if (pathname === "/auth/signout-stale") return NextResponse.next();
 
   const hasSessionCookie = request.cookies.has(SESSION_COOKIE);
 

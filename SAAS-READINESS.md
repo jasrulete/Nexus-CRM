@@ -17,7 +17,7 @@ Fifth pass: 2026-09-14 — the auth review's one finding (F1): a per-source logi
 a bounded bucket map (§3b).
 
 Everything marked "fixed" was verified by typecheck, lint, unit tests, Playwright
-e2e tests, and a production build. Current suite: **461 unit tests, 45 e2e tests**, with coverage gated in CI.
+e2e tests, and a production build. Current suite: **1189 unit tests, 48 e2e tests**, with coverage gated in CI.
 
 ---
 
@@ -252,12 +252,15 @@ trade-off in `SECURITY.md`.
 
 ## 4. Deploy checklist
 
-Every one of these is inert without its environment variable, by design — a
-clone or self-hosted instance is unaffected.
+Every one of these but `WORKSPACE_MODE` is inert without its environment
+variable, by design — a clone or self-hosted instance is unaffected.
+`WORKSPACE_MODE` is the exception: production requires it.
 
 | Variable | Where | Effect |
 |---|---|---|
+| `WORKSPACE_MODE=single` | Vercel (Production **and Preview**) | **Required.** Under `NODE_ENV=production` an unset value fails every request ("WORKSPACE_MODE is required in production"). `single` is the demo's one shared workspace; `multi` gives every sign-up its own. Preview needs it too once it has a database of its own (§4a) |
 | `DEMO_MODE=true` | Vercel (Production **and Preview**) | Demo account cannot delete records. Preview matters: the delete-lock is inert wherever this is unset — see §3a |
+| `AI_DAILY_CEILING` | Vercel (Production) | **Optional, owner-decided.** A deployment-wide cap on metered AI actions per UTC day, across all workspaces; at the cap AI answers in rule-based mode. Unset means no ceiling, which is the demo's state until the owner sets one: size it from whichever daily limit binds first in the Groq console (`docs/runbooks/2026-10-tenancy-phase-a.md`, "Decisions for the owner") |
 | `NEXT_PUBLIC_SENTRY_DSN` | Vercel (Production) | Errors report to Sentry |
 | `RESEND_API_KEY` | Vercel (Production) | "Send to yourself" delivers for real |
 | `EMAIL_FROM` | Vercel (Production) | Sender identity, e.g. `Nexus CRM <onboarding@resend.dev>` |
@@ -321,7 +324,12 @@ put previews straight back onto production data.
 | `TURSO_DATABASE_URL` | the **preview** database URL | Preview only |
 | `TURSO_AUTH_TOKEN` | the **preview** token | Preview only |
 | `ALLOW_REMOTE_DB` | `true` | Preview only |
+| `WORKSPACE_MODE` | `single` | Preview only |
 | `DEMO_MODE` | `true` | Preview only |
+
+`WORKSPACE_MODE` belongs here because a Vercel preview builds with
+`NODE_ENV=production`, where an unset value fails every request. `single` matches
+the demo the preview mirrors.
 
 `DEMO_MODE` belongs here too: it drives both the delete-lock and the shared-demo
 disclosure on the sign-up page, and a preview is exactly as public as production.
@@ -343,7 +351,7 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 | Gap | Why it's acceptable now | What "real SaaS" needs |
 |---|---|---|
 | **Visitor-created records live until the next nightly reset** — up to ~24 hours of clutter (deleting is already blocked, §2) | The reset clears everything each night, so the worst case is one day of stray records on a demo | A shorter reset interval, which GitHub Actions supports well below daily, or per-visitor sandboxing so nobody sees anyone else's edits |
-| **Open registration into one shared workspace** — anyone can self-register and see all CRM data | It's a single-tenant showcase, not customer data | Invite-only registration, or real multi-tenancy (below) |
+| **Open registration into one shared workspace** — anyone can self-register and see all CRM data | That is the demo deployment's choice (`WORKSPACE_MODE=single`: one shared workspace of invented data), not customer data. A `multi`-mode deployment gives every sign-up a private workspace — see §6 | Invite-only registration, or `multi` mode for real customers (§6) |
 | **In-memory rate limiter** resets per deploy and is per-instance | Free-tier single instance | Redis/Upstash-backed limiter |
 | **No backups configured** | Turso has its own snapshots | Documented restore procedure, tested |
 | **3 advisories in the `prisma` CLI chain** (`prisma`, `@prisma/config`, `deepmerge-ts`) | npm's only fix is a downgrade to Prisma 6.12; `prisma` is a devDependency, so none of it ships to production (corrected 2026-08-21 — see §3a) | Track the next Prisma 7 patch |
@@ -357,22 +365,38 @@ These are **deliberate** for a portfolio demo. Listed so the choice is explicit.
 Ranked by what would actually block charging money. None of these are bugs —
 they're unbuilt product surface.
 
-1. **Multi-tenancy** (~1–2 weeks). There is no `Workspace`/`Organization` model;
-   all users share one dataset. This is the single biggest architectural gap and
-   the hardest to retrofit — every query needs a workspace scope. Do this *before*
-   billing if you ever intend to sell it.
-2. **Billing** (~3–5 days). Stripe Checkout + webhook → subscription status on the
-   workspace + plan gating. Meaningless without #1.
-3. **Transactional email** (~1–2 days). Password reset, invites, verification.
-   Resend/Postmark. Password reset is the most-missed feature in any demo.
+1. **Multi-tenancy** — **in progress since 2026-10-11**
+   ([spec](docs/superpowers/specs/2026-10-11-multi-tenancy-core-design.md)). Phase A is
+   built: migration M1 (`Workspace`, `Membership`, `AiUsage`, a nullable `workspaceId` on
+   every tenant table), a fail-closed workspace-scoped client that is the only handle
+   application code gets, `WORKSPACE_MODE=single|multi`, free and paid plan limits, AI
+   metering, and a cross-tenant suite that enumerates every server action and page loader.
+   Its production rollout is [`docs/runbooks/2026-10-tenancy-phase-a.md`](docs/runbooks/2026-10-tenancy-phase-a.md),
+   one owner-approved step at a time. Phase B (M2: `NOT NULL`, the `Workspace` relation,
+   same-workspace composite keys) is a separate, later change.
+2. **Billing** (~3–5 days) — spec 3. A provider-neutral seam with Paddle first and Polar
+   as runner-up: Stripe does not serve Philippines-based sellers. Webhooks flip
+   `Workspace.plan`; the limits it unlocks already live in `src/lib/plans.ts`. Team
+   invites and member management come with it, since only the paid plan has more than
+   one member.
+3. **Transactional email** (~1–2 days) — spec 2. A custom domain, a verified sending
+   domain, email verification and password reset. Invites need it too.
 4. **Legal pages** (~2 hours). Terms + privacy policy, required before taking
    payment or personal data.
 
 ~~Error tracking~~ and ~~onboarding + landing page~~ — the two items this report
 recommended doing first — shipped on 2026-08-01 (§2).
 
-**Recommendation:** the portfolio-value work is done. Only start 1–3 when a real
-user has asked to pay; 4 only matters once you handle real personal data.
+Before the hosted cloud takes its first customer, outside all three specs: the cloud
+deployment itself and its host, written confirmation of Turso's terms for commercial
+use, the W13 prompt-injection nonce fence, an owner for the cloud's audit-log retention
+(the demo's nightly reset prunes the demo's; the cloud has no reset), and a two-sign-up
+isolation smoke test against the deployed cloud.
+
+**Recommendation (superseded 2026-10-11):** this said to start items 1–3 only once a
+real user asked to pay. The owner decided to go ahead regardless, as open-core:
+self-hosting stays free and MIT, and a hosted plan is sold. Item 4 is on the cloud's
+before-launch list, since the cloud will hold real personal data.
 
 ---
 

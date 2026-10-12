@@ -1,109 +1,136 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+/**
+ * Workspace audit writes, against a real database through the real scoped
+ * client. Sentry is faked so a swallowed failure can be seen.
+ */
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestDatabase, makeUser, makeWorkspace, truncateAll } from "@/test/action-harness";
+import { TenancyViolation, scopeToWorkspace } from "./tenancy";
 
-const created = vi.hoisted(() => ({ calls: [] as unknown[], fail: false }));
+const { prisma, destroy } = createTestDatabase();
 
-vi.mock("@/lib/db", () => ({
-  prisma: {
-    auditLog: {
-      create: async (args: unknown) => {
-        if (created.fail) throw new Error("database is gone");
-        created.calls.push(args);
-      },
-    },
-  },
-}));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 
 const captureException = vi.hoisted(() => vi.fn());
 vi.mock("@sentry/nextjs", () => ({ captureException }));
 
-const { audit } = await import("./audit");
+const { audit, auditTx } = await import("./audit");
+
+afterAll(async () => {
+  await destroy();
+});
+
+let userId: string;
+
+beforeEach(async () => {
+  await truncateAll(prisma);
+  await makeWorkspace(prisma, { id: "ws_a" });
+  await makeWorkspace(prisma, { id: "ws_b" });
+  userId = (await makeUser(prisma, { email: "u@example.com", workspaceId: "ws_a" })).id;
+});
 
 afterEach(() => {
-  created.calls = [];
-  created.fail = false;
   captureException.mockClear();
   vi.restoreAllMocks();
 });
 
-const entry = {
+const entry = () => ({
   action: "contact.update",
   entityType: "contact",
   entityId: "c1",
-  userId: "u1",
+  workspaceId: "ws_a",
+  userId,
   metadata: { statusFrom: "LEAD", statusTo: "CUSTOMER" },
+});
+
+const failingWriter = {
+  auditLog: {
+    create: async () => {
+      throw new Error("database is gone");
+    },
+  },
 };
 
-describe("audit without a transaction client", () => {
-  it("serialises metadata to JSON and normalises a missing userId to null", async () => {
-    await audit({ action: "auth.login_failed", entityType: "user", entityId: "a@b.c" });
+describe("audit(db, entry)", () => {
+  it("writes the entry into the caller's workspace, metadata as JSON", async () => {
+    await audit(scopeToWorkspace(prisma, "ws_a"), entry());
 
-    expect(created.calls[0]).toEqual({
-      data: {
-        action: "auth.login_failed",
-        entityType: "user",
-        entityId: "a@b.c",
-        userId: null,
-        metadata: null,
-      },
+    const rows = await prisma.auditLog.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ action: "contact.update", workspaceId: "ws_a", userId });
+    expect(JSON.parse(rows[0].metadata ?? "")).toEqual({ statusFrom: "LEAD", statusTo: "CUSTOMER" });
+  });
+
+  it("normalises a missing userId and metadata to null", async () => {
+    await audit(scopeToWorkspace(prisma, "ws_a"), {
+      action: "deal.delete",
+      entityType: "deal",
+      entityId: "d1",
+      workspaceId: "ws_a",
     });
+
+    expect(await prisma.auditLog.findFirst()).toMatchObject({ userId: null, metadata: null });
   });
 
-  it("writes metadata as a JSON string", async () => {
-    await audit(entry);
-
-    const data = (created.calls[0] as { data: { metadata: string } }).data;
-    expect(JSON.parse(data.metadata)).toEqual({
-      statusFrom: "LEAD",
-      statusTo: "CUSTOMER",
-    });
-  });
-
-  it("never throws — the action it records has already committed", async () => {
+  it("never throws, and reports a swallowed failure to Sentry", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    created.fail = true;
 
-    await expect(audit(entry)).resolves.toBeUndefined();
-  });
-
-  it("reports a swallowed failure to Sentry", async () => {
-    // The regression: failures went to console.error only, which
-    // `onRequestError` never sees — so a gap in the log was invisible and
-    // absence of an entry proved nothing.
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    created.fail = true;
-
-    await audit(entry);
+    await expect(audit(failingWriter, entry())).resolves.toBeUndefined();
 
     expect(captureException).toHaveBeenCalledTimes(1);
     const [, context] = captureException.mock.calls[0];
     expect(context.tags.subsystem).toBe("audit");
     expect(context.extra.action).toBe("contact.update");
   });
+
+  it("cannot land an entry in another workspace: the scoped client refuses it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await audit(scopeToWorkspace(prisma, "ws_a"), { ...entry(), workspaceId: "ws_b" });
+
+    expect(await prisma.auditLog.count()).toBe(0);
+    expect(captureException.mock.calls[0][0]).toBeInstanceOf(TenancyViolation);
+  });
 });
 
-describe("audit with a transaction client", () => {
-  it("writes through the client it was given, not the global one", async () => {
-    const tx = { auditLog: { create: vi.fn(async () => undefined) } };
+describe("auditTx(tx, entry)", () => {
+  it("writes inside the caller's transaction and rolls back with it", async () => {
+    const db = scopeToWorkspace(prisma, "ws_a");
 
-    await audit(entry, tx);
+    await expect(
+      db.$transaction(async (tx) => {
+        await auditTx(tx, entry());
+        throw new Error("the mutation failed");
+      }),
+    ).rejects.toThrow("the mutation failed");
 
-    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
-    expect(created.calls).toHaveLength(0);
+    expect(await prisma.auditLog.count()).toBe(0);
+  });
+
+  it("commits with the transaction", async () => {
+    const db = scopeToWorkspace(prisma, "ws_a");
+
+    await db.$transaction((tx) => auditTx(tx, entry()));
+
+    expect(await prisma.auditLog.count({ where: { workspaceId: "ws_a" } })).toBe(1);
   });
 
   it("propagates a failure so the caller's transaction rolls back", async () => {
-    // The whole point of the transactional mode: a state change that committed
-    // without its entry would make the log quietly incomplete, and the Settings
-    // page presents that log as the record of what happened.
-    const tx = {
-      auditLog: {
-        create: vi.fn(async () => {
-          throw new Error("constraint violation");
-        }),
-      },
-    };
-
-    await expect(audit(entry, tx)).rejects.toThrow(/constraint violation/);
+    // The whole point of the transactional form: a state change that committed
+    // without its entry would make the log quietly incomplete.
+    await expect(auditTx(failingWriter, entry())).rejects.toThrow(/database is gone/);
     expect(captureException).not.toHaveBeenCalled();
+  });
+
+  it("propagates the scoped client's refusal of another workspace's entry", async () => {
+    await expect(auditTx(scopeToWorkspace(prisma, "ws_a"), { ...entry(), workspaceId: "ws_b" })).rejects.toThrow(
+      TenancyViolation,
+    );
   });
 });

@@ -14,7 +14,9 @@ import {
 export function UserMenu({
   user,
 }: {
-  user: { name: string; email: string; role: string };
+  // Display fields only. Whether to show the admin label is decided on the
+  // server with isWorkspaceAdmin, so no role string reaches the client.
+  user: { name: string; email: string; isAdmin: boolean };
 }) {
   return (
     <Menu>
@@ -28,7 +30,7 @@ export function UserMenu({
         <div className="px-2.5 py-2">
           <p className="text-[13px] font-medium text-ink">{user.name}</p>
           <p className="text-[12px] text-ink-faint">{user.email}</p>
-          {user.role === "ADMIN" ? (
+          {user.isAdmin ? (
             <p className="mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-accent">
               <ShieldCheck className="h-3 w-3" /> Workspace admin
             </p>

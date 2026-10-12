@@ -1,15 +1,22 @@
 /**
- * The login action against a real database. Faked: the request headers (so a
- * test can be a given source address), bcrypt (so a hundred attempts cost
- * milliseconds, and so a test can see whether the compare ran at all), the
- * session cookie, and Next's redirect. The rate limiter, zod, the audit log
- * and the user lookup run for real.
+ * The login and logout actions against a real database. Faked: the request
+ * headers (so a test can be a given source address), bcrypt (so a hundred
+ * attempts cost milliseconds, and so a test can see whether the compare ran at
+ * all), the session cookie, and Next's redirect. The rate limiter, zod, the
+ * platform audit log and the user lookup run for real.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDatabase, formData, makeUser, truncateAll } from "@/test/action-harness";
 
 const { prisma, destroy } = createTestDatabase();
-vi.mock("@/lib/db", () => ({ prisma }));
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 
 const request = vi.hoisted(() => ({ ip: "local" }));
 vi.mock("next/headers", () => ({
@@ -20,10 +27,13 @@ vi.mock("next/navigation", () => ({
     throw Object.assign(new Error("NEXT_REDIRECT"), { to });
   },
 }));
+const session = vi.hoisted(() => ({
+  user: null as { id: string; email: string; name: string } | null,
+}));
 vi.mock("@/lib/auth/session", () => ({
   createSession: async () => {},
   destroySession: async () => {},
-  getCurrentUser: async () => null,
+  getCurrentUser: async () => session.user,
 }));
 
 // bcrypt at cost 12 takes a quarter of a second, and a hundred of them would
@@ -38,7 +48,14 @@ vi.mock("./password", () => ({
   },
 }));
 
-const { login } = await import("./actions");
+// The real auditPlatform, wrapped so a test can see the actions call it.
+vi.mock("./platform-audit", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./platform-audit")>();
+  return { auditPlatform: vi.fn(real.auditPlatform) };
+});
+
+const { login, logout } = await import("./actions");
+const { auditPlatform } = await import("./platform-audit");
 
 beforeAll(async () => {
   await prisma.$connect();
@@ -56,6 +73,8 @@ beforeEach(async () => {
   seq += 1;
   request.ip = `10.0.${seq}.1`;
   bcrypt.compares = 0;
+  session.user = null;
+  vi.mocked(auditPlatform).mockClear();
 });
 
 const TOO_MANY = /too many attempts/i;
@@ -157,5 +176,41 @@ describe("login, per source and email, and per account", () => {
     request.ip = `10.${seq}.99.1`;
 
     expect((await attempt(email, "not it")).message).toMatch(TOO_MANY);
+  });
+});
+
+// Sign-ins, failed sign-ins and sign-outs are platform events: they belong to
+// no workspace, so no workspace's audit card can ever show one (spec §5.6).
+describe("platform audit rows", () => {
+  it("records a failed and a successful sign-in with no workspace", async () => {
+    const user = await makeUser(prisma, { email: `audited${seq}@example.com` });
+
+    await attempt(user.email, "not it");
+    await attempt(user.email, "correct horse");
+
+    expect(vi.mocked(auditPlatform).mock.calls.map(([entry]) => entry.action)).toEqual([
+      "auth.login_failed",
+      "auth.login",
+    ]);
+    const rows = await prisma.auditLog.findMany({ orderBy: { action: "asc" } });
+    expect(rows.map((r) => [r.action, r.workspaceId])).toEqual([
+      ["auth.login", null],
+      ["auth.login_failed", null],
+    ]);
+  });
+
+  it("records a sign-out with no workspace", async () => {
+    const user = await makeUser(prisma, { email: `leaver${seq}@example.com` });
+    session.user = user;
+
+    await expect(logout()).rejects.toThrow("NEXT_REDIRECT");
+
+    expect(auditPlatform).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "auth.logout", userId: user.id }),
+    );
+    expect(await prisma.auditLog.findFirst({ where: { action: "auth.logout" } })).toMatchObject({
+      userId: user.id,
+      workspaceId: null,
+    });
   });
 });

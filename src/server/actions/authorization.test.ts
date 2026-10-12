@@ -19,9 +19,18 @@ import {
 
 const { prisma, destroy } = createTestDatabase();
 
-// Only the four boundaries a unit test cannot cross are faked — see the
-// harness header. zod, canMutate, audit and the demo guard all run for real.
-vi.mock("@/lib/db", () => ({ prisma }));
+// Only the boundaries a unit test cannot cross are faked (see the harness
+// header). The workspace scope, zod, canMutate, audit and the demo guard all
+// run for real, and getWorkspaceContext resolves the membership from the
+// database.
+vi.mock("@/lib/db", async () => {
+  const { scopeToWorkspace } = await import("@/lib/tenancy");
+  return {
+    systemDb: prisma,
+    scopeToWorkspace,
+    forWorkspace: (ws: string) => scopeToWorkspace(prisma, ws),
+  };
+});
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -33,8 +42,10 @@ vi.mock("next/navigation", () => ({
 
 let currentUser: TestUser;
 vi.mock("@/lib/auth/session", () => ({
-  requireUser: async () => currentUser,
   getCurrentUser: async () => currentUser,
+  requireUser: async () => currentUser,
+  createSession: async () => {},
+  destroySession: async () => {},
 }));
 
 const { updateContact, deleteContact } = await import("./contacts");
@@ -71,15 +82,30 @@ const NOT_YOURS = "You can only edit records you own.";
 
 async function seedContact() {
   return prisma.contact.create({
-    data: { firstName: "Maya", lastName: "Okafor", status: "LEAD", ownerId: owner.id },
+    data: {
+      firstName: "Maya",
+      lastName: "Okafor",
+      status: "LEAD",
+      ownerId: owner.id,
+      workspaceId: owner.workspaceId,
+    },
   });
 }
 async function seedCompany() {
-  return prisma.company.create({ data: { name: "Northwind", ownerId: owner.id } });
+  return prisma.company.create({
+    data: { name: "Northwind", ownerId: owner.id, workspaceId: owner.workspaceId },
+  });
 }
 async function seedDeal(stage = "LEAD", position = 0) {
   return prisma.deal.create({
-    data: { title: "Renewal", value: 1000, stage, position, ownerId: owner.id },
+    data: {
+      title: "Renewal",
+      value: 1000,
+      stage,
+      position,
+      ownerId: owner.id,
+      workspaceId: owner.workspaceId,
+    },
   });
 }
 
@@ -223,7 +249,7 @@ describe("delete actions refuse a member who does not own the record", () => {
 
   it("toggleTask and deleteTask are keyed on the assignee", async () => {
     const task = await prisma.task.create({
-      data: { title: "Call Maya", assigneeId: owner.id },
+      data: { title: "Call Maya", assigneeId: owner.id, workspaceId: owner.workspaceId },
     });
     currentUser = stranger;
 
@@ -236,7 +262,13 @@ describe("delete actions refuse a member who does not own the record", () => {
   it("deleteActivity is keyed on the author", async () => {
     const contact = await seedContact();
     const activity = await prisma.activity.create({
-      data: { type: "NOTE", content: "Left a voicemail", contactId: contact.id, userId: owner.id },
+      data: {
+        type: "NOTE",
+        content: "Left a voicemail",
+        contactId: contact.id,
+        userId: owner.id,
+        workspaceId: owner.workspaceId,
+      },
     });
     currentUser = stranger;
 
@@ -286,7 +318,14 @@ describe("the demo lock outranks ownership", () => {
       role: "ADMIN",
     });
     const deal = await prisma.deal.create({
-      data: { title: "Demo deal", value: 10, stage: "LEAD", position: 0, ownerId: demo.id },
+      data: {
+        title: "Demo deal",
+        value: 10,
+        stage: "LEAD",
+        position: 0,
+        ownerId: demo.id,
+        workspaceId: demo.workspaceId,
+      },
     });
     currentUser = demo;
 
@@ -303,7 +342,14 @@ describe("the demo lock outranks ownership", () => {
       role: "ADMIN",
     });
     const deal = await prisma.deal.create({
-      data: { title: "Demo deal", value: 10, stage: "LEAD", position: 0, ownerId: demo.id },
+      data: {
+        title: "Demo deal",
+        value: 10,
+        stage: "LEAD",
+        position: 0,
+        ownerId: demo.id,
+        workspaceId: demo.workspaceId,
+      },
     });
     currentUser = demo;
 
@@ -334,6 +380,7 @@ describe("mutations are audited", () => {
     });
     expect(entry.action).toBe("contact.update");
     expect(entry.userId).toBe(owner.id);
+    expect(entry.workspaceId).toBe(owner.workspaceId);
     expect(entry.metadata).toContain("CUSTOMER");
   });
 

@@ -2,6 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { aiProviderName, generateDraft, generateJson, generateText } from "./provider";
 
+// Every result now says what the chain spent. The replies in the blocks below
+// carry no usage fields, so their count is zero; "token usage" covers the rest.
+const NO_USAGE = { inputTokens: 0, outputTokens: 0 };
+
 // Sentry is mocked so a test can assert what does NOT get reported.
 const captureException = vi.hoisted(() => vi.fn());
 vi.mock("@sentry/nextjs", () => ({ captureException }));
@@ -47,7 +51,7 @@ describe("generateText", () => {
     vi.stubEnv("GROQ_API_KEY", "");
     vi.spyOn(globalThis, "fetch").mockRejectedValue(error);
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error", usage: NO_USAGE, billed: false });
   });
 
   it("reports a rate limit rather than throwing when the provider answers 429", async () => {
@@ -58,7 +62,7 @@ describe("generateText", () => {
       new Response("rate limited", { status: 429 }),
     );
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited", usage: NO_USAGE, billed: false });
   });
 
   it("reports an error, not a rate limit, on a non-429 error status", async () => {
@@ -67,7 +71,7 @@ describe("generateText", () => {
     vi.stubEnv("GROQ_API_KEY", "test-key");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("boom", { status: 500 }));
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error", usage: NO_USAGE, billed: false });
   });
 
   it("reports not_configured without calling out when no key is set", async () => {
@@ -75,7 +79,7 @@ describe("generateText", () => {
     vi.stubEnv("GROQ_API_KEY", "");
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "not_configured" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "not_configured", usage: NO_USAGE, billed: false });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
@@ -136,6 +140,7 @@ describe("generateText failover", () => {
       ok: true,
       text: "from groq",
       provider: `groq/${GROQ_DEFAULT_MODEL}`,
+      usage: NO_USAGE,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
@@ -165,7 +170,7 @@ describe("generateText failover", () => {
       groq: () => new Response("rate limited", { status: 429 }),
     });
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "rate_limited", usage: NO_USAGE, billed: false });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
@@ -177,7 +182,7 @@ describe("generateText failover", () => {
       groq: () => new Response("boom", { status: 500 }),
     });
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error", usage: NO_USAGE, billed: false });
   });
 
   // AI_MODEL is one variable shared by both providers. A Gemini model name sent
@@ -249,7 +254,7 @@ describe("generateText failover", () => {
       groq: () => new Response("rate limited", { status: 429 }),
     });
 
-    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error" });
+    await expect(generateText("prompt")).resolves.toEqual({ ok: false, reason: "error", usage: NO_USAGE, billed: false });
   });
 });
 
@@ -412,6 +417,8 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toEqual({
       ok: false,
       reason: "malformed",
+      usage: NO_USAGE,
+      billed: true,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
@@ -449,6 +456,8 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toEqual({
       ok: false,
       reason: expected,
+      usage: NO_USAGE,
+      billed: true,
     });
   });
 
@@ -468,6 +477,8 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toEqual({
       ok: false,
       reason: "malformed",
+      usage: NO_USAGE,
+      billed: true,
     });
   });
 
@@ -480,6 +491,8 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toEqual({
       ok: false,
       reason: "rate_limited",
+      usage: NO_USAGE,
+      billed: false,
     });
   });
 
@@ -490,6 +503,8 @@ describe("generateJson", () => {
     await expect(generateJson("prompt", request)).resolves.toEqual({
       ok: false,
       reason: "not_configured",
+      usage: NO_USAGE,
+      billed: false,
     });
   });
 });
@@ -551,6 +566,7 @@ describe("generateDraft", () => {
       ok: true,
       text: EMAIL,
       provider: `groq/${GROQ_DEFAULT_MODEL}`,
+      usage: NO_USAGE,
     });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
@@ -561,22 +577,22 @@ describe("generateDraft", () => {
       groq: () => groqReply("Here is the email:\n\nSubject: Hi\n\nBody"),
     });
 
-    await expect(generateDraft("prompt")).resolves.toEqual({ ok: false, reason: "malformed" });
+    await expect(generateDraft("prompt")).resolves.toEqual({ ok: false, reason: "malformed", usage: NO_USAGE, billed: true });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
   // The same order-independent rule as JSON: a rejected draft is a provider
   // that answered, so it never outranks an error and never reads as a rate limit.
   it.each([
-    { label: "a non-email from gemini and a 500 from groq", gemini: () => geminiReply(NOTE), groq: () => new Response("boom", { status: 500 }), reason: "error" },
-    { label: "a non-email from gemini and a 429 from groq", gemini: () => geminiReply(NOTE), groq: () => new Response("quota", { status: 429 }), reason: "malformed" },
-    { label: "a 429 from gemini and a non-email from groq", gemini: () => new Response("quota", { status: 429 }), groq: () => groqReply(NOTE), reason: "malformed" },
-    { label: "a 500 from gemini and a non-email from groq", gemini: () => new Response("boom", { status: 500 }), groq: () => groqReply(NOTE), reason: "error" },
-    { label: "a 429 from both", gemini: () => new Response("quota", { status: 429 }), groq: () => new Response("quota", { status: 429 }), reason: "rate_limited" },
-  ])("reports $label as $reason", async ({ gemini, groq, reason }) => {
+    { label: "a non-email from gemini and a 500 from groq", gemini: () => geminiReply(NOTE), groq: () => new Response("boom", { status: 500 }), reason: "error", billed: true },
+    { label: "a non-email from gemini and a 429 from groq", gemini: () => geminiReply(NOTE), groq: () => new Response("quota", { status: 429 }), reason: "malformed", billed: true },
+    { label: "a 429 from gemini and a non-email from groq", gemini: () => new Response("quota", { status: 429 }), groq: () => groqReply(NOTE), reason: "malformed", billed: true },
+    { label: "a 500 from gemini and a non-email from groq", gemini: () => new Response("boom", { status: 500 }), groq: () => groqReply(NOTE), reason: "error", billed: true },
+    { label: "a 429 from both", gemini: () => new Response("quota", { status: 429 }), groq: () => new Response("quota", { status: 429 }), reason: "rate_limited", billed: false },
+  ])("reports $label as $reason", async ({ gemini, groq, reason, billed }) => {
     routeFetch({ gemini, groq });
 
-    await expect(generateDraft("prompt")).resolves.toEqual({ ok: false, reason });
+    await expect(generateDraft("prompt")).resolves.toEqual({ ok: false, reason, usage: NO_USAGE, billed });
   });
 
   it("accepts gemini's email without trying groq", async () => {
@@ -587,7 +603,7 @@ describe("generateDraft", () => {
 
     const result = await generateDraft("prompt");
 
-    expect(result).toEqual({ ok: true, text: EMAIL, provider: "gemini/gemini-3.6-flash" });
+    expect(result).toEqual({ ok: true, text: EMAIL, provider: "gemini/gemini-3.6-flash", usage: NO_USAGE });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -615,6 +631,7 @@ describe("generateDraft", () => {
       ok: true,
       text: "Some summary.",
       provider: "gemini/gemini-3.6-flash",
+      usage: NO_USAGE,
     });
   });
 
@@ -631,5 +648,257 @@ describe("generateDraft", () => {
 
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("gemini reply failed validation"));
     expect(captureException).not.toHaveBeenCalled();
+  });
+});
+
+// Spec §7: the usage ledger records what each metered action cost, because the
+// shared Groq quota is sized from it. One click can make two paid calls, and a
+// 200 reply that our validation rejects was still billed, so every attempt is
+// summed, on success and on failure alike.
+describe("token usage", () => {
+  const GEMINI_HOST = "generativelanguage.googleapis.com";
+  const GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b";
+  const request = {
+    schema: z.object({ score: z.number(), reason: z.string() }),
+    jsonSchema: { type: "object" },
+  };
+
+  function json(body: unknown) {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  const geminiReply = (text: string, usageMetadata?: Record<string, unknown>) =>
+    json({ candidates: [{ content: { parts: [{ text }] } }], ...(usageMetadata && { usageMetadata }) });
+  const groqReply = (text: string, usage?: Record<string, unknown>) =>
+    json({ choices: [{ message: { content: text } }], ...(usage && { usage }) });
+  type Answer = () => Response | Promise<Response>;
+  function routeFetch(handlers: { gemini: Answer; groq: Answer }) {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return new URL(url).hostname === GEMINI_HOST ? handlers.gemini() : handlers.groq();
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("GEMINI_API_KEY", "gemini-key");
+    vi.stubEnv("GROQ_API_KEY", "groq-key");
+    vi.stubEnv("AI_MODEL", "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("reads groq's prompt and completion tokens", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    routeFetch({
+      gemini: () => geminiReply("unused"),
+      groq: () => groqReply("from groq", { prompt_tokens: 812, completion_tokens: 96 }),
+    });
+
+    await expect(generateText("prompt")).resolves.toEqual({
+      ok: true,
+      text: "from groq",
+      provider: `groq/${GROQ_DEFAULT_MODEL}`,
+      usage: { inputTokens: 812, outputTokens: 96 },
+    });
+  });
+
+  it("counts gemini's thinking as output", async () => {
+    routeFetch({
+      gemini: () =>
+        geminiReply("from gemini", {
+          promptTokenCount: 640,
+          candidatesTokenCount: 120,
+          thoughtsTokenCount: 300,
+        }),
+      groq: () => groqReply("unused"),
+    });
+
+    await expect(generateText("prompt")).resolves.toMatchObject({
+      ok: true,
+      usage: { inputTokens: 640, outputTokens: 420 },
+    });
+  });
+
+  it("sums every attempt, including a 200 reply that was rejected, when the chain succeeds", async () => {
+    routeFetch({
+      gemini: () =>
+        geminiReply("Sure! I would rate this contact highly.", {
+          promptTokenCount: 500,
+          candidatesTokenCount: 40,
+          thoughtsTokenCount: 60,
+        }),
+      groq: () =>
+        groqReply('{"score": 64, "reason": "steady"}', { prompt_tokens: 700, completion_tokens: 80 }),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toMatchObject({
+      ok: true,
+      provider: `groq/${GROQ_DEFAULT_MODEL}`,
+      usage: { inputTokens: 1200, outputTokens: 180 },
+    });
+  });
+
+  it("sums every attempt when the chain fails too", async () => {
+    routeFetch({
+      gemini: () => geminiReply("not json", { promptTokenCount: 500, candidatesTokenCount: 40 }),
+      groq: () => groqReply("still not json", { prompt_tokens: 700, completion_tokens: 80 }),
+    });
+
+    await expect(generateJson("prompt", request)).resolves.toEqual({
+      ok: false,
+      reason: "malformed",
+      usage: { inputTokens: 1200, outputTokens: 120 },
+      billed: true,
+    });
+  });
+
+  it("counts a 200 that carried no text, and nothing for a 429", async () => {
+    routeFetch({
+      gemini: () => json({ candidates: [], usageMetadata: { promptTokenCount: 450 } }),
+      groq: () => new Response("rate limited", { status: 429 }),
+    });
+
+    await expect(generateText("prompt")).resolves.toEqual({
+      ok: false,
+      reason: "error",
+      usage: { inputTokens: 450, outputTokens: 0 },
+      billed: true,
+    });
+  });
+
+  it("counts nothing for a request that never got a reply", async () => {
+    routeFetch({
+      gemini: () => Promise.reject(new TypeError("fetch failed")),
+      groq: () => new Response("boom", { status: 500 }),
+    });
+
+    await expect(generateText("prompt")).resolves.toEqual({
+      ok: false,
+      reason: "error",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      billed: false,
+    });
+  });
+
+  it("ignores a usage field that is not a count", async () => {
+    routeFetch({
+      gemini: () =>
+        geminiReply("from gemini", {
+          promptTokenCount: "lots",
+          candidatesTokenCount: -5,
+          thoughtsTokenCount: null,
+        }),
+      groq: () => groqReply("unused"),
+    });
+
+    await expect(generateText("prompt")).resolves.toMatchObject({
+      ok: true,
+      usage: { inputTokens: 0, outputTokens: 0 },
+    });
+  });
+
+  // Spec §7.1 and §7.4: a failed chain says whether any attempt got a 2xx
+  // answer, because that is what the ledger charges. The chain's single reason
+  // cannot say it: "error" outranks "malformed", so an empty 200 or a 200 that
+  // failed validation, followed by a failure elsewhere, reads as "error" even
+  // though the provider billed it. `billed` comes from the HTTP status, never
+  // from the token counts: a 200 with no usage metadata is still billed.
+  describe("billed", () => {
+    const timeout = () =>
+      Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
+    const network = () => Promise.reject(new TypeError("fetch failed"));
+
+    // Case (a): a 200 reply that fails validation, then the next provider fails.
+    it.each([
+      ["answers 500", () => new Response("boom", { status: 500 })],
+      ["times out", timeout],
+      ["fails on the network", network],
+    ] as const)("is true when gemini's 200 failed validation and groq then %s", async (_label, groq) => {
+      routeFetch({
+        gemini: () =>
+          geminiReply("Sure! I would rate this contact highly.", {
+            promptTokenCount: 500,
+            candidatesTokenCount: 40,
+          }),
+        groq,
+      });
+
+      await expect(generateJson("prompt", request)).resolves.toEqual({
+        ok: false,
+        reason: "error",
+        usage: { inputTokens: 500, outputTokens: 40 },
+        billed: true,
+      });
+    });
+
+    // Case (b): the only key set is Groq's, and its reasoning used up
+    // max_tokens, so the 200 came back with nothing in `content`.
+    it("is true when the only provider answered 200 with empty content", async () => {
+      vi.stubEnv("GEMINI_API_KEY", "");
+      routeFetch({
+        gemini: () => geminiReply("unused"),
+        groq: () => groqReply("", { prompt_tokens: 900, completion_tokens: 1024 }),
+      });
+
+      await expect(generateText("prompt")).resolves.toEqual({
+        ok: false,
+        reason: "error",
+        usage: { inputTokens: 900, outputTokens: 1024 },
+        billed: true,
+      });
+    });
+
+    it("is true for a 200 that carried no usage metadata at all", async () => {
+      vi.stubEnv("GROQ_API_KEY", "");
+      routeFetch({ gemini: () => json({ candidates: [] }), groq: () => groqReply("unused") });
+
+      await expect(generateText("prompt")).resolves.toEqual({
+        ok: false,
+        reason: "error",
+        usage: { inputTokens: 0, outputTokens: 0 },
+        billed: true,
+      });
+    });
+
+    // Groq answers 400 when JSON mode produced no object. The model ran, so it
+    // is a reply that was not usable (reason "malformed"), and it is charged.
+    it("is true for groq's json_validate_failed 400", async () => {
+      routeFetch({
+        gemini: () => new Response("quota exceeded", { status: 429 }),
+        groq: () =>
+          new Response(JSON.stringify({ error: { code: "json_validate_failed" } }), {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }),
+      });
+
+      await expect(generateJson("prompt", request)).resolves.toEqual({
+        ok: false,
+        reason: "malformed",
+        usage: { inputTokens: 0, outputTokens: 0 },
+        billed: true,
+      });
+    });
+
+    it.each([
+      ["a 500 and a 429", () => new Response("boom", { status: 500 }), () => new Response("quota", { status: 429 })],
+      ["a 503 and a timeout", () => new Response("busy", { status: 503 }), timeout],
+      ["a timeout and a network error", timeout, network],
+    ] as const)("is false when every attempt was %s", async (_label, gemini, groq) => {
+      routeFetch({ gemini, groq });
+
+      await expect(generateJson("prompt", request)).resolves.toEqual({
+        ok: false,
+        reason: "error",
+        usage: { inputTokens: 0, outputTokens: 0 },
+        billed: false,
+      });
+    });
   });
 });

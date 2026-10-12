@@ -7,6 +7,8 @@
  * same demo account keeps full control of its own data.
  */
 
+import { demoModeOn } from "./workspace-mode";
+
 // Duplicated in login-form.tsx rather than shared: that is a client component,
 // and importing server-side modules into it would pull them into the bundle.
 export const DEMO_EMAIL = "demo@nexuscrm.dev";
@@ -22,11 +24,11 @@ export const DEMO_EMAIL = "demo@nexuscrm.dev";
  * published ADMIN account can edit it, and the nightly reset deletes it.
  */
 export function isSharedDemoInstance(): boolean {
-  return process.env.DEMO_MODE === "true";
+  return demoModeOn();
 }
 
 export function isLockedDemoAccount(user: { email: string }): boolean {
-  return process.env.DEMO_MODE === "true" && user.email === DEMO_EMAIL;
+  return demoModeOn() && user.email === DEMO_EMAIL;
 }
 
 export function assertNotLockedDemoAccount(user: { email: string }): void {

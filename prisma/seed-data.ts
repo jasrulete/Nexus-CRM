@@ -4,12 +4,20 @@
  * seed.ts returns early when the demo user already exists, which is right for
  * first-boot seeding but useless for the nightly reset: that keeps user accounts
  * and needs to rebuild only the CRM rows. Both callers share the data below.
+ *
+ * Every row carries the workspace it is seeded into, passed explicitly: the
+ * app's scoped client verifies a create's workspaceId and never stamps it, and
+ * this file must produce rows indistinguishable from the app's.
+ *
+ * Runs under plain tsx and inside the Docker esbuild bundle, so it imports only
+ * modules with no "server-only" marker and no next/* imports.
  */
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../src/generated/prisma/client";
 import { heuristicLeadScore } from "../src/lib/ai/lead-score";
 import { OPEN_STAGES } from "../src/lib/constants";
 import { DEMO_EMAIL } from "../src/lib/demo-guard";
+import { ensureMember, ensureSingleWorkspace } from "../src/lib/workspace-bootstrap";
 
 function daysAgo(n: number) {
   return new Date(Date.now() - n * 86400_000);
@@ -35,26 +43,39 @@ function monthsAgo(n: number) {
 }
 
 /**
- * The demo account is pinned to ADMIN on purpose. The original seed assigned
- * ADMIN only when it created the very first user, so re-seeding alongside any
- * other account silently downgraded the demo to MEMBER and changed what the
- * published demo could do.
+ * Creates the published demo account if it is missing. Its role is not here:
+ * since the tenancy work the role lives on the account's Membership, which the
+ * seed (seedInstall) and the reset (resetDemoWorkspace) pin to ADMIN. The
+ * original seed assigned ADMIN only when it created the very first user, so
+ * re-seeding alongside any other account silently downgraded the demo — the
+ * pin is still the fix, it has only moved. User.role is deprecated and no
+ * longer written.
  */
-export async function ensureDemoUser(prisma: PrismaClient) {
+export async function ensureDemoUser(prisma: PrismaClient): Promise<{ id: string }> {
   return prisma.user.upsert({
     where: { email: DEMO_EMAIL },
-    update: { role: "ADMIN" },
+    update: {},
     create: {
       email: DEMO_EMAIL,
       name: "Demo User",
       passwordHash: await bcrypt.hash("demo-password-123", 12),
-      role: "ADMIN",
     },
+    select: { id: true },
   });
 }
 
-/** Creates the demo CRM rows. Assumes the CRM tables are empty. */
-export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
+export type SeedCounts = { companies: number; contacts: number; deals: number };
+
+/**
+ * Creates the demo CRM rows in `workspaceId`, owned by `ownerId`. Assumes that
+ * workspace has no CRM rows yet. Every row — the system.seed audit entry
+ * included — carries the workspace explicitly.
+ */
+export async function seedDemoData(
+  prisma: PrismaClient,
+  ownerId: string,
+  workspaceId: string,
+): Promise<SeedCounts> {
   const companyData = [
     { name: "Northwind Analytics", domain: "northwind.io", industry: "Data & BI", size: "51-200", website: "https://northwind.io" },
     { name: "Brightline Health", domain: "brightline.health", industry: "Healthcare", size: "201-1000", website: "https://brightline.health" },
@@ -65,7 +86,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   ];
   const companies = [];
   for (const c of companyData) {
-    companies.push(await prisma.company.create({ data: { ...c, ownerId } }));
+    companies.push(await prisma.company.create({ data: { ...c, ownerId, workspaceId } }));
   }
   const [northwind, brightline, forge, lumen, harbor, petal] = companies;
 
@@ -85,7 +106,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   ];
   const contacts = [];
   for (const c of contactData) {
-    contacts.push(await prisma.contact.create({ data: { ...c, ownerId } }));
+    contacts.push(await prisma.contact.create({ data: { ...c, ownerId, workspaceId } }));
   }
   const [maya, daniel, ingrid, tomas, aisha, sofia, james, priya, henrik, luna, marcus, elena] = contacts;
 
@@ -130,6 +151,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
           // from one a user created.
           baseValue: Math.round(d.value * fxRate),
           ownerId,
+          workspaceId,
           createdAt: daysAgo(createdDaysAgo),
         },
       }),
@@ -154,7 +176,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
   for (const a of activityData) {
     const { daysAgo: d, ...rest } = a;
     await prisma.activity.create({
-      data: { ...rest, userId: ownerId, createdAt: daysAgo(d) },
+      data: { ...rest, userId: ownerId, workspaceId, createdAt: daysAgo(d) },
     });
   }
 
@@ -176,6 +198,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
         ...rest,
         dueDate: dateOnly(daysAgo(-dueDaysFromNow)),
         assigneeId: ownerId,
+        workspaceId,
       },
     });
   }
@@ -227,6 +250,7 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
       entityType: "workspace",
       entityId: "seed",
       userId: ownerId,
+      workspaceId,
       metadata: JSON.stringify({
         companies: companies.length,
         contacts: contacts.length,
@@ -240,4 +264,62 @@ export async function seedDemoData(prisma: PrismaClient, ownerId: string) {
     contacts: contacts.length,
     deals: deals.length,
   };
+}
+
+export type SeedInstallResult =
+  | { skipped: true }
+  | { skipped: false; workspaceId: string; markedDemo: boolean; counts: SeedCounts };
+
+/**
+ * What `npm run db:seed` — and Docker's SEED_DEMO_DATA first boot — does to a
+ * database without the demo account: make sure the one workspace exists,
+ * create the demo account with an ADMIN membership (PRD §5.2), and seed the
+ * CRM rows into that workspace. A database that already has the demo account
+ * is left alone.
+ *
+ * `markDemo` sets Workspace.isDemo, the nightly reset's permission bit, and is
+ * true only when SEED_DEMO_WORKSPACE=true. Docker and CI never set it, so a
+ * self-hoster's workspace can never become resettable by being seeded.
+ */
+export async function seedInstall(
+  prisma: PrismaClient,
+  opts: { markDemo: boolean },
+): Promise<SeedInstallResult> {
+  const existing = await prisma.user.findUnique({
+    where: { email: DEMO_EMAIL },
+    select: { id: true },
+  });
+  if (existing) return { skipped: true };
+
+  // First, so a database that breaks the one-workspace rule is refused before
+  // anything is written.
+  await ensureSingleWorkspace(prisma);
+  const demo = await ensureDemoUser(prisma);
+  const { workspaceId } = await ensureMember(prisma, demo.id, "ADMIN", { setRole: true });
+  if (opts.markDemo) {
+    await prisma.workspace.update({ where: { id: workspaceId }, data: { isDemo: true } });
+  }
+  const counts = await seedDemoData(prisma, demo.id, workspaceId);
+  return { skipped: false, workspaceId, markedDemo: opts.markDemo, counts };
+}
+
+export const DEMO_MEMBER_EMAIL = "member@nexuscrm.dev";
+
+/**
+ * The reduced-permission demo account (README: member@nexuscrm.dev /
+ * member-password-123). Idempotent: resets the password and puts the
+ * membership back to MEMBER, touching nothing else.
+ */
+export async function ensureDemoMember(
+  prisma: PrismaClient,
+): Promise<{ id: string; workspaceId: string }> {
+  const passwordHash = await bcrypt.hash("member-password-123", 12);
+  const user = await prisma.user.upsert({
+    where: { email: DEMO_MEMBER_EMAIL },
+    update: { passwordHash },
+    create: { email: DEMO_MEMBER_EMAIL, name: "Member Demo", passwordHash },
+    select: { id: true },
+  });
+  const { workspaceId } = await ensureMember(prisma, user.id, "MEMBER", { setRole: true });
+  return { id: user.id, workspaceId };
 }

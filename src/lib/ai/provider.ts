@@ -13,14 +13,49 @@ import { isEmailShaped } from "./draft-shape";
  * A failure says why. "No key configured" and "every provider is down" both
  * end in the heuristic, but they mean different things to the person reading
  * the label, and the second one deserves a signal.
+ *
+ * Every result, success or failure, also says what the chain spent: the
+ * tokens of every attempt, summed. The usage ledger (./usage.ts) stores them
+ * per action. That's how the shared Groq quota gets sized (spec §7).
  */
 
-export type AiFailureReason = "not_configured" | "rate_limited" | "error" | "malformed";
-export type AiFailure = { ok: false; reason: AiFailureReason };
-/** Why an action fell back to its heuristic. */
+export type AiFailureReason =
+  | "not_configured"
+  | "rate_limited"
+  | "error"
+  | "malformed"
+  | "capacity";
+/** Tokens billed for one action, over every provider attempt it made. */
+export type AiUsageTokens = { inputTokens: number; outputTokens: number };
+/**
+ * `billed` is true when any attempt in the chain got a 2xx answer from a
+ * provider, whatever the body held: unparseable, failing validation, or empty.
+ * The provider did the work, and the usage ledger charges for it (spec §7.1,
+ * §7.4). It is false when every attempt was a non-2xx status, a timeout or a
+ * network error, or when no key was set. The one non-2xx that counts is
+ * Groq's 400 json_validate_failed (see Attempt). `reason` can't say this: it ranks
+ * "error" above "malformed", so a billed reply followed by an outage reads as
+ * "error". It comes from the HTTP status, not from `usage`, because a 2xx can
+ * arrive without usage metadata.
+ */
+export type AiFailure = {
+  ok: false;
+  reason: AiFailureReason;
+  usage: AiUsageTokens;
+  billed: boolean;
+};
+/**
+ * Why an action fell back to its heuristic. The chain never reports
+ * "capacity". The usage ledger does, when the deployment's daily AI ceiling
+ * is reached, and then no provider is called at all.
+ */
 export type AiDegradedReason = AiFailureReason;
-export type AiTextResult = { ok: true; text: string; provider: string } | AiFailure;
-export type AiJsonResult<T> = { ok: true; data: T; provider: string } | AiFailure;
+export type AiTextResult =
+  | { ok: true; text: string; provider: string; usage: AiUsageTokens }
+  | AiFailure;
+export type AiJsonResult<T> =
+  | { ok: true; data: T; provider: string; usage: AiUsageTokens }
+  | AiFailure;
 
 /**
  * A structured request: the zod schema the reply must satisfy (with any
@@ -34,12 +69,19 @@ export type AiJsonRequest<T> = {
 };
 
 /** One provider call. A thrown fetch error is caught by the chain. */
-type Attempt =
+type AttemptOutcome =
   | { kind: "ok"; text: string; provider: string }
   | { kind: "rate_limited" }
   | { kind: "error" }
   | { kind: "malformed" };
-type FailureKind = Exclude<Attempt, { kind: "ok" }>["kind"];
+/**
+ * What one call returned, and what it cost. Zero tokens unless it got a 200.
+ * `billed` is true for any 2xx, and also for Groq's 400 json_validate_failed:
+ * there the model ran and produced something that wasn't JSON, which is a
+ * reply that was not usable rather than an outage.
+ */
+type Attempt = AttemptOutcome & { usage: AiUsageTokens; billed: boolean };
+type FailureKind = Exclude<AttemptOutcome, { kind: "ok" }>["kind"];
 
 type JsonMode = { jsonSchema: Record<string, unknown> };
 
@@ -67,7 +109,9 @@ export function aiProviderName(): string | null {
 
 export async function generateText(prompt: string): Promise<AiTextResult> {
   const result = await runChain(prompt, undefined, (text) => text);
-  return result.ok ? { ok: true, text: result.value, provider: result.provider } : result;
+  return result.ok
+    ? { ok: true, text: result.value, provider: result.provider, usage: result.usage }
+    : result;
 }
 
 /**
@@ -83,7 +127,9 @@ export async function generateDraft(prompt: string): Promise<AiTextResult> {
   const result = await runChain(prompt, undefined, (text) =>
     isEmailShaped(text) ? text : undefined,
   );
-  return result.ok ? { ok: true, text: result.value, provider: result.provider } : result;
+  return result.ok
+    ? { ok: true, text: result.value, provider: result.provider, usage: result.usage }
+    : result;
 }
 
 /**
@@ -106,14 +152,16 @@ export async function generateJson<T>(
     const checked = request.schema.safeParse(parsed);
     return checked.success ? checked.data : undefined;
   });
-  return result.ok ? { ok: true, data: result.value, provider: result.provider } : result;
+  return result.ok
+    ? { ok: true, data: result.value, provider: result.provider, usage: result.usage }
+    : result;
 }
 
 async function runChain<T>(
   prompt: string,
   json: JsonMode | undefined,
   accept: (text: string) => T | undefined,
-): Promise<{ ok: true; value: T; provider: string } | AiFailure> {
+): Promise<{ ok: true; value: T; provider: string; usage: AiUsageTokens } | AiFailure> {
   // Each provider is tried in turn, and any failure — an error status, an
   // empty or unusable reply, or a fetch that rejects (timeout, DNS, reset) —
   // moves on to the next. Gemini's free tier is quota-limited per day, so in
@@ -124,8 +172,13 @@ async function runChain<T>(
   // AI_MODEL goes to the primary only. It is one variable shared by both
   // providers, and a Gemini model name sent to Groq is a 404 that would turn
   // a working fallback into a second failure.
+  //
+  // Every attempt's tokens are added up, including a 200 reply that `accept`
+  // rejects: the provider billed it, and it counts against the same quota.
+  const usage: AiUsageTokens = { inputTokens: 0, outputTokens: 0 };
+  let billed = false;
   const chain = configuredProviders();
-  if (chain.length === 0) return { ok: false, reason: "not_configured" };
+  if (chain.length === 0) return { ok: false, reason: "not_configured", usage, billed };
 
   const failures: FailureKind[] = [];
   for (const [index, provider] of chain.entries()) {
@@ -135,12 +188,15 @@ async function runChain<T>(
         index === 0 ? process.env.AI_MODEL : undefined,
         json,
       );
+      usage.inputTokens += attempt.usage.inputTokens;
+      usage.outputTokens += attempt.usage.outputTokens;
+      billed = billed || attempt.billed;
       if (attempt.kind !== "ok") {
         failures.push(attempt.kind);
         continue;
       }
       const value = accept(attempt.text);
-      if (value !== undefined) return { ok: true, value, provider: attempt.provider };
+      if (value !== undefined) return { ok: true, value, provider: attempt.provider, usage };
       console.error(`${provider.name} reply failed validation`);
       failures.push("malformed");
     } catch (error) {
@@ -159,12 +215,25 @@ async function runChain<T>(
   // reset, which is the wrong advice when a provider is actually down. An
   // error anywhere is an error. What is left is a chain where every provider
   // was reachable and at least one answered unusably.
-  if (failures.every((kind) => kind === "rate_limited")) return { ok: false, reason: "rate_limited" };
-  if (failures.includes("error")) return { ok: false, reason: "error" };
-  return { ok: false, reason: "malformed" };
+  if (failures.every((kind) => kind === "rate_limited")) {
+    return { ok: false, reason: "rate_limited", usage, billed };
+  }
+  if (failures.includes("error")) return { ok: false, reason: "error", usage, billed };
+  return { ok: false, reason: "malformed", usage, billed };
 }
 
-function classify(status: number): Attempt {
+function noTokens(): AiUsageTokens {
+  return { inputTokens: 0, outputTokens: 0 };
+}
+
+/** A vendor's token count, or 0 for anything that isn't a usable count. */
+function tokenCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : 0;
+}
+
+function classify(status: number): { kind: "rate_limited" } | { kind: "error" } {
   return status === 429 ? { kind: "rate_limited" } : { kind: "error" };
 }
 
@@ -210,10 +279,23 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
   );
   if (!res.ok) {
     console.error("gemini error", res.status, await res.text().catch(() => ""));
-    return classify(res.status);
+    return { ...classify(res.status), usage: noTokens(), billed: false };
   }
   const body = (await res.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
+    usageMetadata?: {
+      promptTokenCount?: unknown;
+      candidatesTokenCount?: unknown;
+      thoughtsTokenCount?: unknown;
+    };
+  };
+  // A 200 is billed whether or not it carries usable text. Gemini counts its
+  // thinking apart from the answer; both are output it charges for.
+  const usage: AiUsageTokens = {
+    inputTokens: tokenCount(body.usageMetadata?.promptTokenCount),
+    outputTokens:
+      tokenCount(body.usageMetadata?.candidatesTokenCount) +
+      tokenCount(body.usageMetadata?.thoughtsTokenCount),
   };
   const text = body.candidates?.[0]?.content?.parts
     ?.map((p) => p.text ?? "")
@@ -221,9 +303,9 @@ async function gemini(prompt: string, modelOverride?: string, json?: JsonMode): 
     .trim();
   if (!text) {
     console.error("gemini returned no text");
-    return { kind: "error" };
+    return { kind: "error", usage, billed: true };
   }
-  return { kind: "ok", text, provider: `gemini/${model}` };
+  return { kind: "ok", text, provider: `gemini/${model}`, usage, billed: true };
 }
 
 async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Promise<Attempt> {
@@ -269,17 +351,26 @@ async function groq(prompt: string, modelOverride?: string, json?: JsonMode): Pr
     console.error("groq error", res.status, detail);
     // In JSON mode Groq does not hand back invalid JSON as a 200: a model that
     // fails to produce an object is a 400 json_validate_failed. That is a reply
-    // that was not usable, not a provider outage.
-    if (res.status === 400 && json && isJsonValidationFailure(detail)) return { kind: "malformed" };
-    return classify(res.status);
+    // that was not usable, not a provider outage. The model ran, so it is
+    // billed, though a 400 carries no token counts.
+    if (res.status === 400 && json && isJsonValidationFailure(detail)) {
+      return { kind: "malformed", usage: noTokens(), billed: true };
+    }
+    return { ...classify(res.status), usage: noTokens(), billed: false };
   }
   const body = (await res.json()) as {
     choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
+  };
+  // completion_tokens already includes the model's reasoning tokens.
+  const usage: AiUsageTokens = {
+    inputTokens: tokenCount(body.usage?.prompt_tokens),
+    outputTokens: tokenCount(body.usage?.completion_tokens),
   };
   const text = body.choices?.[0]?.message?.content?.trim();
   if (!text) {
     console.error("groq returned no text");
-    return { kind: "error" };
+    return { kind: "error", usage, billed: true };
   }
-  return { kind: "ok", text, provider: `groq/${model}` };
+  return { kind: "ok", text, provider: `groq/${model}`, usage, billed: true };
 }

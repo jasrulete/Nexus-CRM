@@ -15,10 +15,12 @@ elsewhere.
 
 ## The shape of the system
 
-Eight tables. One shared workspace. Every CRM row hangs off a `User` through an ownership
-column (`ownerId`, `assigneeId`, or `userId`), and there is **no `Workspace` model** — this is
-single-tenant by design. A second registered user does not get a private space; they get the
-same records everybody else sees.
+Eleven tables. Every CRM row hangs off a `User` through an ownership column (`ownerId`,
+`assigneeId`, or `userId`) **and** belongs to a workspace through `workspaceId`. How many
+workspaces a database holds depends on the deployment: in `single` mode (self-hosting and the
+public demo) there is exactly one, and a second registered user gets the same records everybody
+else sees; in `multi` mode (the hosted cloud) every sign-up gets a private one. See
+[Workspaces and tenancy](#workspaces-and-tenancy).
 
 The database is SQLite in both environments: a local file via `better-sqlite3` in development
 and Docker, and Turso (libSQL) in production. The switch is
@@ -42,6 +44,16 @@ erDiagram
     User ||--o{ Activity : "userId — Cascade"
     User ||--o{ Task     : "assigneeId — Cascade"
     User ||--o{ AuditLog : "userId — SetNull, nullable"
+    User ||--o| Membership : "userId — unique, one workspace per person"
+
+    Workspace ||--o{ Membership : "workspaceId"
+    Workspace ||--o{ AiUsage    : "workspaceId"
+    Workspace ||..o{ Company    : "workspaceId — plain column until M2"
+    Workspace ||..o{ Contact    : "workspaceId — plain column until M2"
+    Workspace ||..o{ Deal       : "workspaceId — plain column until M2"
+    Workspace ||..o{ Activity   : "workspaceId — plain column until M2"
+    Workspace ||..o{ Task       : "workspaceId — plain column until M2"
+    Workspace ||..o{ AuditLog   : "workspaceId — null for platform events"
 
     Company ||--o{ Contact  : "companyId — SetNull, nullable"
     Company ||--o{ Deal     : "companyId — SetNull, nullable"
@@ -56,6 +68,7 @@ erDiagram
 ```
 
 Read the labels as: *column on the child — what happens to the child when the parent is deleted*.
+A dashed line is a column with no foreign key behind it yet.
 
 ---
 
@@ -65,28 +78,72 @@ This is the single most misread thing in the schema. `Company`, `Contact` and `D
 required `ownerId`; `Task` carries `assigneeId`; `Activity` carries `userId`. It looks like
 per-user data partitioning. It is not.
 
-**No list query filters on the ownership column.** `prisma.contact.findMany` in
-`src/app/(app)/contacts/page.tsx:35` filters on status and search text only.
-`src/app/(app)/companies/page.tsx:47` filters on size and search text only.
-`src/app/(app)/deals/page.tsx:13` filters on nothing at all. The dashboard's pipeline numbers
-(`src/app/(app)/dashboard/page.tsx:46`) count every deal in the table regardless of owner, and
-the ⌘K palette's `searchRecords` (`src/server/actions/search.ts`) searches every contact,
-company, deal and activity in the workspace — pinned by a test in which a MEMBER finds a
-record the ADMIN owns. The
-only query anywhere that filters by the current user is the dashboard's task list
-(`where: { assigneeId: user.id, done: false }`), and that is a personal to-do widget, not a
-tenancy boundary.
+**No list query filters on the ownership column.** Since phase A of the tenancy work the page reads
+live in loaders under `src/server/queries/`, and every one runs through the workspace-scoped client,
+which adds `workspaceId` to each query by itself. Beyond that, the contacts list filters on status
+and search text only, the companies list on size and search text only, and the deals board on
+nothing at all. The dashboard's pipeline numbers count every deal in the workspace regardless of
+owner, and the ⌘K palette's `searchRecords` (`src/server/actions/search.ts`) searches every contact,
+company, deal and activity in the workspace — pinned by a test in which a MEMBER finds a record the
+ADMIN owns. The only query anywhere that filters by the current user is the dashboard's task list
+(the viewer's own open tasks), and that is a personal to-do widget, not a tenancy boundary.
 
-What ownership *does* control is mutation. `canMutate(ownerId, user)` in
-[`src/lib/authz.ts`](../src/lib/authz.ts) returns true when the caller owns the row **or** is an
-ADMIN, and every update and delete action calls it. Until recently only the delete paths did —
+What ownership *does* control is mutation. `canMutate(ownerId, actor)` in
+[`src/lib/authz.ts`](../src/lib/authz.ts) returns true when the caller owns the row **or** is a
+workspace admin (`OWNER` or `ADMIN`, read from the caller's membership), and every update and
+delete action calls it. Until recently only the delete paths did —
 the four update actions had no check at all, so a MEMBER could rewrite any record but not delete
 one. Overwriting every field is as destructive as the delete that was blocked, which is why the
 predicate now lives in one shared file rather than being copy-pasted per action.
 
-So: everyone reads everything; only owners and admins write. Describe it that way in an
-interview. Calling it multi-tenant would be wrong, and a reviewer who greps for `ownerId` in the
-page queries will notice.
+So, inside a workspace: everyone reads everything; only owners and workspace admins write.
+Ownership was never the tenancy boundary and still is not — `workspaceId` is, enforced as
+described in [Workspaces and tenancy](#workspaces-and-tenancy).
+
+---
+
+## Workspaces and tenancy
+
+*Added 2026-10-11 with phase A of the multi-tenancy core
+([spec](superpowers/specs/2026-10-11-multi-tenancy-core-design.md)). Phase B — migration M2 — is a
+separate, later change; until it lands, the database enforces the M1 rules below.*
+
+Three tables arrived with migration M1:
+
+| Table | A row is | Notes |
+| --- | --- | --- |
+| `Workspace` | One tenant | `slug` is unique. `plan` is `FREE` or `PAID`; only spec 3's billing webhook will write `PAID`. `isDemo` is the nightly reset's permission bit and nothing else — no application code reads it. In `single` mode the one workspace is `ws_default` ("Default workspace", slug `default`) |
+| `Membership` | A user's place in a workspace | `role` is `OWNER`, `ADMIN` or `MEMBER` and is the authoritative role. `userId` is unique, so a person belongs to exactly one workspace in this release |
+| `AiUsage` | One metered AI action | `action` (`score`, `summary`, `draft`), `outcome` (`pending`, `answered`, `rejected`, `fallback`, `capacity`, `denied`), the provider that answered and token counts. Indexed on `(workspaceId, createdAt)` for the monthly allowance and on `(createdAt)` for the deployment-wide daily ceiling. Only `pending`, `answered` and `rejected` are charged, so an outage never costs a workspace its allowance: a chain where any attempt got a billed reply from a provider (a 2xx, or Groq's 400 `json_validate_failed`) but no usable output (malformed or empty) settles `rejected` and is charged, because the provider did the work, while `fallback` means no attempt got a billed reply (a 429, an error status, a timeout, no key) |
+
+**`workspaceId` on the CRM tables.** `Company`, `Contact`, `Deal`, `Activity` and `Task` carry
+`workspaceId`. In M1 it is a nullable, indexed plain column with **no relation**, so the migration
+was `ALTER TABLE … ADD COLUMN` plus `CREATE INDEX` (and a `DROP INDEX` of `Contact_status_idx` and `Deal_stage_idx`, which composite indexes replace) and rebuilt no table. M2 makes it `NOT NULL`, adds
+the `Workspace` relation and, if the phase-A spike proved them, composite `(workspaceId, parentId)`
+keys so a child can only point at a parent in its own workspace. Until then that rule is the
+application's: every relation id a form supplies is resolved through the caller's scoped client, so
+another workspace's id reads as "not found".
+
+**`AuditLog.workspaceId`** stays optional for good. Workspace events carry it. Platform events —
+`auth.register`, `auth.login`, `auth.login_failed`, `auth.logout` — are written with null and are
+never shown to any workspace, which keeps a failed sign-in's IP address off every Settings page.
+
+**`User.role`** is deprecated. The column stays — dropping it is cosmetic, and dropping it was the one
+way M2 could have broken every sign-in — but no code reads or writes it after phase A. M1 copied each
+user's role onto their membership unchanged and promoted nobody.
+
+**How the boundary is enforced.** Application code never holds the unscoped client. It gets `ctx.db`
+from `getWorkspaceContext()`, which is `scopeToWorkspace(systemDb, workspaceId)`
+([`src/lib/tenancy.ts`](../src/lib/tenancy.ts)): every tenant-model query has `workspaceId` ANDed
+into its `where`; creates must carry the bound id explicitly (it is verified, never stamped); writes
+may set plain columns only, so no nested relation write can cross a workspace; and raw SQL, or any
+operation on `User`, `Session` or `Workspace`, through it throws. The few files that need the unscoped
+`systemDb` are an exact allowlist enforced by `src/lib/import-guard.test.ts`, and a cross-tenant suite
+calls every server action and page loader as workspace A with workspace B's ids.
+
+**Deployment modes.** `WORKSPACE_MODE=single` (self-hosting, the public demo): exactly one workspace,
+which every registrant joins. `multi` (the hosted cloud): one per sign-up, with plan limits. See the
+[Glossary](GLOSSARY.md#workspaces-and-tenancy).
 
 ---
 
@@ -97,7 +154,7 @@ Types are given as the Prisma type followed by the SQLite column type from
 
 ### User
 
-The account. Also the ADMIN/MEMBER role holder.
+The account. Its workspace role is on `Membership`, not here.
 
 | Field | Type | Null | Default | Meaning |
 | --- | --- | --- | --- | --- |
@@ -105,19 +162,19 @@ The account. Also the ADMIN/MEMBER role holder.
 | `email` | `String` / TEXT | no | — | **UNIQUE.** Lower-cased by `registerSchema`/`loginSchema` (`z.email().toLowerCase()`) before it ever reaches the table, so the uniqueness constraint is effectively case-insensitive |
 | `name` | `String` / TEXT | no | — | Display name; 2–100 chars at the form boundary |
 | `passwordHash` | `String` / TEXT | no | — | bcrypt, cost 12. Stripped from the object `getCurrentUser()` returns (`src/lib/auth/session.ts:79`) so it cannot be serialized to a client component |
-| `role` | `String` / TEXT | no | `'MEMBER'` | `ADMIN` or `MEMBER`. Never user-supplied — see below |
+| `role` | `String` / TEXT | no | `'MEMBER'` | **Deprecated and unused since phase A.** Kept as a column; no code reads or writes it. The role is `Membership.role` — see below |
 | `createdAt` | `DateTime` / DATETIME | no | `CURRENT_TIMESTAMP` | |
 | `updatedAt` | `DateTime` / DATETIME | no | none in SQL | `@updatedAt` — Prisma writes it on every update. The column is `NOT NULL` with **no** SQL default, so a hand-written `INSERT` that omits it fails. Every writer here goes through Prisma, so this only bites if you reach for raw SQL |
 
-`role` is the one enum-like column no form can set. `register()` computes it —
-`role: userCount === 0 ? "ADMIN" : "MEMBER"` (`src/lib/auth/actions.ts:67`), so the first account
-to register becomes the workspace admin — and the seed pins the demo account to ADMIN via upsert.
-Because `canMutate` tests `user.role === "ADMIN"` and nothing else, any unexpected value degrades
-safely to member-level permissions.
+The role that matters is `Membership.role` (`OWNER`, `ADMIN` or `MEMBER`), and no form can set it.
+`register()` writes it: in `single` mode the first member of the one workspace becomes `OWNER` and
+later ones `MEMBER`; in `multi` mode every sign-up is the `OWNER` of a new workspace. The seed and
+the nightly reset pin the demo account's membership to `ADMIN`. Because `isWorkspaceAdmin` tests for
+`OWNER` or `ADMIN` and nothing else, any unexpected value degrades safely to member-level permissions.
 
-Registration is open, which is why `src/app/(app)/settings/page.tsx:50` gates the email column of
-the team roster to admins and the viewer's own row. Names and roles stay visible as team context;
-addresses are PII.
+Registration is open, which is why the Settings roster lists only the viewer's workspace and gates
+the email column to workspace admins and the viewer's own row — never to the locked demo account.
+Names and roles stay visible as team context; addresses are PII.
 
 ### Session
 
@@ -377,9 +434,9 @@ by hand. Two of the four in the second migration exist because the first migrati
 | `Company.ownerId` | index | Cascade delete only — the companies list does not filter by owner |
 | `Contact.ownerId` | index | Cascade delete only |
 | `Contact.companyId` | index | Company detail page: `include: { contacts: … }` compiles to `WHERE companyId = ?` |
-| `Contact.status` | index | The status filter chips on `/contacts` |
+| `Contact.workspaceId, status` | composite (M1) | The status filter chips on `/contacts`. Replaces the single-column `Contact.status` index, which M1 dropped |
 | `Deal.ownerId` | index | Cascade delete only |
-| `Deal.stage` | index | Dashboard `where: { stage: { in: [...] } }` (twice), `createDeal`'s "find the last position in this column", `moveDeal`'s column read, companies list's open-pipeline subquery |
+| `Deal.workspaceId, stage, position` | composite (M1) | Replaces the single-column `Deal.stage` index, which M1 dropped; `position` now sits in the index too. Serves the stage queries: dashboard `where: { stage: { in: [...] } }` (twice), `createDeal`'s "find the last position in this column", `moveDeal`'s column read, companies list's open-pipeline subquery |
 | `Deal.contactId` | index (migration 2) | Contact detail page's deals list |
 | `Deal.companyId` | index (migration 2) | Company detail page's deals list; companies list's per-row open-pipeline value |
 | `Activity.contactId` | index | Contact timeline |
@@ -389,7 +446,10 @@ by hand. Two of the four in the second migration exist because the first migrati
 | `Task.contactId` | index (migration 2) | Contact detail page's open tasks |
 | `Task.dealId` | index (migration 2) | Deal-scoped tasks |
 | `AuditLog.entityType, entityId` | composite | **Nothing in the app queries it.** It is for forensic lookup ("everything that happened to this deal") that no page exposes yet |
-| `AuditLog.createdAt` | index | The settings page's newest-25, and the nightly prune's `createdAt < cutoff` |
+| `AuditLog.createdAt` | index | The nightly prune's `createdAt < cutoff`. The settings page's newest-25 now uses the M1 composite `AuditLog.workspaceId, createdAt` |
+| `Task.workspaceId, assigneeId, done` | composite (M1) | The same "My tasks" predicate behind the workspace filter the scoped client adds; the older `assigneeId, done` index stays beside it |
+| Other M1 `workspaceId` composites | composite (M1) | `workspaceId, updatedAt` on `Company`, `Contact` and `Deal`; `workspaceId, createdAt` on `Contact` and `Activity`. Every query through the scoped client carries `workspaceId`, so they lead with it; they back the `updatedAt` sorts of the contacts, companies and search lists and the `createdAt` sort of the activity feed |
+| `Membership.workspaceId`, `Membership.workspaceId, userId` (unique), `AiUsage.workspaceId, createdAt`, `AiUsage.createdAt`, `Workspace.slug` (unique), `Membership.userId` (unique) | M1 | The roster read, one membership per user, the monthly allowance count (`workspaceId, createdAt`), the deployment-wide daily ceiling (`createdAt`) and the unique slug |
 
 Notable gaps, all of them fine at demo scale and all of them full scans:
 
@@ -398,12 +458,15 @@ Notable gaps, all of them fine at demo scale and all of them full scans:
   index can serve. Results are capped at five per type, so the payload is bounded; the scan is
   not, and `%`/`_` in a query act as wildcards. The free upgrade is an FTS5 virtual table kept
   in step by triggers in one migration, queried with `MATCH`. See `src/server/actions/search.ts`.
-- **`Activity.createdAt` has no index**, yet the dashboard does
-  `orderBy: { createdAt: "desc" }, take: 8` over the whole table on every load.
+- **`Activity.createdAt` has no index of its own**, yet the dashboard does
+  `orderBy: { createdAt: "desc" }, take: 8` on every load. Since M1 the workspace filter the
+  scoped client adds lets `Activity.workspaceId, createdAt` serve it, over the workspace's rows
+  rather than the whole table.
 - **`Activity.userId` has no index**, so deleting a user must scan `Activity` to cascade.
 - **`AuditLog.userId` has no index**, so both the SetNull on user delete and the nightly prune's
   `OR: [{ createdAt: { lt: cutoff } }, { userId: demoUserId }]` scan the table.
-- **`Contact.updatedAt` / `Company.updatedAt` have no index**, and both list pages sort by them.
+- **`Contact.updatedAt` / `Company.updatedAt` have no index of their own**, and both list pages sort
+  by them; since M1 the `workspaceId, updatedAt` composites serve that sort within a workspace.
 - Search uses Prisma's `contains`, which compiles to SQL `LIKE '%q%'` — unindexable by
   construction. There is no `mode: "insensitive"` on the SQLite provider; SQLite's built-in `LIKE`
   folds case for ASCII letters only, so accented characters compare case-sensitively.
@@ -412,7 +475,8 @@ Notable gaps, all of them fine at demo scale and all of them full scans:
 
 ## The enum-like string columns
 
-Five columns model a closed set of values and none of them is constrained by the database:
+Ten columns model a closed set of values (nine in use; `User.role` is deprecated) and none of
+them is constrained by the database:
 
 | Column | Allowed values | Enforced by |
 | --- | --- | --- |
@@ -421,7 +485,11 @@ Five columns model a closed set of values and none of them is constrained by the
 | `Deal.stage` | LEAD, QUALIFIED, PROPOSAL, NEGOTIATION, WON, LOST | `dealSchema.stage`, `dealMoveSchema.stage` |
 | `Activity.type` | NOTE, CALL, EMAIL, MEETING | `activitySchema.type: z.enum(ACTIVITY_TYPES)` |
 | `Company.size` | 1-10, 11-50, 51-200, 201-1000, 1000+ | `companySchema.size: z.enum(COMPANY_SIZES)` |
-| `User.role` | ADMIN, MEMBER | *no schema* — set by server code only, never from a form |
+| `Membership.role` | OWNER, ADMIN, MEMBER | *no schema* — the `MembershipRole` type in `src/lib/workspace-bootstrap.ts`, and `toMembershipRole()` reads any other stored value as MEMBER. Set by server code only, never from a form |
+| `Workspace.plan` | FREE, PAID | *no schema* — the `Plan` type in `src/lib/plans.ts`; `limitsFor()` holds an unknown value to FREE. Only spec 3's billing webhook will write PAID |
+| `AiUsage.action` | score, summary, draft | *no schema* — the `AiAction` type in `src/lib/ai/usage.ts`. Set by server code only |
+| `AiUsage.outcome` | pending, answered, rejected, fallback, capacity, denied | *no schema* — the `AiOutcome` type in `src/lib/ai/usage.ts`; `CHARGED_AI_OUTCOMES` in `src/lib/system-queries.ts` names the three that count (pending, answered, rejected). Set by server code only |
+| `User.role` | ADMIN, MEMBER (legacy) | **Deprecated.** Nothing reads or writes it from phase A on; the role that counts is `Membership.role` |
 
 The values live once in [`src/lib/constants.ts`](../src/lib/constants.ts) as `as const` tuples,
 which zod consumes directly and TypeScript narrows into the `DealStage` / `ContactStatus` /
@@ -433,7 +501,8 @@ column order.
 **The constraint exists only at the form boundary.** Anything that writes through the Prisma
 client without passing through zod can put any string in these columns. That is not hypothetical:
 `prisma/seed-data.ts` writes `status: "QUALIFIED"` and `stage: "PROPOSAL"` as bare string
-literals, and `prisma/add-demo-member.ts` writes `role: "MEMBER"` the same way. Today the literals
+literals, and passes the bare membership roles `"ADMIN"` (`seedInstall`) and `"MEMBER"`
+(`ensureDemoMember`) to `ensureMember` the same way. Today the literals
 happen to be correct; nothing checks them, and a typo in a seed would ship.
 
 What happens if a junk value does land — say a deal with `stage: 'PENDING'`:
@@ -705,9 +774,13 @@ stops serving you.
 | --- | --- | --- | --- |
 | `20260715164036_init` | 2026-07-15 | All eight tables; two UNIQUE indexes (`User.email`, `Session.tokenHash`) and twelve secondary indexes | Initial schema |
 | `20260725150849_add_deal_task_fk_indexes` | 2026-07-25 | `Deal.contactId`, `Deal.companyId`, `Task.contactId`, `Task.dealId` | Prisma does not index foreign keys automatically. These four are exactly the columns the contact-detail and company-detail pages filter on via `include`, so without them each detail page scanned `Deal` and `Task` |
+| `20260823151943_add_deal_base_value_and_fx_rate` | 2026-08-23 | `Deal.baseValue`, `Deal.fxRate` (a Prisma table rebuild of `Deal`); backfill `baseValue = value`, `fxRate = 1` | Multi-currency with the rate frozen at write time |
+| `20261011180555_workspaces_expand` | 2026-10-11 | `Workspace`, `Membership`, `AiUsage`; a nullable, indexed `workspaceId` on `Company`, `Contact`, `Deal`, `Activity`, `Task` and `AuditLog`. Data: the default workspace (only if a user exists), one membership per user with its role copied, every CRM row and every non-`auth.*` audit row stamped with the default workspace | Phase A of multi-tenancy. Additive for columns and tables (two single-column indexes, `Contact_status_idx` and `Deal_stage_idx`, are replaced by composites); no table rebuild, so the build before it runs unchanged on the schema after it |
 
-Two migrations, both forward-only. There are no `DROP`s, no data backfills, and no down
-migrations — the schema has never had a breaking change applied to live data.
+All forward-only, with no down migrations. `20260823151943_add_deal_base_value_and_fx_rate` and M1
+carry data backfills; M1 is additive, so the build before it runs unchanged on the schema after it.
+M2 (phase B) is the first that changes column rules under live code, and is applied
+migrate-before-merge only after phase A is verified live.
 
 They are applied by **three different mechanisms**, each with its own ledger:
 
@@ -765,9 +838,10 @@ Ordered roughly by how likely each is to produce a wrong number a human would ac
    count of 0 returns `STALE_RECORD` through `ActionState`. A submit with no version is refused
    rather than treated as last-write-wins. See `src/lib/concurrency.ts`.
 6. ~~**The audit write is outside the transaction it describes.**~~ **Fixed** for state changes:
-   `audit(entry, tx?)` joins the caller's transaction, so a mutation and its entry commit or roll
-   back together. Entries with no transaction to join (logins, AI usage) stay best-effort but now
-   report a failed write to Sentry instead of swallowing it.
+   `auditTx(tx, entry)` writes through the caller's transaction, so a mutation and its entry commit
+   or roll back together. `audit(db, entry)`, for entries with no transaction to join (the creates,
+   `updateContact`, `updateCompany`, `toggleTask` and AI usage), and `auditPlatform` (the `auth.*`
+   events) stay best-effort but report a failed write to Sentry instead of swallowing it.
 7. **Enum-like columns have no database constraint.** Any script writing through Prisma can put
    arbitrary strings in `status`, `stage`, `type`, `size`, `source`. The failure mode is silent
    under-reporting, not a crash.
@@ -796,6 +870,9 @@ Ordered roughly by how likely each is to produce a wrong number a human would ac
 17. **Migrations are non-atomic** in both hand-rolled runners, and must stay so (`PRAGMA
     foreign_keys` is a no-op inside a transaction). Mitigated: an interrupted migration is now
     detected on the next run instead of being baselined over. See [Migration history](#migration-history).
+18. **`workspaceId` is nullable and has no foreign key until M2.** Phase A's code always writes it,
+    the scoped client verifies it on every create, and a catch-up script stamps anything an older
+    build wrote — but until phase B the database itself enforces none of it.
 
 ## Open questions
 

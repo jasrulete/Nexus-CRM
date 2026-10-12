@@ -12,12 +12,12 @@ import {
   Target,
   User,
 } from "lucide-react";
-import { getCurrentUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
 import { isLockedDemoAccount } from "@/lib/demo-guard";
 import { cn, formatDate, formatDateOnly, fullName, isOverdueDateOnly } from "@/lib/utils";
 import { formatDealAmount } from "@/lib/money";
+import { requireWorkspacePage } from "@/lib/workspace-context";
 import { deleteDeal } from "@/server/actions/deals";
+import { loadDealDetail, loadDealTitle } from "@/server/queries/deals";
 import { Card, CardHeader } from "@/components/ui/card";
 import { StageBadge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -30,15 +30,17 @@ import { TaskList, type TaskItem } from "@/components/task-list";
 
 // The document title is the first thing a screen reader announces after the
 // board's Enter/click navigation; a static "Deal" was one letter away from
-// "Deals", the page the user had just left.
+// "Deals", the page the user had just left. It reads through the workspace
+// context like the page itself, so another workspace's deal id never puts
+// that deal's title in this tab (spec §5.6).
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const deal = await prisma.deal.findUnique({ where: { id }, select: { title: true } });
-  return { title: deal?.title ?? "Deal" };
+  const ctx = await requireWorkspacePage();
+  return { title: (await loadDealTitle(ctx, id)) ?? "Deal" };
 }
 
 /**
@@ -53,45 +55,12 @@ export default async function DealDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const demoLocked = isLockedDemoAccount((await getCurrentUser()) ?? { email: "" });
+  const ctx = await requireWorkspacePage();
+  const demoLocked = isLockedDemoAccount(ctx.user);
 
-  const [deal, contacts, companies] = await Promise.all([
-    prisma.deal.findUnique({
-      where: { id },
-      include: {
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        company: { select: { id: true, name: true } },
-        owner: { select: { name: true } },
-        tasks: {
-          where: { done: false },
-          orderBy: [{ dueDate: "asc" }],
-          take: 5,
-          include: {
-            contact: { select: { id: true, firstName: true, lastName: true } },
-          },
-        },
-        activities: {
-          orderBy: { createdAt: "desc" },
-          take: 20,
-          include: {
-            user: { select: { name: true } },
-            contact: { select: { id: true, firstName: true, lastName: true } },
-            deal: { select: { id: true, title: true } },
-          },
-        },
-      },
-    }),
-    prisma.contact.findMany({
-      select: { id: true, firstName: true, lastName: true },
-      orderBy: { firstName: "asc" },
-    }),
-    prisma.company.findMany({
-      select: { id: true, name: true },
-      orderBy: { name: "asc" },
-    }),
-  ]);
-
-  if (!deal) notFound();
+  const data = await loadDealDetail(ctx, id);
+  if (!data) notFound();
+  const { deal, contacts, companies } = data;
 
   const overdue =
     isOverdueDateOnly(deal.expectedCloseDate?.toISOString() ?? null) &&

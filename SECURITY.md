@@ -22,12 +22,22 @@ free, self-hosted, single-instance app.
 ## Authorization
 
 - The proxy (`src/proxy.ts`) only checks cookie **presence** for fast
-  redirects — the **authoritative** check is `getCurrentUser()` /
-  `requireUser()` which validates the token hash against the database in the
-  app layout and inside **every server action**.
-- Roles: `ADMIN` / `MEMBER`. Destructive operations (deleting records you
-  don't own) require ownership or admin.
-- The first registered account becomes admin; later accounts are members.
+  redirects — the **authoritative** check is `getCurrentUser()`, which
+  validates the token hash against the database; every app page, the app layout and
+  **every server action** except `login`, `register` and `logout` reaches it through
+  `requireWorkspacePage()` / `requireWorkspace()` (or `requireUser()` for the two
+  actions that never touch the database), which also resolve the user's workspace
+  from their membership. `login` and `register` run before there is a session, and
+  `logout` calls `getCurrentUser()` directly so it can end one without throwing.
+- Roles live on the workspace membership: `OWNER` / `ADMIN` / `MEMBER`.
+  Destructive operations (deleting records you don't own) require ownership
+  or a workspace admin (OWNER or ADMIN), and never reach another workspace.
+- Every query application code makes runs through a client scoped to the
+  signed-in user's workspace, which fails closed; an id from another workspace
+  is "not found".
+- In single mode (self-hosting, the public demo) the first registered account
+  becomes the workspace owner and later accounts are members; in multi mode
+  (the hosted cloud) every sign-up owns a private workspace.
 
 ## Input handling
 
@@ -90,10 +100,13 @@ script/connect sources — AI providers are called **server-side only**),
 
 ## Auditability
 
-`AuditLog` records logins (including failures), logouts, registrations, all
-create/update/delete operations, stage changes and AI usage — with actor,
-entity, timestamp and a JSON metadata snippet. Admins can review the latest
-events in Settings.
+`AuditLog` records all create/update/delete operations, stage changes and AI
+usage — with actor, entity, timestamp and a JSON metadata snippet — against the
+acting user's workspace. Sign-ups, sign-ins (including failures) and sign-outs
+are platform events (`auth.*`): they are recorded with no workspace and never
+appear in Settings, so nobody sees the address a failed sign-in came from.
+Workspace admins can review the latest 25 events of their own workspace in
+Settings.
 
 ## Known trade-offs (single-instance, free-tier scope)
 

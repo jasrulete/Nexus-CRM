@@ -1,7 +1,5 @@
 "use server";
 
-import { requireUser } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
 import { rateLimit, sweepExpiredBuckets } from "@/lib/rate-limit";
 import { searchQuerySchema } from "@/lib/validation";
 import { fullName } from "@/lib/utils";
@@ -20,6 +18,7 @@ import {
   type SearchHit,
   type SearchResult,
 } from "@/lib/search";
+import { requireWorkspace } from "@/lib/workspace-context";
 
 /**
  * The palette's one call: contacts, companies, deals and activity content in
@@ -29,7 +28,7 @@ import {
  * URL-addressable or cached.
  */
 export async function searchRecords(rawQuery: string): Promise<SearchResult> {
-  const user = await requireUser();
+  const ctx = await requireWorkspace();
 
   // Validate before charging the bucket: a rejected query costs nothing.
   const parsed = searchQuerySchema.safeParse(rawQuery);
@@ -43,7 +42,7 @@ export async function searchRecords(rawQuery: string): Promise<SearchResult> {
   // script. Per-instance memory, like every bucket in rate-limit.ts: defence
   // in depth on Vercel, not a hard limit.
   sweepExpiredBuckets();
-  const limited = rateLimit(`search:${user.id}`, { limit: 120, windowMs: 60_000 });
+  const limited = rateLimit(`search:${ctx.user.id}`, { limit: 120, windowMs: 60_000 });
   if (!limited.ok) {
     return { ok: false, message: `Too many searches — try again in ${limited.retryAfterSec}s.` };
   }
@@ -62,17 +61,23 @@ export async function searchRecords(rawQuery: string): Promise<SearchResult> {
    * bounds the *result*, not the scan, and Turso bills scanned rows against
    * the free tier's row-read quota. The free upgrade path is SQLite FTS5 — a
    * virtual table over the searched columns, kept in step by triggers in one
-   * migration, queried with MATCH (bm25 ranking for free) via $queryRaw.
-   * better-sqlite3 and libSQL both ship it; no new service. Do that when a
-   * search passes ~100 ms, not before.
+   * migration, queried with MATCH (bm25 ranking for free). The scoped client
+   * refuses raw SQL, so that query belongs in system-queries.ts as
+   * `searchFts(workspaceId, q)` with the workspace bound into the SQL (spec
+   * §5.1). Do that when a search passes ~100 ms, not before.
    *
    * `%` and `_` in the query act as LIKE wildcards (no ESCAPE clause); worst
-   * case is "everything matches", still capped. Reads are workspace-wide by
-   * design — no ownerId filter, like every list page (DATA-MODEL, "Ownership
-   * is authorization, not scoping").
+   * case is "everything matches", still capped.
+   *
+   * Every read goes through ctx.db, so it is confined to the caller's
+   * workspace (spec §5.6). Inside the workspace, reads cover every owner by
+   * design, with no ownerId filter, like every list page (DATA-MODEL,
+   * "Ownership is authorization, not scoping"). The nested company, contact
+   * and deal names are safe because no write can link across workspaces
+   * (spec §5.4, §5.5).
    */
   const [contacts, companies, deals, activities] = await Promise.all([
-    prisma.contact.findMany({
+    ctx.db.contact.findMany({
       where: {
         OR: [
           { firstName: { contains: q } },
@@ -96,7 +101,7 @@ export async function searchRecords(rawQuery: string): Promise<SearchResult> {
       orderBy: { updatedAt: "desc" },
       take,
     }),
-    prisma.company.findMany({
+    ctx.db.company.findMany({
       where: {
         OR: [
           { name: { contains: q } },
@@ -109,7 +114,7 @@ export async function searchRecords(rawQuery: string): Promise<SearchResult> {
       orderBy: { updatedAt: "desc" },
       take,
     }),
-    prisma.deal.findMany({
+    ctx.db.deal.findMany({
       where: { title: { contains: q } },
       select: {
         id: true,
@@ -123,7 +128,7 @@ export async function searchRecords(rawQuery: string): Promise<SearchResult> {
       orderBy: { updatedAt: "desc" },
       take,
     }),
-    prisma.activity.findMany({
+    ctx.db.activity.findMany({
       where: { content: { contains: q } },
       select: {
         id: true,

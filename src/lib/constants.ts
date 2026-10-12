@@ -103,5 +103,5 @@ export const COMPANY_SIZES = [
   "1000+",
 ] as const;
 
-export const USER_ROLES = ["ADMIN", "MEMBER"] as const;
+export const USER_ROLES = ["OWNER", "ADMIN", "MEMBER"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
