@@ -1,9 +1,10 @@
 /**
  * The route that breaks the stale-session loop (spec §5.3, Review Focus 1).
- * The session-cookie functions and Next's redirect are faked; the membership
- * lookup runs against a real database.
+ * The session-cookie functions, the request's cookies and Next's redirect are
+ * faked; the membership lookup runs against a real database.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_COOKIE } from "@/lib/auth/session-constants";
 import { createTestDatabase, makeUser, truncateAll } from "@/test/action-harness";
 
 const { prisma, destroy } = createTestDatabase();
@@ -19,6 +20,8 @@ vi.mock("@/lib/db", async () => {
 
 const session = vi.hoisted(() => ({
   user: null as { id: string; email: string } | null,
+  /** Whether the request carries the session cookie. */
+  cookie: false,
   destroyed: 0,
 }));
 vi.mock("@/lib/auth/session", () => ({
@@ -26,6 +29,10 @@ vi.mock("@/lib/auth/session", () => ({
   destroySession: async () => {
     session.destroyed += 1;
   },
+}));
+
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ has: (name: string) => session.cookie && name === SESSION_COOKIE }),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -43,6 +50,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await truncateAll(prisma);
   session.user = null;
+  session.cookie = false;
   session.destroyed = 0;
 });
 
@@ -58,12 +66,22 @@ async function orphan() {
 
 describe("GET /auth/signout-stale", () => {
   it("clears a stale cookie and lands on /login", async () => {
+    session.cookie = true;
+
     await expect(GET()).rejects.toThrow("NEXT_REDIRECT:/login");
     expect(session.destroyed).toBe(1);
   });
 
+  // Nothing to clear, so no deletion Set-Cookie either: a cross-site request
+  // to this URL cannot even send a cookie change.
+  it("sends a request with no session cookie to /login without clearing anything", async () => {
+    await expect(GET()).rejects.toThrow("NEXT_REDIRECT:/login");
+    expect(session.destroyed).toBe(0);
+  });
+
   it("signs out a multi-mode user with no membership", async () => {
     vi.stubEnv("WORKSPACE_MODE", "multi");
+    session.cookie = true;
     session.user = await orphan();
 
     await expect(GET()).rejects.toThrow("NEXT_REDIRECT:/login");

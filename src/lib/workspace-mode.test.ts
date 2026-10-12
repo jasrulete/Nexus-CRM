@@ -28,7 +28,21 @@ describe("workspaceMode", () => {
     );
   });
 
-  it.each(["Single", "MULTI", "both", " single", "true"])("rejects %j", (value) => {
+  // A value piped from PowerShell or the Vercel CLI can carry a trailing
+  // newline or CR; the accepted values are still exactly single and multi.
+  it("trims surrounding whitespace before reading the value", () => {
+    expect(workspaceMode({ WORKSPACE_MODE: "single\r\n", NODE_ENV: "production" })).toBe("single");
+    expect(workspaceMode({ WORKSPACE_MODE: " multi " })).toBe("multi");
+  });
+
+  it("treats a whitespace-only value as unset", () => {
+    expect(workspaceMode({ WORKSPACE_MODE: " \r\n" })).toBe("single");
+    expect(() => workspaceMode({ NODE_ENV: "production", WORKSPACE_MODE: "\r\n" })).toThrow(
+      "WORKSPACE_MODE is required in production",
+    );
+  });
+
+  it.each(["Single", "MULTI", "both", "sin gle", "true"])("rejects %j", (value) => {
     expect(() => workspaceMode({ WORKSPACE_MODE: value })).toThrow(
       "WORKSPACE_MODE must be 'single' or 'multi'",
     );
@@ -48,6 +62,13 @@ describe("assertBootConfig", () => {
 
   it("refuses multi mode with DEMO_MODE on", () => {
     expect(() => assertBootConfig({ WORKSPACE_MODE: "multi", DEMO_MODE: "true" })).toThrow(
+      "WORKSPACE_MODE=multi cannot run with DEMO_MODE=true",
+    );
+  });
+
+  it("reads the trimmed value, so a piped newline neither fails boot nor hides multi", () => {
+    expect(assertBootConfig({ WORKSPACE_MODE: "single\r\n", NODE_ENV: "production" })).toBe("single");
+    expect(() => assertBootConfig({ WORKSPACE_MODE: " multi ", DEMO_MODE: "true" })).toThrow(
       "WORKSPACE_MODE=multi cannot run with DEMO_MODE=true",
     );
   });

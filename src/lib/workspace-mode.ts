@@ -15,7 +15,9 @@ export type WorkspaceMode = "single" | "multi";
 type Env = Record<string, string | undefined>;
 
 export function workspaceMode(env: Env = process.env): WorkspaceMode {
-  const value = env.WORKSPACE_MODE;
+  // Trimmed: a value piped from PowerShell or the Vercel CLI can carry a
+  // trailing newline or CR. The accepted values are still exactly the two.
+  const value = env.WORKSPACE_MODE?.trim();
   // An empty value counts as unset, so a blank `WORKSPACE_MODE=` line in an
   // .env file behaves like a missing one: single in development, a hard
   // failure in production.

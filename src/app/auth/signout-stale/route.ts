@@ -1,5 +1,7 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { destroySession, getCurrentUser } from "@/lib/auth/session";
+import { SESSION_COOKIE } from "@/lib/auth/session-constants";
 import { systemDb } from "@/lib/db";
 import { workspaceMode } from "@/lib/workspace-mode";
 
@@ -18,7 +20,8 @@ import { workspaceMode } from "@/lib/workspace-mode";
  * on another site cannot sign anyone out. In single mode a missing membership
  * is not stale: the dashboard joins the user to the workspace.
  *
- * The proxy exempts this path, so it runs with or without a cookie.
+ * The proxy exempts this path, so it runs with or without a cookie. Without
+ * one there is nothing to clear, so no deletion Set-Cookie is sent either.
  */
 export async function GET() {
   const user = await getCurrentUser();
@@ -31,6 +34,6 @@ export async function GET() {
   }
   // Deletes the Session row (if any) and the cookie; Next adds the cookie
   // change to the redirect response.
-  await destroySession();
+  if ((await cookies()).has(SESSION_COOKIE)) await destroySession();
   redirect("/login");
 }
