@@ -20,7 +20,12 @@ Written 2026-10-12, before any step was run.
 - **Order.** Exactly as listed: V, P, then 0 to 9. The M2 migration directory must not exist on `main`
   until phase A is verified live (spec §10, phase B).
 - **Identity.** Every `gh` command runs as `jasrulete`, then switches back:
-  `gh auth switch --user jasrulete 2>&1 | Out-Null` before, `gh auth switch --user <work-account> 2>&1 | Out-Null` after.
+  `$prevGh = gh api user --jq .login; gh auth switch --user jasrulete 2>&1 | Out-Null` before, and
+  `if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }` after, so the account that was active
+  (a work account on this machine) is restored exactly, never a hard-coded one. **Every other account is
+  jasrulete's too:** Vercel and Turso commands run only when `npx vercel whoami` / `turso auth whoami` show
+  the jasrulete-owned account. If a CLI is signed in to a work account, stop: the owner signs it in
+  (`npx vercel login`, `turso auth login`); never run a step under another identity.
   The switch's own output is discarded, so a failed switch is silent: every block that switches then runs
   its `gh` (and `git push`) commands only if `gh api user --jq .login` prints `jasrulete`, and otherwise
   prints `STOP: …` and runs nothing.
@@ -149,7 +154,8 @@ Written 2026-10-12, before any step was run.
     "STOP: .next was not removed, so there is no fresh build. The build, the migration and the e2e did not run."
   }
   ```
-- Tools are signed in: `turso auth whoami`, `gh auth status`, `npx vercel whoami`.
+- Tools are signed in, as jasrulete's accounts: `turso auth whoami`, `gh auth status` (lists `jasrulete`),
+  `npx vercel whoami`. A CLI signed in to a work account is a stop until the owner signs it in.
 - **The Docker image has not been built or booted.** Docker Desktop's daemon was down when the Dockerfile
   was changed for phase A, so its `WORKSPACE_MODE=single` line was checked by reading only. Phase A does not
   ship the image, but one boot with `SEED_DEMO_DATA=true` is recommended before relying on Docker for
@@ -208,6 +214,7 @@ it (a value piped from PowerShell can carry a trailing newline). If your version
 dashboard instead.
 
 ```powershell
+npx vercel whoami   # must be the jasrulete-owned account that owns the demo project; otherwise STOP
 npx vercel env add --help
 npx vercel env add WORKSPACE_MODE production --value single
 npx vercel env add WORKSPACE_MODE preview --value single
@@ -222,6 +229,7 @@ Preview.
 ### Step P — push the branch and open the PR (GO: the repo is public)
 
 ```powershell
+$prevGh = gh api user --jq .login
 gh auth switch --user jasrulete 2>&1 | Out-Null
 if ((gh api user --jq .login) -eq 'jasrulete') {
   git push -u origin feat/multi-tenancy-core
@@ -232,7 +240,7 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 } else {
   "STOP: gh is not signed in as jasrulete. Nothing was pushed."
 }
-gh auth switch --user <work-account> 2>&1 | Out-Null
+if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }
 ```
 
 Success: `ci` and `Analyze JavaScript/TypeScript` pass. The `Vercel` preview check fails, by design:
@@ -262,6 +270,7 @@ phase A can still go ahead (M1 adds no foreign keys to existing tables), but pha
 The reset on `main` is still the old one, and it would reseed demo rows with no `workspaceId`.
 
 ```powershell
+$prevGh = gh api user --jq .login
 gh auth switch --user jasrulete 2>&1 | Out-Null
 if ((gh api user --jq .login) -eq 'jasrulete') {
   gh workflow disable reset-demo.yml -R jasrulete/Nexus-CRM
@@ -269,7 +278,7 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 } else {
   "STOP: gh is not signed in as jasrulete. Nothing was run."
 }
-gh auth switch --user <work-account> 2>&1 | Out-Null
+if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }
 ```
 
 Success: `Reset demo data` shows `disabled_manually`. It stays disabled until step 9.
@@ -435,6 +444,7 @@ gate reads the required checks only. A failing or pending required check gives a
 is only pending, wait and run the block again.
 
 ```powershell
+$prevGh = gh api user --jq .login
 gh auth switch --user jasrulete 2>&1 | Out-Null
 if ((gh api user --jq .login) -eq 'jasrulete') {
   gh pr checks feat/multi-tenancy-core -R jasrulete/Nexus-CRM --required
@@ -446,13 +456,14 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 } else {
   "STOP: gh is not signed in as jasrulete. Not merging."
 }
-gh auth switch --user <work-account> 2>&1 | Out-Null
+if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }
 ```
 
 Only if it merged. The `gh api` reads run as `jasrulete` too, so this block switches before them and back
 after them:
 
 ```powershell
+$prevGh = gh api user --jq .login
 gh auth switch --user jasrulete 2>&1 | Out-Null
 if ((gh api user --jq .login) -eq 'jasrulete') {
   git fetch origin
@@ -466,7 +477,7 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 } else {
   "STOP: gh is not signed in as jasrulete. Nothing was read."
 }
-gh auth switch --user <work-account> 2>&1 | Out-Null
+if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }
 ```
 
 If it prints `No Production deployment … yet.`, Vercel has not created the deployment yet: wait a minute and
@@ -528,6 +539,7 @@ Success: `Resetting the remote demo workspace.`, `workspace: ws_default`, before
 Run the next block only if the one above printed `Demo workspace reset.`:
 
 ```powershell
+$prevGh = gh api user --jq .login
 gh auth switch --user jasrulete 2>&1 | Out-Null
 if ((gh api user --jq .login) -eq 'jasrulete') {
   gh workflow enable reset-demo.yml -R jasrulete/Nexus-CRM
@@ -535,7 +547,7 @@ if ((gh api user --jq .login) -eq 'jasrulete') {
 } else {
   "STOP: gh is not signed in as jasrulete. Nothing was run."
 }
-gh auth switch --user <work-account> 2>&1 | Out-Null
+if ($prevGh) { gh auth switch --user $prevGh 2>&1 | Out-Null }
 ```
 
 Success: `Reset demo data` shows `active`. The next morning, read the nightly run's log: it must print the
